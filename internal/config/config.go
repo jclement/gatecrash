@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -22,10 +23,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Secret    string `toml:"secret"`
-	SSHPort   int    `toml:"ssh_port"`
-	AdminHost string `toml:"admin_host"`
-	BindAddr  string `toml:"bind_addr"`
+	Secret     string `toml:"secret"`
+	SSHPort    int    `toml:"ssh_port"`
+	AdminHost  string `toml:"admin_host"`
+	BindAddr   string `toml:"bind_addr"`
+	NoWebAdmin bool   `toml:"no_web_admin"`
 }
 
 type TLSConfig struct {
@@ -106,7 +108,6 @@ func Load(path string) (*Config, error) {
 		},
 		TLS: TLSConfig{
 			CertDir: "./certs",
-			Staging: false,
 		},
 		Update: UpdateConfig{
 			Enabled:       true,
@@ -155,12 +156,6 @@ func Load(path string) (*Config, error) {
 		changed = true
 	}
 
-	// Default preserve_path for redirects
-	for i := range cfg.Redirect {
-		// preserve_path defaults handled by TOML zero value (false)
-		_ = i
-	}
-
 	if changed {
 		if err := cfg.Save(path); err != nil {
 			return nil, fmt.Errorf("saving updated config: %w", err)
@@ -170,25 +165,162 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config to disk in TOML format.
+// Save writes the config to disk as self-documenting TOML with comments.
 func (c *Config) Save(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("creating config file: %w", err)
 	}
 	defer f.Close()
 
-	enc := toml.NewEncoder(f)
-	if err := enc.Encode(c); err != nil {
-		return fmt.Errorf("encoding config: %w", err)
+	var b strings.Builder
+
+	b.WriteString("# Gatecrash Configuration\n")
+	b.WriteString("# https://github.com/jclement/gatecrash\n\n")
+
+	// [server]
+	b.WriteString("[server]\n")
+	b.WriteString("# Session signing secret (auto-generated, do not share)\n")
+	fmt.Fprintf(&b, "secret = %q\n\n", c.Server.Secret)
+
+	b.WriteString("# SSH port for tunnel clients\n")
+	fmt.Fprintf(&b, "ssh_port = %d\n\n", c.Server.SSHPort)
+
+	b.WriteString("# Bind address for HTTP/HTTPS listeners\n")
+	fmt.Fprintf(&b, "bind_addr = %q\n\n", c.Server.BindAddr)
+
+	b.WriteString("# Admin panel hostname (optional)\n")
+	b.WriteString("# When set, the admin panel is served on this hostname instead of IP-based access\n")
+	if c.Server.AdminHost != "" {
+		fmt.Fprintf(&b, "admin_host = %q\n\n", c.Server.AdminHost)
+	} else {
+		b.WriteString("# admin_host = \"admin.example.com\"\n\n")
 	}
 
-	return nil
+	b.WriteString("# Disable the web admin panel\n")
+	b.WriteString("# Can also be set via: --no-web-admin flag or GATECRASH_NO_WEB_ADMIN=1 env\n")
+	if c.Server.NoWebAdmin {
+		b.WriteString("no_web_admin = true\n\n")
+	} else {
+		b.WriteString("# no_web_admin = false\n\n")
+	}
+
+	// [tls]
+	b.WriteString("[tls]\n")
+	b.WriteString("# ACME/Let's Encrypt email for automatic HTTPS certificates\n")
+	if c.TLS.ACMEEmail != "" {
+		fmt.Fprintf(&b, "acme_email = %q\n\n", c.TLS.ACMEEmail)
+	} else {
+		b.WriteString("# acme_email = \"you@example.com\"\n\n")
+	}
+
+	b.WriteString("# Certificate storage directory\n")
+	fmt.Fprintf(&b, "cert_dir = %q\n\n", c.TLS.CertDir)
+
+	b.WriteString("# Use Let's Encrypt staging CA (for testing)\n")
+	if c.TLS.Staging {
+		b.WriteString("staging = true\n\n")
+	} else {
+		b.WriteString("# staging = false\n\n")
+	}
+
+	// [update]
+	b.WriteString("[update]\n")
+	b.WriteString("# Check for new releases on startup\n")
+	fmt.Fprintf(&b, "enabled = %v\n", c.Update.Enabled)
+	fmt.Fprintf(&b, "check_interval = %q\n", c.Update.CheckInterval)
+	fmt.Fprintf(&b, "github_repo = %q\n\n", c.Update.GitHubRepo)
+
+	// Tunnel documentation
+	b.WriteString("# ─── Tunnels ────────────────────────────────────────────────────────\n")
+	b.WriteString("#\n")
+	b.WriteString("# Each tunnel needs a unique ID and a bcrypt secret_hash for authentication.\n")
+	b.WriteString("# The client connects with a token in the format: tunnel_id:plaintext_secret\n")
+	b.WriteString("#\n")
+	b.WriteString("# Generate a bcrypt hash:\n")
+	b.WriteString("#   htpasswd -nbBC 10 \"\" \"your-secret\" | cut -d: -f2\n")
+	b.WriteString("#   python3 -c \"import bcrypt; print(bcrypt.hashpw(b'your-secret', bcrypt.gensalt()).decode())\"\n")
+	b.WriteString("#\n")
+	b.WriteString("# Or use the admin panel to generate secrets with one click.\n")
+	b.WriteString("#\n")
+	b.WriteString("# Example:\n")
+	b.WriteString("#   gatecrash client --server host:port --token \"myapp:your-secret\" --target 127.0.0.1:8000\n")
+
+	if len(c.Tunnel) == 0 {
+		b.WriteString("#\n")
+		b.WriteString("# [[tunnel]]\n")
+		b.WriteString("# id = \"example\"\n")
+		b.WriteString("# type = \"http\"                    # \"http\" or \"tcp\"\n")
+		b.WriteString("# hostnames = [\"app.example.com\"]   # for HTTP tunnels\n")
+		b.WriteString("# secret_hash = \"$2a$10$...\"        # bcrypt hash\n")
+		b.WriteString("# # preserve_host = false           # pass original Host header to backend\n")
+		b.WriteString("#\n")
+		b.WriteString("# [[tunnel]]\n")
+		b.WriteString("# id = \"example-tcp\"\n")
+		b.WriteString("# type = \"tcp\"\n")
+		b.WriteString("# listen_port = 9000               # for TCP tunnels\n")
+		b.WriteString("# secret_hash = \"$2a$10$...\"\n")
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n\n")
+		for _, t := range c.Tunnel {
+			b.WriteString("[[tunnel]]\n")
+			fmt.Fprintf(&b, "id = %q\n", t.ID)
+			fmt.Fprintf(&b, "type = %q\n", t.Type)
+			if len(t.Hostnames) > 0 {
+				fmt.Fprintf(&b, "hostnames = [%s]\n", formatStringSlice(t.Hostnames))
+			}
+			if t.ListenPort > 0 {
+				fmt.Fprintf(&b, "listen_port = %d\n", t.ListenPort)
+			}
+			if t.SecretHash != "" {
+				fmt.Fprintf(&b, "secret_hash = %q\n", t.SecretHash)
+			}
+			if t.PreserveHost {
+				b.WriteString("preserve_host = true\n")
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	// Redirect documentation
+	b.WriteString("# ─── Redirects ──────────────────────────────────────────────────────\n")
+	b.WriteString("#\n")
+	b.WriteString("# Redirect hostnames to other destinations (301 Moved Permanently).\n")
+	b.WriteString("# Redirect hostnames automatically get TLS certificates via ACME.\n")
+
+	if len(c.Redirect) == 0 {
+		b.WriteString("#\n")
+		b.WriteString("# [[redirect]]\n")
+		b.WriteString("# from = \"www.example.com\"\n")
+		b.WriteString("# to = \"example.com\"\n")
+		b.WriteString("# preserve_path = true\n")
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n\n")
+		for _, r := range c.Redirect {
+			b.WriteString("[[redirect]]\n")
+			fmt.Fprintf(&b, "from = %q\n", r.From)
+			fmt.Fprintf(&b, "to = %q\n", r.To)
+			fmt.Fprintf(&b, "preserve_path = %v\n\n", r.PreservePath)
+		}
+	}
+
+	_, err = f.WriteString(b.String())
+	return err
+}
+
+func formatStringSlice(ss []string) string {
+	quoted := make([]string, len(ss))
+	for i, s := range ss {
+		quoted[i] = fmt.Sprintf("%q", s)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func (c *Config) generateDefaults() error {

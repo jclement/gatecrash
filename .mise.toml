@@ -96,3 +96,46 @@ run = "rm -rf bin/ dist/ tmp/ data/*.db"
 [tasks.release-snapshot]
 description = "Test release build locally"
 run = "goreleaser release --snapshot --clean"
+
+[tasks.release]
+description = "Tag a new release and push to trigger CI"
+run = """
+#!/bin/bash
+set -e
+
+# Get latest tag
+LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+echo "Current version: $LATEST"
+
+# Parse semver
+VERSION="${LATEST#v}"
+IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+PATCH_BUMP="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+MINOR_BUMP="v${MAJOR}.$((MINOR + 1)).0"
+MAJOR_BUMP="v$((MAJOR + 1)).0.0"
+
+echo ""
+echo "  1) Patch  $PATCH_BUMP"
+echo "  2) Minor  $MINOR_BUMP"
+echo "  3) Major  $MAJOR_BUMP"
+echo ""
+read -rp "Pick [1/2/3]: " CHOICE
+
+case "$CHOICE" in
+  1) TAG="$PATCH_BUMP" ;;
+  2) TAG="$MINOR_BUMP" ;;
+  3) TAG="$MAJOR_BUMP" ;;
+  *) echo "Invalid choice"; exit 1 ;;
+esac
+
+read -rp "Tag $TAG and push? [y/N] " CONFIRM
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+  echo "Cancelled."
+  exit 0
+fi
+
+git tag -a "$TAG" -m "Release $TAG"
+git push origin "$TAG"
+echo "Pushed $TAG — CI will build the release."
+"""

@@ -89,7 +89,7 @@ func envOrDefault(key, def string) string {
 func runServer(args []string) {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := fs.String("config", envOrDefault("GATECRASH_CONFIG", "/etc/gatecrash/gatecrash.toml"), "path to config file")
-	noWebAdmin := fs.Bool("no-web-admin", os.Getenv("GATECRASH_NO_WEB_ADMIN") != "", "disable web admin panel")
+	_ = fs.Bool("no-web-admin", false, "disable web admin panel")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
 	fs.Parse(args)
 
@@ -102,16 +102,36 @@ func runServer(args []string) {
 		os.Exit(1)
 	}
 
+	// Resolve no-web-admin: CLI flag > ENV > config file
+	noWebAdmin := resolveNoWebAdmin(fs, cfg)
+
 	// Check for updates in background
 	if cfg.Update.Enabled {
 		go update.LogIfUpdateAvailable(cfg.Update.GitHubRepo, Version)
 	}
 
-	srv := server.New(cfg, *configPath, Version, *noWebAdmin)
+	srv := server.New(cfg, *configPath, Version, noWebAdmin)
 	if err := srv.Run(context.Background()); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// resolveNoWebAdmin applies CLI > ENV > config precedence.
+func resolveNoWebAdmin(fs *flag.FlagSet, cfg *config.Config) bool {
+	flagExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "no-web-admin" {
+			flagExplicit = true
+		}
+	})
+	if flagExplicit {
+		return fs.Lookup("no-web-admin").Value.String() == "true"
+	}
+	if env := os.Getenv("GATECRASH_NO_WEB_ADMIN"); env != "" {
+		return env == "1" || env == "true" || env == "yes"
+	}
+	return cfg.Server.NoWebAdmin
 }
 
 func runClient(args []string) {

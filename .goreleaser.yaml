@@ -3,6 +3,12 @@ project_name: gatecrash
 
 before:
   hooks:
+    - sh -c "mkdir -p web/static/js web/static/css web/static/fonts/roboto"
+    - sh -c "test -f web/static/css/bulma.min.css || curl -sL https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css -o web/static/css/bulma.min.css"
+    - sh -c "test -f web/static/js/htmx.min.js || curl -sL https://unpkg.com/htmx.org/dist/htmx.min.js -o web/static/js/htmx.min.js"
+    - sh -c "test -f web/static/js/htmx-sse.js || curl -sL https://unpkg.com/htmx-ext-sse/sse.js -o web/static/js/htmx-sse.js"
+    - sh -c "test -f web/static/fonts/roboto/roboto-regular.woff2 || curl -sL 'https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.woff2' -o web/static/fonts/roboto/roboto-regular.woff2"
+    - sh -c "test -f web/static/fonts/roboto/roboto-bold.woff2 || curl -sL 'https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWuaabWmT.woff2' -o web/static/fonts/roboto/roboto-bold.woff2"
     - go mod tidy
 
 builds:
@@ -31,8 +37,6 @@ dockers:
     image_templates:
       - "ghcr.io/jclement/gatecrash:{{ .Version }}-amd64"
       - "ghcr.io/jclement/gatecrash:latest-amd64"
-    extra_files:
-      - web/
 
   - ids: [gatecrash]
     goos: linux
@@ -43,8 +47,6 @@ dockers:
     image_templates:
       - "ghcr.io/jclement/gatecrash:{{ .Version }}-arm64"
       - "ghcr.io/jclement/gatecrash:latest-arm64"
-    extra_files:
-      - web/
 
 docker_manifests:
   - name_template: "ghcr.io/jclement/gatecrash:{{ .Version }}"

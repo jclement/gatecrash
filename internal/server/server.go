@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/jclement/gatecrash/internal/admin"
 	"github.com/jclement/gatecrash/internal/config"
 	"github.com/jclement/gatecrash/internal/token"
+	"github.com/jclement/gatecrash/web"
 )
 
 // Server is the main gatecrash server orchestrator.
@@ -32,6 +34,7 @@ type Server struct {
 	adminMux   *http.ServeMux
 	tlsConfig  *tls.Config
 	sse        *SSEBroadcaster
+	staticFS   fs.FS // embedded or disk-based static assets
 
 	// Auth components
 	passkeyStore *admin.PasskeyStore
@@ -202,8 +205,23 @@ func (s *Server) initAdmin() error {
 	}
 	s.webauthn = wah
 
-	// Template renderer
-	tmplFS := os.DirFS("web/templates")
+	// Template and static file systems — embedded in production, disk in dev for hot reload
+	var tmplFS fs.FS
+	if s.version == "dev" {
+		tmplFS = os.DirFS("web/templates")
+		s.staticFS = os.DirFS("web/static")
+	} else {
+		var err2 error
+		tmplFS, err2 = fs.Sub(web.EmbeddedFS, "templates")
+		if err2 != nil {
+			return fmt.Errorf("embedded templates: %w", err2)
+		}
+		s.staticFS, err2 = fs.Sub(web.EmbeddedFS, "static")
+		if err2 != nil {
+			return fmt.Errorf("embedded static: %w", err2)
+		}
+	}
+
 	ah, err := admin.NewHandlers(s.version, tmplFS)
 	if err != nil {
 		return fmt.Errorf("admin handlers: %w", err)
@@ -217,7 +235,7 @@ func (s *Server) initAdmin() error {
 // setupAdminRoutes registers the admin panel HTTP handlers.
 func (s *Server) setupAdminRoutes() {
 	// Static files — always public
-	s.adminMux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
+	s.adminMux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.staticFS)))
 
 	// Health check — always public
 	s.adminMux.HandleFunc("GET /health", s.handleHealth)

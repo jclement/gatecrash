@@ -65,9 +65,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Debug("no tunnel for host", "host", host)
+		adminHint := "Admin panel: <code>/.well-known/gatecrash/</code>"
 		s.serveErrorPage(w, r, http.StatusNotFound,
 			"No Tunnel Configured",
-			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.", host),
+			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.<br><br><small>%s</small>", host, adminHint),
 		)
 		return
 	}
