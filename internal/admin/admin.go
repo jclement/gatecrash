@@ -50,12 +50,11 @@ func formatBytes(b int64) string {
 
 // PageData is the template rendering context.
 type PageData struct {
-	Title    string
-	Active   string
-	Version  string
-	BasePath string // URL prefix for admin routes (e.g. "/.well-known/gatecrash" or "")
-	Flash    *Flash
-	Data     any
+	Title   string
+	Active  string
+	Version string
+	Flash   *Flash
+	Data    any
 }
 
 // PasskeyView represents a passkey for display in templates.

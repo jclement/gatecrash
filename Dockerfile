@@ -10,12 +10,12 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o gatecr
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 1000 gatecrash && \
-    mkdir -p /etc/gatecrash /data && \
-    chown gatecrash:gatecrash /etc/gatecrash /data
+    mkdir -p /etc/gatecrash/certs && \
+    chown -R gatecrash:gatecrash /etc/gatecrash
 WORKDIR /app
 COPY --from=builder /app/gatecrash .
-EXPOSE 8080 443 80
+EXPOSE 443 80
 ENV GATECRASH_CONFIG=/etc/gatecrash/gatecrash.toml
-VOLUME ["/etc/gatecrash", "/data"]
+VOLUME ["/etc/gatecrash"]
 USER gatecrash
 CMD ["./gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]

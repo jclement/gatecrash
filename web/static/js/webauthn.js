@@ -16,12 +16,9 @@ function base64urlToBuffer(str) {
     return bytes.buffer;
 }
 
-// Resolve a path relative to the <base> tag
+// Resolve an API path to an absolute URL
 function apiURL(path) {
-    const base = document.querySelector('base');
-    if (base) {
-        return new URL(path, base.href).href;
-    }
+    if (path === '.') return '/';
     return '/' + path;
 }
 

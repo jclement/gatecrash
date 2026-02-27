@@ -30,7 +30,7 @@
                     <td class="is-size-7">{{.LastUsedAt}}</td>
                     <td class="has-text-right">
                         {{if $.Data.CanDelete}}
-                        <form method="POST" action="passkeys/delete" style="display:inline"
+                        <form method="POST" action="/passkeys/delete" style="display:inline"
                               onsubmit="return confirm('Remove this passkey?')">
                             <input type="hidden" name="id" value="{{.IDB64}}">
                             <button type="submit" class="button is-small is-danger is-outlined">Remove</button>
@@ -50,5 +50,5 @@
     </div>
 </div>
 
-<script src="static/js/webauthn.js"></script>
+<script src="/static/js/webauthn.js"></script>
 {{end}}

@@ -23,11 +23,12 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Secret     string `toml:"secret"`
-	SSHPort    int    `toml:"ssh_port"`
-	AdminHost  string `toml:"admin_host"`
-	BindAddr   string `toml:"bind_addr"`
-	NoWebAdmin bool   `toml:"no_web_admin"`
+	Secret    string `toml:"secret"`
+	SSHPort   int    `toml:"ssh_port"`
+	HTTPSPort int    `toml:"https_port"`
+	HTTPPort  int    `toml:"http_port"`
+	AdminHost string `toml:"admin_host"`
+	BindAddr  string `toml:"bind_addr"`
 }
 
 type TLSConfig struct {
@@ -104,7 +105,9 @@ func (c *Config) AllHostnames() []string {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Server: ServerConfig{
-			BindAddr: "0.0.0.0",
+			BindAddr:  "0.0.0.0",
+			HTTPSPort: 443,
+			HTTPPort:  80,
 		},
 		TLS: TLSConfig{
 			CertDir: "./certs",
@@ -121,6 +124,10 @@ func Load(path string) (*Config, error) {
 		if err := cfg.generateDefaults(); err != nil {
 			return nil, fmt.Errorf("generating defaults: %w", err)
 		}
+		// Resolve relative cert_dir to be relative to config file directory
+		if !filepath.IsAbs(cfg.TLS.CertDir) {
+			cfg.TLS.CertDir = filepath.Join(filepath.Dir(path), cfg.TLS.CertDir)
+		}
 		if err := cfg.Save(path); err != nil {
 			return nil, fmt.Errorf("saving default config: %w", err)
 		}
@@ -129,6 +136,11 @@ func Load(path string) (*Config, error) {
 
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+
+	// Resolve relative cert_dir to be relative to config file directory
+	if !filepath.IsAbs(cfg.TLS.CertDir) {
+		cfg.TLS.CertDir = filepath.Join(filepath.Dir(path), cfg.TLS.CertDir)
 	}
 
 	changed := false
@@ -191,23 +203,22 @@ func (c *Config) Save(path string) error {
 	b.WriteString("# SSH port for tunnel clients\n")
 	fmt.Fprintf(&b, "ssh_port = %d\n\n", c.Server.SSHPort)
 
-	b.WriteString("# Bind address for HTTP/HTTPS listeners\n")
+	b.WriteString("# HTTPS port (default: 443)\n")
+	fmt.Fprintf(&b, "https_port = %d\n\n", c.Server.HTTPSPort)
+
+	b.WriteString("# HTTP port for HTTPS redirect (default: 80, set to 0 to disable)\n")
+	fmt.Fprintf(&b, "http_port = %d\n\n", c.Server.HTTPPort)
+
+	b.WriteString("# Bind address for listeners\n")
 	fmt.Fprintf(&b, "bind_addr = %q\n\n", c.Server.BindAddr)
 
-	b.WriteString("# Admin panel hostname (optional)\n")
-	b.WriteString("# When set, the admin panel is served on this hostname instead of IP-based access\n")
+	b.WriteString("# Admin panel hostname (required to enable the web admin panel)\n")
+	b.WriteString("# When set, the admin panel with passkey auth is served at this hostname.\n")
+	b.WriteString("# When not set, the admin panel is completely disabled.\n")
 	if c.Server.AdminHost != "" {
 		fmt.Fprintf(&b, "admin_host = %q\n\n", c.Server.AdminHost)
 	} else {
 		b.WriteString("# admin_host = \"admin.example.com\"\n\n")
-	}
-
-	b.WriteString("# Disable the web admin panel\n")
-	b.WriteString("# Can also be set via: --no-web-admin flag or GATECRASH_NO_WEB_ADMIN=1 env\n")
-	if c.Server.NoWebAdmin {
-		b.WriteString("no_web_admin = true\n\n")
-	} else {
-		b.WriteString("# no_web_admin = false\n\n")
 	}
 
 	// [tls]
@@ -323,6 +334,30 @@ func formatStringSlice(ss []string) string {
 		quoted[i] = fmt.Sprintf("%q", s)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// GenerateNew creates a new Config with auto-generated defaults
+// (random secret, random SSH port, default bind address and cert dir).
+func GenerateNew() (*Config, error) {
+	cfg := &Config{
+		Server: ServerConfig{
+			BindAddr:  "0.0.0.0",
+			HTTPSPort: 443,
+			HTTPPort:  80,
+		},
+		TLS: TLSConfig{
+			CertDir: "./certs",
+		},
+		Update: UpdateConfig{
+			Enabled:       true,
+			CheckInterval: "6h",
+			GitHubRepo:    "jclement/gatecrash",
+		},
+	}
+	if err := cfg.generateDefaults(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func (c *Config) generateDefaults() error {

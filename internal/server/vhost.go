@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,41 +8,11 @@ import (
 	"strings"
 )
 
-type adminCtxKey string
-
-const ctxKeyAdminPrefix adminCtxKey = "admin_prefix"
-
-// adminPrefix returns the URL prefix for admin routes from the request context.
-func adminPrefix(r *http.Request) string {
-	if v, ok := r.Context().Value(ctxKeyAdminPrefix).(string); ok {
-		return v
-	}
-	return ""
-}
-
 // ServeHTTP routes requests based on Host header.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
 
-	// 1. Always serve admin panel at /.well-known/gatecrash/
-	if strings.HasPrefix(r.URL.Path, "/.well-known/gatecrash") {
-		if s.noWebAdmin {
-			http.NotFound(w, r)
-			return
-		}
-		// Store the prefix in context so auth redirects work correctly
-		ctx := context.WithValue(r.Context(), ctxKeyAdminPrefix, "/.well-known/gatecrash")
-		r = r.WithContext(ctx)
-		// Strip the prefix for admin mux routing
-		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/.well-known/gatecrash")
-		if r.URL.Path == "" {
-			r.URL.Path = "/"
-		}
-		s.adminMux.ServeHTTP(w, r)
-		return
-	}
-
-	// 2. Check redirects before tunnel lookup
+	// 1. Check redirects before tunnel lookup
 	for _, redir := range s.cfg.Redirect {
 		if host == redir.From {
 			target := "https://" + redir.To
@@ -56,19 +25,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 2. Admin panel — served at admin_host's root
+	if s.cfg.Server.AdminHost != "" && host == s.cfg.Server.AdminHost {
+		s.adminMux.ServeHTTP(w, r)
+		return
+	}
+
 	// 3. Look up tunnel by hostname
 	tunnel := s.registry.FindByHostname(host)
 	if tunnel == nil {
-		// If this is the admin host or an IP, serve admin panel
-		if s.isAdminHost(host) && !s.noWebAdmin {
-			s.adminMux.ServeHTTP(w, r)
-			return
-		}
 		slog.Debug("no tunnel for host", "host", host)
-		adminHint := "Admin panel: <code>/.well-known/gatecrash/</code>"
 		s.serveErrorPage(w, r, http.StatusNotFound,
 			"No Tunnel Configured",
-			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.<br><br><small>%s</small>", host, adminHint),
+			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.", host),
 		)
 		return
 	}
@@ -82,13 +51,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.proxyHTTP(w, r, tunnel)
-}
-
-func (s *Server) isAdminHost(host string) bool {
-	if s.cfg.Server.AdminHost != "" {
-		return host == s.cfg.Server.AdminHost
-	}
-	return isIPAddress(host)
 }
 
 func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status int, title, message string) {

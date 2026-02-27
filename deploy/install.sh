@@ -115,9 +115,9 @@ fi
 
 # ── Fresh install setup ────────────────────────────────────────────
 
-# Create config directory
-info "Creating config directory: ${CONFIG_DIR}"
-sudo mkdir -p "$CONFIG_DIR"
+# Create config and cert directories
+info "Creating directories: ${CONFIG_DIR}"
+sudo mkdir -p "$CONFIG_DIR/certs"
 
 # Create service user
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -125,6 +125,30 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     sudo useradd -r -s /usr/sbin/nologin "$SERVICE_USER"
 fi
 sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_DIR"
+
+# ── Ask for admin hostname ─────────────────────────────────────────
+
+ADMIN_HOST=""
+if [ -t 0 ]; then
+    printf "\n"
+    info "Admin panel configuration"
+    dim "The admin panel lets you manage tunnels and passkeys via a web UI."
+    dim "It requires a dedicated hostname (e.g. admin.example.com)."
+    dim "Leave blank to disable the admin panel."
+    printf "\n"
+    printf "  Admin hostname: "
+    read ADMIN_HOST
+    printf "\n"
+fi
+
+# Generate config file
+MAKE_CONFIG_ARGS="--output ${CONFIG_DIR}/gatecrash.toml"
+if [ -n "$ADMIN_HOST" ]; then
+    MAKE_CONFIG_ARGS="${MAKE_CONFIG_ARGS} --admin-host ${ADMIN_HOST}"
+fi
+
+info "Generating config file..."
+sudo -u "$SERVICE_USER" "${INSTALL_DIR}/gatecrash" make-config ${MAKE_CONFIG_ARGS}
 
 # Create systemd service
 info "Creating systemd service"
@@ -165,7 +189,7 @@ sudo systemctl enable "$SERVICE_NAME"
 info "Starting ${SERVICE_NAME}..."
 sudo systemctl start "$SERVICE_NAME"
 
-# Wait briefly for config generation
+# Wait briefly for startup
 sleep 2
 
 # ── Print summary ──────────────────────────────────────────────────
@@ -176,8 +200,11 @@ printf "\n"
 dim "Config:  ${CONFIG_DIR}/gatecrash.toml"
 dim "Logs:    sudo journalctl -u ${SERVICE_NAME} -f"
 dim "Status:  sudo systemctl status ${SERVICE_NAME}"
-dim "Admin:   http://<your-ip>:8080/"
+if [ -n "$ADMIN_HOST" ]; then
+    dim "Admin:   https://${ADMIN_HOST}"
+else
+    dim "Admin:   disabled (edit config to set admin_host)"
+fi
 printf "\n"
-dim "A config file has been generated with a random SSH port."
-dim "Edit ${CONFIG_DIR}/gatecrash.toml to add tunnels and set up TLS."
+dim "Edit ${CONFIG_DIR}/gatecrash.toml to add tunnels."
 printf "\n"

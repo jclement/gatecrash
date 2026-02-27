@@ -16,7 +16,12 @@
       "Bash(go get github.com/go-webauthn/webauthn)",
       "Bash(go get github.com/go-webauthn/webauthn/protocol github.com/go-webauthn/webauthn/webauthn)",
       "Bash(go run honnef.co/go/tools/cmd/staticcheck@latest ./...)",
-      "Read(//Users/jsc/go/pkg/mod/github.com/caddyserver/**)"
+      "Read(//Users/jsc/go/pkg/mod/github.com/caddyserver/**)",
+      "Read(//Users/jsc/go/pkg/mod/go.uber.org/zap/**)",
+      "Bash(go build ./internal/server/)",
+      "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml --admin-host admin.example.com)",
+      "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml)",
+      "Bash(echo \"exit: $?\")"
     ],
     "additionalDirectories": [
       "/private/tmp"

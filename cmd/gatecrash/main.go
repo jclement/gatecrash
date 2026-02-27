@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -34,6 +35,8 @@ func main() {
 		runServer(os.Args[2:])
 	case "client":
 		runClient(os.Args[2:])
+	case "make-config":
+		runMakeConfig(os.Args[2:])
 	case "update":
 		runUpdate(os.Args[2:])
 	case "version":
@@ -50,11 +53,12 @@ func main() {
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "gatecrash %s — self-hosted tunnel server\n\n", Version)
 	fmt.Fprintf(os.Stderr, "Usage:\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash server  [flags]   Start the tunnel server\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash client  [flags]   Connect a tunnel client\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash update  [flags]   Self-update to latest release\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash version           Print version\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash help              Show this help\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash server      [flags]   Start the tunnel server\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash client      [flags]   Connect a tunnel client\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash make-config [flags]   Generate a config file\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash update      [flags]   Self-update to latest release\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash version               Print version\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash help                  Show this help\n")
 	fmt.Fprintf(os.Stderr, "\nRun 'gatecrash <command> --help' for command-specific flags.\n")
 }
 
@@ -89,7 +93,6 @@ func envOrDefault(key, def string) string {
 func runServer(args []string) {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := fs.String("config", envOrDefault("GATECRASH_CONFIG", "/etc/gatecrash/gatecrash.toml"), "path to config file")
-	_ = fs.Bool("no-web-admin", false, "disable web admin panel")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
 	fs.Parse(args)
 
@@ -102,36 +105,64 @@ func runServer(args []string) {
 		os.Exit(1)
 	}
 
-	// Resolve no-web-admin: CLI flag > ENV > config file
-	noWebAdmin := resolveNoWebAdmin(fs, cfg)
-
 	// Check for updates in background
 	if cfg.Update.Enabled {
 		go update.LogIfUpdateAvailable(cfg.Update.GitHubRepo, Version)
 	}
 
-	srv := server.New(cfg, *configPath, Version, noWebAdmin)
+	srv := server.New(cfg, *configPath, Version)
 	if err := srv.Run(context.Background()); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
 }
 
-// resolveNoWebAdmin applies CLI > ENV > config precedence.
-func resolveNoWebAdmin(fs *flag.FlagSet, cfg *config.Config) bool {
-	flagExplicit := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "no-web-admin" {
-			flagExplicit = true
+func runMakeConfig(args []string) {
+	fs := flag.NewFlagSet("make-config", flag.ExitOnError)
+	output := fs.String("output", "/etc/gatecrash/gatecrash.toml", "output config file path")
+	adminHost := fs.String("admin-host", "", "admin panel hostname (enables web admin)")
+	acmeEmail := fs.String("acme-email", "", "ACME/Let's Encrypt email for certificate notices")
+	force := fs.Bool("force", false, "overwrite existing config file")
+	fs.Parse(args)
+
+	// Check if file already exists
+	if !*force {
+		if _, err := os.Stat(*output); err == nil {
+			fmt.Fprintf(os.Stderr, "Config file already exists: %s\nUse --force to overwrite.\n", *output)
+			os.Exit(1)
 		}
-	})
-	if flagExplicit {
-		return fs.Lookup("no-web-admin").Value.String() == "true"
 	}
-	if env := os.Getenv("GATECRASH_NO_WEB_ADMIN"); env != "" {
-		return env == "1" || env == "true" || env == "yes"
+
+	cfg, err := config.GenerateNew()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate config: %v\n", err)
+		os.Exit(1)
 	}
-	return cfg.Server.NoWebAdmin
+
+	if *adminHost != "" {
+		cfg.Server.AdminHost = *adminHost
+	}
+	if *acmeEmail != "" {
+		cfg.TLS.ACMEEmail = *acmeEmail
+	}
+
+	// Resolve cert_dir relative to output path
+	if !filepath.IsAbs(cfg.TLS.CertDir) {
+		cfg.TLS.CertDir = filepath.Join(filepath.Dir(*output), cfg.TLS.CertDir)
+	}
+
+	if err := cfg.Save(*output); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Config written to %s\n", *output)
+	fmt.Printf("  SSH port: %d\n", cfg.Server.SSHPort)
+	if cfg.Server.AdminHost != "" {
+		fmt.Printf("  Admin:    https://%s\n", cfg.Server.AdminHost)
+	} else {
+		fmt.Printf("  Admin:    disabled (set --admin-host to enable)\n")
+	}
 }
 
 func runClient(args []string) {

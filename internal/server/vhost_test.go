@@ -117,8 +117,12 @@ func TestVhostNoTunnelErrorPage(t *testing.T) {
 	}
 }
 
-func TestVhostWellKnownAdmin(t *testing.T) {
-	cfg := &config.Config{}
+func TestVhostAdminHost(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AdminHost: "admin.example.com",
+		},
+	}
 	srv := &Server{
 		cfg:      cfg,
 		registry: NewRegistry(),
@@ -128,8 +132,9 @@ func TestVhostWellKnownAdmin(t *testing.T) {
 		w.Write([]byte("admin"))
 	})
 
-	req := httptest.NewRequest("GET", "/.well-known/gatecrash/", nil)
-	req.Host = "anything.example.com"
+	// Admin host should serve admin panel
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "admin.example.com"
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 
@@ -138,6 +143,16 @@ func TestVhostWellKnownAdmin(t *testing.T) {
 	}
 	if w.Body.String() != "admin" {
 		t.Fatalf("expected admin response, got %q", w.Body.String())
+	}
+
+	// Non-admin host should not serve admin
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Host = "other.example.com"
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-admin host, got %d", w.Code)
 	}
 }
 

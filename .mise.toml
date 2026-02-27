@@ -3,9 +3,6 @@ go = "latest"
 goreleaser = "latest"
 "go:github.com/air-verse/air" = "latest"
 
-[env]
-PORT = "8080"
-
 [tasks.setup]
 description = "Download frontend assets and dependencies"
 run = """

@@ -28,7 +28,6 @@ type Server struct {
 	cfg        *config.Config
 	configPath string
 	version    string
-	noWebAdmin bool
 	registry   *Registry
 	sshServer  *ssh.Server
 	adminMux   *http.ServeMux
@@ -44,12 +43,11 @@ type Server struct {
 }
 
 // New creates a new server instance.
-func New(cfg *config.Config, configPath, version string, noWebAdmin bool) *Server {
+func New(cfg *config.Config, configPath, version string) *Server {
 	return &Server{
 		cfg:        cfg,
 		configPath: configPath,
 		version:    version,
-		noWebAdmin: noWebAdmin,
 		registry:   NewRegistry(),
 		adminMux:   http.NewServeMux(),
 		sse:        NewSSEBroadcaster(),
@@ -84,18 +82,21 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.sshServer = sshSrv
 
-	// Setup admin routes
-	if !s.noWebAdmin {
+	// Setup admin panel — enabled only when admin_host is configured
+	if s.cfg.Server.AdminHost != "" {
 		if err := s.initAdmin(); err != nil {
 			return fmt.Errorf("admin init: %w", err)
 		}
 		s.setupAdminRoutes()
+		slog.Info("admin panel enabled", "hostname", s.cfg.Server.AdminHost)
+	} else {
+		slog.Info("admin panel disabled (set server.admin_host in config to enable)")
 	}
 
-	// Setup TLS (on-demand if ACME configured, self-signed if hostnames but no ACME)
+	// Setup TLS (ACME for configured hostnames, self-signed fallback)
 	tlsConfig, err := s.setupTLS()
 	if err != nil {
-		slog.Warn("TLS setup failed, running HTTP only", "error", err)
+		return fmt.Errorf("TLS setup: %w", err)
 	}
 	s.tlsConfig = tlsConfig
 
@@ -121,34 +122,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Start HTTP/HTTPS listeners
-	errCh := make(chan error, 3)
+	// Start HTTPS listener
+	errCh := make(chan error, 2)
 
-	if s.tlsConfig != nil {
-		go func() {
-			httpsAddr := fmt.Sprintf("%s:443", s.cfg.Server.BindAddr)
-			listener, err := tls.Listen("tcp", httpsAddr, s.tlsConfig)
-			if err != nil {
-				errCh <- fmt.Errorf("HTTPS listen: %w", err)
-				return
-			}
-			slog.Info("HTTPS server listening", "addr", httpsAddr)
-			errCh <- http.Serve(listener, s)
-		}()
+	go func() {
+		httpsAddr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.HTTPSPort)
+		listener, err := tls.Listen("tcp", httpsAddr, s.tlsConfig)
+		if err != nil {
+			errCh <- fmt.Errorf("HTTPS listen: %w", err)
+			return
+		}
+		slog.Info("HTTPS server listening", "addr", httpsAddr)
+		errCh <- http.Serve(listener, s)
+	}()
 
+	// Optional HTTP→HTTPS redirect listener
+	if s.cfg.Server.HTTPPort > 0 {
 		go func() {
-			httpAddr := fmt.Sprintf("%s:80", s.cfg.Server.BindAddr)
+			httpAddr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.HTTPPort)
 			slog.Info("HTTP server listening (redirect to HTTPS)", "addr", httpAddr)
-			errCh <- http.ListenAndServe(httpAddr, http.HandlerFunc(httpToHTTPSRedirect))
+			errCh <- http.ListenAndServe(httpAddr, http.HandlerFunc(s.httpToHTTPSRedirect))
 		}()
 	}
-
-	// Always listen on :8080 for health checks, local admin, and plain HTTP access
-	go func() {
-		httpAddr := fmt.Sprintf("%s:8080", s.cfg.Server.BindAddr)
-		slog.Info("HTTP server listening", "addr", httpAddr)
-		errCh <- http.ListenAndServe(httpAddr, s)
-	}()
 
 	// Wait for shutdown signal or config changes
 	sigCh := make(chan os.Signal, 1)
@@ -192,12 +187,11 @@ func (s *Server) initAdmin() error {
 	// Session manager
 	s.sessionMgr = admin.NewSessionManager(s.cfg.Server.Secret)
 
-	// WebAuthn - determine rpID and origin from config
-	rpID := "localhost"
-	rpOrigin := "http://localhost:8080"
-	if s.cfg.Server.AdminHost != "" {
-		rpID = s.cfg.Server.AdminHost
-		rpOrigin = "https://" + s.cfg.Server.AdminHost
+	// WebAuthn - determine rpID and origin from admin_host
+	rpID := s.cfg.Server.AdminHost
+	rpOrigin := "https://" + s.cfg.Server.AdminHost
+	if s.cfg.Server.HTTPSPort != 443 {
+		rpOrigin = fmt.Sprintf("https://%s:%d", s.cfg.Server.AdminHost, s.cfg.Server.HTTPSPort)
 	}
 
 	wah, err := admin.NewWebAuthnHandler(rpID, rpOrigin, store, s.sessionMgr)
@@ -269,55 +263,41 @@ func (s *Server) setupAdminRoutes() {
 // If not authenticated, redirects to login.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		prefix := adminPrefix(r)
-
-		// If no passkeys registered, redirect to setup
 		if s.webauthn.NeedsSetup() {
-			http.Redirect(w, r, prefix+"/setup", http.StatusSeeOther)
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
 			return
 		}
-
-		// Check session
 		if !s.sessionMgr.ValidateSession(r) {
-			http.Redirect(w, r, prefix+"/login", http.StatusSeeOther)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-
 		next(w, r)
 	}
 }
 
 // handleLogin renders the login page.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	// If no passkeys, go to setup instead
 	if s.webauthn.NeedsSetup() {
-		prefix := adminPrefix(r)
-		http.Redirect(w, r, prefix+"/setup", http.StatusSeeOther)
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
-	// If already authenticated, go to dashboard
 	if s.sessionMgr.ValidateSession(r) {
-		prefix := adminPrefix(r)
-		http.Redirect(w, r, prefix+"/", http.StatusSeeOther)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	s.adminH.Render(w, "pages/login.html", &admin.PageData{
-		Title:    "Login",
-		BasePath: adminPrefix(r),
+		Title: "Login",
 	})
 }
 
 // handleSetup renders the first-time passkey registration page.
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	// If already set up, redirect to login
 	if !s.webauthn.NeedsSetup() {
-		prefix := adminPrefix(r)
-		http.Redirect(w, r, prefix+"/login", http.StatusSeeOther)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 	s.adminH.Render(w, "pages/setup.html", &admin.PageData{
-		Title:    "Setup",
-		BasePath: adminPrefix(r),
+		Title: "Setup",
 	})
 }
 
@@ -335,9 +315,8 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminH.Render(w, "pages/passkeys.html", &admin.PageData{
-		Title:    "Passkeys",
-		Active:   "passkeys",
-		BasePath: adminPrefix(r),
+		Title:  "Passkeys",
+		Active: "passkeys",
 		Data: struct {
 			Passkeys  []admin.PasskeyView
 			CanDelete bool
@@ -350,10 +329,9 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 
 // handleDeletePasskey removes a passkey.
 func (s *Server) handleDeletePasskey(w http.ResponseWriter, r *http.Request) {
-	prefix := adminPrefix(r)
 	idB64 := r.FormValue("id")
 	if idB64 == "" {
-		http.Redirect(w, r, prefix+"/passkeys", http.StatusSeeOther)
+		http.Redirect(w, r, "/passkeys", http.StatusSeeOther)
 		return
 	}
 
@@ -367,23 +345,17 @@ func (s *Server) handleDeletePasskey(w http.ResponseWriter, r *http.Request) {
 		slog.Error("failed to remove passkey", "error", err)
 	}
 
-	http.Redirect(w, r, prefix+"/passkeys", http.StatusSeeOther)
+	http.Redirect(w, r, "/passkeys", http.StatusSeeOther)
 }
 
 // handleLogout clears the session and redirects to login.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.sessionMgr.ClearSession(w)
-	prefix := adminPrefix(r)
-	http.Redirect(w, r, prefix+"/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.buildTunnelViews()
-	prefix := adminPrefix(r)
-	basePath := prefix
-	if basePath == "" {
-		basePath = ""
-	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
@@ -391,33 +363,32 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<base href="%s/">
 <title>Gatecrash</title>
-<link rel="icon" type="image/png" href="static/favicon.png">
-<link rel="stylesheet" href="static/css/bulma.min.css">
-<link rel="stylesheet" href="static/css/app.css">
-<script src="static/js/htmx.min.js"></script>
-<script src="static/js/htmx-sse.js"></script>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="stylesheet" href="/static/css/bulma.min.css">
+<link rel="stylesheet" href="/static/css/app.css">
+<script src="/static/js/htmx.min.js"></script>
+<script src="/static/js/htmx-sse.js"></script>
 </head>
 <body>
 <nav class="navbar is-spaced">
   <div class="container">
     <div class="navbar-brand">
-      <a class="navbar-item" href=".">
-        <img src="static/logo.png" alt="Gatecrash" style="max-height:28px;margin-right:8px">
+      <a class="navbar-item" href="/">
+        <img src="/static/logo.png" alt="Gatecrash" style="max-height:28px;margin-right:8px">
         <span class="has-text-weight-bold is-size-5">Gatecrash</span>
       </a>
     </div>
     <div class="navbar-menu">
       <div class="navbar-start">
-        <a class="navbar-item is-active" href=".">Dashboard</a>
-        <a class="navbar-item" href="passkeys">Passkeys</a>
+        <a class="navbar-item is-active" href="/">Dashboard</a>
+        <a class="navbar-item" href="/passkeys">Passkeys</a>
       </div>
       <div class="navbar-end">
         <div class="navbar-item"><span class="tag is-light">v%s</span></div>
         <div class="navbar-item"><span class="tag is-light">SSH :%d</span></div>
         <div class="navbar-item">
-          <form method="POST" action="logout">
+          <form method="POST" action="/logout">
             <button type="submit" class="button is-small is-light">Logout</button>
           </form>
         </div>
@@ -428,10 +399,10 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 <main class="section">
 <div class="container">
   <div id="config-error"></div>
-  <div hx-ext="sse" sse-connect="api/events">
-    <div sse-swap="config-reload" hx-get="api/tunnels/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-connect" hx-get="api/tunnels/html" hx-trigger="sse:tunnel-connect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-disconnect" hx-get="api/tunnels/html" hx-trigger="sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+  <div hx-ext="sse" sse-connect="/api/events">
+    <div sse-swap="config-reload" hx-get="/api/tunnels/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+    <div sse-swap="tunnel-connect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-connect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+    <div sse-swap="tunnel-disconnect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
   </div>
   <table class="table is-fullwidth is-hoverable">
     <thead>
@@ -447,7 +418,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
         <th>Actions</th>
       </tr>
     </thead>
-    <tbody id="tunnel-table-body" hx-get="api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">`, basePath, s.version, s.cfg.Server.SSHPort)
+    <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">`, s.version, s.cfg.Server.SSHPort)
 
 	s.writeTunnelRows(w, tunnels)
 
@@ -524,7 +495,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 <script>
 async function regenerateSecret(tunnelId) {
   if (!confirm('Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.')) return;
-  const resp = await fetch('api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
+  const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
   if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
   const data = await resp.json();
   document.getElementById('secret-token').value = data.token;
@@ -712,7 +683,11 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 	s.sse.Broadcast("config-reload", "ok")
 }
 
-func httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {
-	target := "https://" + r.Host + r.RequestURI
+func (s *Server) httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	if s.cfg.Server.HTTPSPort != 443 {
+		host = fmt.Sprintf("%s:%d", host, s.cfg.Server.HTTPSPort)
+	}
+	target := "https://" + host + r.RequestURI
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
