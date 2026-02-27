@@ -129,7 +129,7 @@ sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_DIR"
 # ── Ask for admin hostname ─────────────────────────────────────────
 
 ADMIN_HOST=""
-if [ -t 0 ]; then
+if [ -e /dev/tty ]; then
     printf "\n"
     info "Admin panel configuration"
     dim "The admin panel lets you manage tunnels and passkeys via a web UI."
@@ -137,7 +137,7 @@ if [ -t 0 ]; then
     dim "Leave blank to disable the admin panel."
     printf "\n"
     printf "  Admin hostname: "
-    read ADMIN_HOST
+    read ADMIN_HOST < /dev/tty
     printf "\n"
 fi
 
