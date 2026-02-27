@@ -14,7 +14,8 @@
       "Bash(go test -race ./internal/server/...)",
       "Bash(curl -sL \"https://unpkg.com/htmx-ext-sse/sse.js\" -o /Users/jsc/Developer/gatecrash/web/static/js/htmx-sse.js)",
       "Bash(go get github.com/go-webauthn/webauthn)",
-      "Bash(go get github.com/go-webauthn/webauthn/protocol github.com/go-webauthn/webauthn/webauthn)"
+      "Bash(go get github.com/go-webauthn/webauthn/protocol github.com/go-webauthn/webauthn/webauthn)",
+      "Bash(go run honnef.co/go/tools/cmd/staticcheck@latest ./...)"
     ],
     "additionalDirectories": [
       "/private/tmp"

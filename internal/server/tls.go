@@ -72,9 +72,7 @@ func selfSignedTLSConfig(hosts []string) (*tls.Config, error) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	for _, h := range hosts {
-		tmpl.DNSNames = append(tmpl.DNSNames, h)
-	}
+	tmpl.DNSNames = append(tmpl.DNSNames, hosts...)
 
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {

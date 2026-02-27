@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -121,7 +122,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	)
 
 	// Log at info level with less detail for non-debug
-	if slog.Default().Enabled(nil, slog.LevelInfo) && !slog.Default().Enabled(nil, slog.LevelDebug) {
+	if slog.Default().Enabled(context.Background(), slog.LevelInfo) && !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 		statusStr := fmt.Sprintf("%d", resp.StatusCode)
 		if resp.StatusCode >= 400 {
 			statusStr = fmt.Sprintf("%d!", resp.StatusCode)
