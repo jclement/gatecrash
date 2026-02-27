@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache curl git
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -7,7 +7,7 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o gatecrash ./cmd/gatecrash
 
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 1000 gatecrash && \
     mkdir -p /etc/gatecrash /data && \
