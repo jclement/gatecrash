@@ -212,7 +212,9 @@ func (c *Config) Save(path string) error {
 
 	// [tls]
 	b.WriteString("[tls]\n")
-	b.WriteString("# ACME/Let's Encrypt email for automatic HTTPS certificates\n")
+	b.WriteString("# ACME/Let's Encrypt email (optional but recommended for expiration notices)\n")
+	b.WriteString("# TLS is enabled automatically when hostnames are configured.\n")
+	b.WriteString("# Certificates are obtained on-demand via Let's Encrypt as hostnames arrive.\n")
 	if c.TLS.ACMEEmail != "" {
 		fmt.Fprintf(&b, "acme_email = %q\n\n", c.TLS.ACMEEmail)
 	} else {

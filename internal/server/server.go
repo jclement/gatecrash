@@ -92,7 +92,7 @@ func (s *Server) Run(ctx context.Context) error {
 		s.setupAdminRoutes()
 	}
 
-	// Setup TLS if hostnames are configured
+	// Setup TLS (on-demand if ACME configured, self-signed if hostnames but no ACME)
 	tlsConfig, err := s.setupTLS()
 	if err != nil {
 		slog.Warn("TLS setup failed, running HTTP only", "error", err)
@@ -121,8 +121,8 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Start HTTP/HTTPS server
-	errCh := make(chan error, 2)
+	// Start HTTP/HTTPS listeners
+	errCh := make(chan error, 3)
 
 	if s.tlsConfig != nil {
 		go func() {
@@ -138,16 +138,17 @@ func (s *Server) Run(ctx context.Context) error {
 
 		go func() {
 			httpAddr := fmt.Sprintf("%s:80", s.cfg.Server.BindAddr)
-			slog.Info("HTTP server listening (redirect)", "addr", httpAddr)
+			slog.Info("HTTP server listening (redirect to HTTPS)", "addr", httpAddr)
 			errCh <- http.ListenAndServe(httpAddr, http.HandlerFunc(httpToHTTPSRedirect))
 		}()
-	} else {
-		go func() {
-			httpAddr := fmt.Sprintf("%s:8080", s.cfg.Server.BindAddr)
-			slog.Info("HTTP server listening", "addr", httpAddr)
-			errCh <- http.ListenAndServe(httpAddr, s)
-		}()
 	}
+
+	// Always listen on :8080 for health checks, local admin, and plain HTTP access
+	go func() {
+		httpAddr := fmt.Sprintf("%s:8080", s.cfg.Server.BindAddr)
+		slog.Info("HTTP server listening", "addr", httpAddr)
+		errCh <- http.ListenAndServe(httpAddr, s)
+	}()
 
 	// Wait for shutdown signal or config changes
 	sigCh := make(chan os.Signal, 1)
