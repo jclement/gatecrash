@@ -1,0 +1,98 @@
+[tools]
+go = "latest"
+goreleaser = "latest"
+"go:github.com/air-verse/air" = "latest"
+
+[env]
+PORT = "8080"
+
+[tasks.setup]
+description = "Download frontend assets and dependencies"
+run = """
+#!/bin/bash
+set -e
+mkdir -p web/static/js web/static/css web/static/fonts/roboto data
+
+# Download Bulma CSS
+if [ ! -f "web/static/css/bulma.min.css" ]; then
+    echo "Downloading Bulma CSS..."
+    curl -sL https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css -o web/static/css/bulma.min.css
+fi
+
+# Download HTMX
+if [ ! -f "web/static/js/htmx.min.js" ]; then
+    echo "Downloading HTMX..."
+    curl -sL https://unpkg.com/htmx.org/dist/htmx.min.js -o web/static/js/htmx.min.js
+fi
+
+# Download HTMX SSE extension
+if [ ! -f "web/static/js/htmx-sse.js" ]; then
+    echo "Downloading HTMX SSE extension..."
+    curl -sL https://unpkg.com/htmx-ext-sse/sse.js -o web/static/js/htmx-sse.js
+fi
+
+# Download Roboto font files
+if [ ! -f "web/static/fonts/roboto/roboto-regular.woff2" ]; then
+    echo "Downloading Roboto font..."
+    curl -sL "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.woff2" \
+        -o web/static/fonts/roboto/roboto-regular.woff2
+    curl -sL "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWuaabWmT.woff2" \
+        -o web/static/fonts/roboto/roboto-bold.woff2
+fi
+
+go mod tidy
+echo "Setup complete!"
+"""
+
+[tasks.dev]
+description = "Run server with hot-reload"
+run = "air"
+
+[tasks.server]
+description = "Build and run the server"
+run = """
+#!/bin/bash
+set -e
+go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Starting server..."
+./bin/gatecrash server --config gatecrash.toml --debug "$@"
+"""
+
+[tasks.client]
+description = "Build and run the client"
+run = """
+#!/bin/bash
+set -e
+go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Starting client..."
+./bin/gatecrash client "$@"
+"""
+
+[tasks.test]
+description = "Run tests"
+run = "go test -v -race -cover ./..."
+
+[tasks.build]
+description = "Build binary"
+run = """
+#!/bin/bash
+set -e
+CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Built: bin/gatecrash"
+"""
+
+[tasks.lint]
+description = "Run linters"
+run = "go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@latest ./..."
+
+[tasks.fmt]
+description = "Format code"
+run = "go fmt ./..."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf bin/ dist/ tmp/ data/*.db"
+
+[tasks.release-snapshot]
+description = "Test release build locally"
+run = "goreleaser release --snapshot --clean"

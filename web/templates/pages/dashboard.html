@@ -1,0 +1,67 @@
+{{define "content"}}
+<h1 class="title">Dashboard</h1>
+<p class="subtitle">SSH Port: <code>{{.Data.SSHPort}}</code></p>
+
+<div hx-get="/api/tunnels/html" hx-trigger="every 2s" hx-swap="innerHTML">
+    {{template "tunnel_table" .Data.Tunnels}}
+</div>
+{{end}}
+
+{{define "tunnel_table"}}
+<table class="table is-fullwidth is-hoverable">
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Tunnel</th>
+            <th>Type</th>
+            <th>Routes</th>
+            <th>Client</th>
+            <th>Requests</th>
+            <th>Traffic</th>
+            <th>Active</th>
+            <th>Token</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .}}
+        <tr>
+            <td>
+                {{if .Connected}}
+                <span class="status-dot is-connected"></span>
+                {{else}}
+                <span class="status-dot is-disconnected"></span>
+                {{end}}
+            </td>
+            <td><strong>{{.ID}}</strong></td>
+            <td><span class="tag {{if eq .Type "http"}}is-info{{else}}is-warning{{end}} is-light">{{.Type}}</span></td>
+            <td>
+                {{if eq .Type "http"}}
+                    {{range .Hostnames}}<code>{{.}}</code> {{end}}
+                {{else}}
+                    <code>:{{.ListenPort}}</code>
+                {{end}}
+            </td>
+            <td>
+                {{if .Connected}}
+                <span class="is-size-7">{{.ClientAddr}}</span>
+                {{else}}
+                <span class="has-text-grey is-size-7">-</span>
+                {{end}}
+            </td>
+            <td class="has-text-right"><span class="metric-value">{{.Requests}}</span></td>
+            <td class="has-text-right is-size-7">
+                {{.BytesInFmt}} in / {{.BytesOutFmt}} out
+            </td>
+            <td class="has-text-right"><span class="metric-value">{{.ActiveConns}}</span></td>
+            <td>
+                <span class="token-display" onclick="navigator.clipboard.writeText(this.textContent.trim())" title="Click to copy">{{.Token}}</span>
+            </td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="9" class="has-text-centered has-text-grey">No tunnels configured. Edit gatecrash.toml to add tunnels.</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

@@ -1,0 +1,36 @@
+services:
+  server:
+    image: ghcr.io/jclement/gatecrash:latest
+    command: ["gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "${SSH_PORT:-2222}:${SSH_PORT:-2222}"
+    volumes:
+      - config:/etc/gatecrash
+      - certs:/app/certs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Example: client sidecar for a web app
+  # client:
+  #   image: ghcr.io/jclement/gatecrash:latest
+  #   command: ["gatecrash", "client"]
+  #   environment:
+  #     GATECRASH_SERVER: server:2222
+  #     GATECRASH_TOKEN: "web-app:YOUR_SECRET"
+  #     GATECRASH_TARGET: webapp:3000
+  #   depends_on: [webapp]
+  #   restart: unless-stopped
+  #
+  # webapp:
+  #   image: your-webapp:latest
+  #   expose: [3000]
+
+volumes:
+  config:
+  certs:

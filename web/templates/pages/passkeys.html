@@ -1,0 +1,54 @@
+{{define "content"}}
+<div class="columns is-centered">
+    <div class="column is-8">
+        <div class="level">
+            <div class="level-left">
+                <h1 class="title is-4">Passkeys</h1>
+            </div>
+            <div class="level-right">
+                <button id="register-btn" class="button is-primary is-small" onclick="registerPasskey()">
+                    Add Passkey
+                </button>
+            </div>
+        </div>
+        <p id="status" class="is-size-7 mb-3"></p>
+
+        <table class="table is-fullwidth is-hoverable">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Created</th>
+                    <th>Last Used</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Data.Passkeys}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td class="is-size-7">{{.CreatedAt}}</td>
+                    <td class="is-size-7">{{.LastUsedAt}}</td>
+                    <td class="has-text-right">
+                        {{if $.Data.CanDelete}}
+                        <form method="POST" action="passkeys/delete" style="display:inline"
+                              onsubmit="return confirm('Remove this passkey?')">
+                            <input type="hidden" name="id" value="{{.IDB64}}">
+                            <button type="submit" class="button is-small is-danger is-outlined">Remove</button>
+                        </form>
+                        {{else}}
+                        <button class="button is-small is-outlined" disabled title="Cannot remove last passkey">Remove</button>
+                        {{end}}
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="4" class="has-text-centered has-text-grey">No passkeys registered.</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script src="static/js/webauthn.js"></script>
+{{end}}

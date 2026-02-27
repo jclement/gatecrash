@@ -1,0 +1,30 @@
+# Build
+bin/
+tmp/
+dist/
+
+# Data
+data/
+*.db
+certs/
+
+# Config (generated)
+gatecrash.toml
+passkeys.json
+host_key
+host_key.pub
+
+# Frontend (downloaded)
+web/static/css/bulma.min.css
+web/static/js/htmx.min.js
+web/static/js/alpine.min.js
+web/static/fonts/roboto/*.woff2
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

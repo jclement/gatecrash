@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(go mod init github.com/jclement/gatecrash)",
+      "Bash(go get github.com/BurntSushi/toml github.com/gliderlabs/ssh golang.org/x/crypto/ssh github.com/caddyserver/certmagic github.com/google/uuid github.com/go-webauthn/webauthn/v2 github.com/golang-jwt/jwt/v5)",
+      "Bash(go get github.com/BurntSushi/toml github.com/gliderlabs/ssh golang.org/x/crypto/ssh github.com/caddyserver/certmagic github.com/google/uuid github.com/go-webauthn/webauthn github.com/golang-jwt/jwt/v5)",
+      "Bash(go test -race -count=1 ./...)",
+      "Read(//tmp/**)",
+      "Bash(timeout 3 /tmp/gatecrash-server -config /tmp/gatecrash-test.toml)",
+      "Bash(wc -l /Users/jsc/Developer/gatecrash/cmd/**/*.go /Users/jsc/Developer/gatecrash/internal/**/*.go)",
+      "Bash(go get github.com/charmbracelet/log golang.org/x/term)",
+      "Bash(go get github.com/fsnotify/fsnotify)",
+      "Bash(go test -race ./internal/server/...)",
+      "Bash(curl -sL \"https://unpkg.com/htmx-ext-sse/sse.js\" -o /Users/jsc/Developer/gatecrash/web/static/js/htmx-sse.js)",
+      "Bash(go get github.com/go-webauthn/webauthn)",
+      "Bash(go get github.com/go-webauthn/webauthn/protocol github.com/go-webauthn/webauthn/webauthn)"
+    ],
+    "additionalDirectories": [
+      "/private/tmp"
+    ]
+  }
+}

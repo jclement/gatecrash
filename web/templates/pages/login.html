@@ -1,0 +1,25 @@
+{{define "content"}}
+<div class="columns is-centered" style="margin-top: 3rem;">
+    <div class="column is-half">
+        <div class="box">
+            <h1 class="title has-text-centered">Gatecrash</h1>
+            <p class="subtitle has-text-centered">Authenticate with your passkey to continue.</p>
+
+            <div class="has-text-centered">
+                <button id="login-btn" class="button is-primary is-medium" onclick="authenticatePasskey()">
+                    Sign In
+                </button>
+                <p id="status" class="is-size-7 mt-2"></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="static/js/webauthn.js"></script>
+<script>
+    // Auto-trigger passkey prompt on page load
+    window.addEventListener('load', () => {
+        setTimeout(authenticatePasskey, 500);
+    });
+</script>
+{{end}}

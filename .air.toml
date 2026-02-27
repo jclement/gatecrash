@@ -1,0 +1,17 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -ldflags=\"-X main.Version=dev\" -o ./tmp/gatecrash ./cmd/gatecrash"
+bin = "./tmp/gatecrash"
+args_bin = ["server", "--config", "gatecrash.toml", "--debug"]
+include_ext = ["go", "html", "css"]
+include_dir = ["cmd", "internal", "web"]
+exclude_dir = ["tmp", "vendor", ".git", "dist", "bin", "data"]
+delay = 500
+stop_on_error = true
+send_interrupt = true
+kill_delay = 500
+
+[screen]
+clear_on_rebuild = true
