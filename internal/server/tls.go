@@ -69,6 +69,10 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 	// Build TLS config from CertMagic, with self-signed fallback
 	tlsConfig := magic.TLSConfig()
 
+	// CertMagic only sets the ACME TLS-ALPN-01 challenge protocol in NextProtos.
+	// Browsers require h2 and http/1.1 for normal HTTPS to work.
+	tlsConfig.NextProtos = append(tlsConfig.NextProtos, "h2", "http/1.1")
+
 	fallbackCert, err := generateSelfSignedCert([]string{"localhost"})
 	if err != nil {
 		return nil, fmt.Errorf("generating fallback cert: %w", err)
