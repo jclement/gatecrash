@@ -18,28 +18,25 @@ import (
 
 // setupTLS configures TLS for the server.
 //
-// CertMagic with on-demand TLS is always enabled. Certificates are obtained
-// automatically via Let's Encrypt when new hostnames arrive via SNI.
-// Known hostnames from config are pre-provisioned at startup.
-// A self-signed certificate is used as a fallback if ACME fails.
+// In production, CertMagic with on-demand TLS is always enabled — even with
+// zero configuration. When a new hostname arrives via SNI, a Let's Encrypt
+// certificate is obtained automatically. Known hostnames from config are
+// pre-provisioned at startup. A self-signed certificate is the fallback if
+// ACME can't reach the domain.
 //
-// ACME email is optional — Let's Encrypt works without one, though
-// it's recommended for expiration notices.
-//
-// Returns nil if no hostnames are configured and no ACME email is set
-// (dev/local mode — plain HTTP only on :8080).
+// In dev mode (Version == "dev") with no hostnames configured, TLS is skipped
+// and the server runs HTTP-only on :8080.
 func (s *Server) setupTLS() (*tls.Config, error) {
 	hosts := s.cfg.AllHostnames()
-	hasACME := s.cfg.TLS.ACMEEmail != ""
 
-	// Nothing configured → HTTP only (dev mode)
-	if !hasACME && len(hosts) == 0 {
-		slog.Info("no hostnames or ACME configured, TLS disabled (HTTP only on :8080)")
+	// Dev mode with nothing configured → HTTP only on :8080
+	if s.version == "dev" && len(hosts) == 0 {
+		slog.Info("dev mode, no hostnames configured, TLS disabled (HTTP only on :8080)")
 		return nil, nil
 	}
 
 	// Configure CertMagic
-	if hasACME {
+	if s.cfg.TLS.ACMEEmail != "" {
 		certmagic.DefaultACME.Email = s.cfg.TLS.ACMEEmail
 	}
 	certmagic.DefaultACME.Agreed = true
