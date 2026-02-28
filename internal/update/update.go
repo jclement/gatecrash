@@ -6,11 +6,21 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 )
+
+// maxBinarySize caps the download size to 256 MiB to prevent disk exhaustion.
+const maxBinarySize = 256 << 20
+
+// trustedDownloadHosts lists the GitHub domains allowed for binary downloads.
+var trustedDownloadHosts = []string{
+	"github.com",
+	"objects.githubusercontent.com",
+}
 
 // GitHubRelease represents a GitHub release API response.
 type GitHubRelease struct {
@@ -73,10 +83,32 @@ func Check(repo, currentVersion string) (*CheckResult, error) {
 	return result, nil
 }
 
+// validateDownloadURL ensures the download URL is HTTPS and from a trusted GitHub domain.
+func validateDownloadURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid download URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("download URL must use HTTPS, got %q", parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	for _, trusted := range trustedDownloadHosts {
+		if host == trusted {
+			return nil
+		}
+	}
+	return fmt.Errorf("download URL host %q is not a trusted GitHub domain", host)
+}
+
 // SelfUpdate downloads the latest release and replaces the current binary.
 func SelfUpdate(downloadURL string) error {
 	if IsDocker() {
 		return fmt.Errorf("self-update is not supported in Docker containers; update your image instead")
+	}
+
+	if err := validateDownloadURL(downloadURL); err != nil {
+		return fmt.Errorf("download URL validation failed: %w", err)
 	}
 
 	slog.Info("downloading update", "url", downloadURL)
@@ -105,10 +137,18 @@ func SelfUpdate(downloadURL string) error {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// Limit download size to prevent disk exhaustion. Read one extra byte beyond
+	// the limit; if we receive that extra byte, the response is too large.
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBinarySize+1))
+	if err != nil {
 		f.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("writing update: %w", err)
+	}
+	if n > maxBinarySize {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("download exceeded maximum allowed size of %d bytes", maxBinarySize)
 	}
 	f.Close()
 

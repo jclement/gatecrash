@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestSessionManager_CreateAndValidate(t *testing.T) {
@@ -164,5 +166,30 @@ func TestIsAuthenticated_NoContext(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	if IsAuthenticated(req) {
 		t.Fatal("should not be authenticated without context")
+	}
+}
+
+func TestSessionManager_AlgorithmConfusion(t *testing.T) {
+	sm := NewSessionManager("test-secret")
+
+	// Create a valid session to get a proper cookie value first.
+	w := httptest.NewRecorder()
+	if err := sm.CreateSession(w); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Craft a token signed with the "none" algorithm — should be rejected.
+	noneToken := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.RegisteredClaims{
+		Issuer: "gatecrash",
+	})
+	signed, err := noneToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("signing with none: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: signed})
+	if sm.ValidateSession(req) {
+		t.Fatal("session with 'none' algorithm should be rejected")
 	}
 }

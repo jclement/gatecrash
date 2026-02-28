@@ -37,7 +37,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Admin panel — served at admin_host's root
 	if adminHost != "" && host == adminHost {
-		s.adminMux.ServeHTTP(w, r)
+		s.serveAdmin(w, r)
 		return
 	}
 
@@ -108,4 +108,14 @@ func isIPAddress(host string) bool {
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
 	return net.ParseIP(host) != nil
+}
+
+// serveAdmin applies security headers and delegates to the admin mux.
+func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+	w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'")
+	s.adminMux.ServeHTTP(w, r)
 }
