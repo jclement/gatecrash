@@ -91,15 +91,21 @@ func (t *TunnelState) ClientCount() int {
 	return len(t.clients)
 }
 
-// ClientAddrs returns all connected client addresses.
-func (t *TunnelState) ClientAddrs() []string {
+// ClientInfo holds exported details about a connected client.
+type ClientInfo struct {
+	Addr        string
+	ConnectedAt time.Time
+}
+
+// ClientInfos returns details for all connected clients.
+func (t *TunnelState) ClientInfos() []ClientInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	addrs := make([]string, 0, len(t.clients))
+	infos := make([]ClientInfo, 0, len(t.clients))
 	for _, c := range t.clients {
-		addrs = append(addrs, c.addr)
+		infos = append(infos, ClientInfo{Addr: c.addr, ConnectedAt: c.connectedAt})
 	}
-	return addrs
+	return infos
 }
 
 // Registry holds all configured tunnels and provides lookups.

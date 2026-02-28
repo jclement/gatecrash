@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // HostCert holds TLS certificate status for a single hostname.
@@ -16,6 +17,12 @@ type HostCert struct {
 	Valid    bool
 	Expiry   string // formatted date, e.g. "May 15, 2026"
 	Error    string // non-empty when cert is missing or invalid
+}
+
+// ClientView holds display info for a single connected client.
+type ClientView struct {
+	Addr   string
+	Uptime string // human-readable, e.g. "2h 15m"
 }
 
 // TunnelView is the template data for a single tunnel row.
@@ -28,7 +35,7 @@ type TunnelView struct {
 	TLSPassthrough bool
 	Connected      bool
 	ClientCount    int
-	ClientAddrs    []string
+	Clients        []ClientView
 	Requests       int64
 	BytesIn        int64
 	BytesOut       int64
@@ -40,8 +47,14 @@ type TunnelView struct {
 // HostnamesCSV returns hostnames as a comma-separated string.
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
 
-// ClientAddrsList returns client addresses as a newline-separated string for tooltips.
-func (t TunnelView) ClientAddrsList() string { return strings.Join(t.ClientAddrs, "\n") }
+// ClientSummary returns a tooltip-friendly summary of all clients with uptime.
+func (t TunnelView) ClientSummary() string {
+	lines := make([]string, len(t.Clients))
+	for i, c := range t.Clients {
+		lines[i] = c.Addr + " (" + c.Uptime + ")"
+	}
+	return strings.Join(lines, "\n")
+}
 
 // BytesInFmt formats bytes in as a human-readable string.
 func (t TunnelView) BytesInFmt() string { return formatBytes(t.BytesIn) }
@@ -64,6 +77,31 @@ func formatBytes(b int64) string {
 		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
 	default:
 		return fmt.Sprintf("%d B", b)
+	}
+}
+
+// FormatUptime returns a human-readable duration string.
+func FormatUptime(since time.Time) string {
+	d := time.Since(since)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	default:
+		days := int(d.Hours()) / 24
+		h := int(d.Hours()) % 24
+		if h == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd %dh", days, h)
 	}
 }
 

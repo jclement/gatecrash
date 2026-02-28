@@ -489,12 +489,24 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			TLSPassthrough: t.TLSPassthrough,
 			Connected:      t.IsConnected(),
 			ClientCount:    t.ClientCount(),
-			ClientAddrs:    t.ClientAddrs(),
+			Clients:        buildClientViews(t),
 			Requests:       t.Metrics.RequestCount.Load(),
 			BytesIn:        t.Metrics.BytesIn.Load(),
 			BytesOut:       t.Metrics.BytesOut.Load(),
 			ActiveConns:    int32(t.Metrics.ActiveConns.Load()),
 			HostCerts:      hostCerts,
+		}
+	}
+	return views
+}
+
+func buildClientViews(t *TunnelState) []admin.ClientView {
+	infos := t.ClientInfos()
+	views := make([]admin.ClientView, len(infos))
+	for i, info := range infos {
+		views[i] = admin.ClientView{
+			Addr:   info.Addr,
+			Uptime: admin.FormatUptime(info.ConnectedAt),
 		}
 	}
 	return views
@@ -923,25 +935,36 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.registry.AllTunnels()
+	type clientJSON struct {
+		Addr   string `json:"addr"`
+		Uptime string `json:"uptime"`
+	}
 	type tunnelJSON struct {
-		ID          string   `json:"id"`
-		Type        string   `json:"type"`
-		Connected   bool     `json:"connected"`
-		ClientCount int      `json:"client_count"`
-		ClientAddrs []string `json:"client_addrs,omitempty"`
-		ActiveConns int32    `json:"active_conns"`
-		BytesIn     int64    `json:"bytes_in"`
-		BytesOut    int64    `json:"bytes_out"`
-		Requests    int64    `json:"requests"`
+		ID          string       `json:"id"`
+		Type        string       `json:"type"`
+		Connected   bool         `json:"connected"`
+		ClientCount int          `json:"client_count"`
+		Clients     []clientJSON `json:"clients,omitempty"`
+		ActiveConns int32        `json:"active_conns"`
+		BytesIn     int64        `json:"bytes_in"`
+		BytesOut    int64        `json:"bytes_out"`
+		Requests    int64        `json:"requests"`
 	}
 	result := make([]tunnelJSON, len(tunnels))
 	for i, t := range tunnels {
+		var clients []clientJSON
+		for _, info := range t.ClientInfos() {
+			clients = append(clients, clientJSON{
+				Addr:   info.Addr,
+				Uptime: admin.FormatUptime(info.ConnectedAt),
+			})
+		}
 		result[i] = tunnelJSON{
 			ID:          t.ID,
 			Type:        t.Type,
 			Connected:   t.IsConnected(),
 			ClientCount: t.ClientCount(),
-			ClientAddrs: t.ClientAddrs(),
+			Clients:     clients,
 			ActiveConns: t.Metrics.ActiveConns.Load(),
 			BytesIn:     t.Metrics.BytesIn.Load(),
 			BytesOut:    t.Metrics.BytesOut.Load(),

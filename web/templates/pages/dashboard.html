@@ -442,7 +442,7 @@ function dashboard() {
         </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
-    <td class="px-3 py-2">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{index .ClientAddrs 0}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientAddrsList}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold">{{.Requests}}</td>
     <td class="px-3 py-2 text-right text-xs text-gray-500">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold">{{.ActiveConns}}</td>

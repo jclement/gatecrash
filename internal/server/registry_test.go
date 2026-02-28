@@ -112,9 +112,12 @@ func TestTunnelState_MultiClient(t *testing.T) {
 	if tunnel.ClientCount() != 1 {
 		t.Fatalf("expected 1 client, got %d", tunnel.ClientCount())
 	}
-	addrs := tunnel.ClientAddrs()
-	if len(addrs) != 1 || addrs[0] != "192.168.1.100:54321" {
-		t.Fatalf("unexpected addrs: %v", addrs)
+	infos := tunnel.ClientInfos()
+	if len(infos) != 1 || infos[0].Addr != "192.168.1.100:54321" {
+		t.Fatalf("unexpected client infos: %v", infos)
+	}
+	if infos[0].ConnectedAt.IsZero() {
+		t.Fatal("ConnectedAt should be set")
 	}
 
 	// Add second client
