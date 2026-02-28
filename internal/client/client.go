@@ -41,8 +41,15 @@ func New(cfg Config, version string) *Client {
 	c := &Client{cfg: cfg, version: version}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = c.targetTLSConfig()
-	c.httpClient = &http.Client{Transport: transport}
+	if cfg.TargetTLS == "tls-insecure" {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	c.httpClient = &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	return c
 }
@@ -199,17 +206,6 @@ func (c *Client) targetScheme() string {
 		return "https"
 	}
 	return "http"
-}
-
-func (c *Client) targetTLSConfig() *tls.Config {
-	switch c.cfg.TargetTLS {
-	case "tls":
-		return &tls.Config{ServerName: c.cfg.TargetHost}
-	case "tls-insecure":
-		return &tls.Config{InsecureSkipVerify: true}
-	default:
-		return nil
-	}
 }
 
 // makeHostKeyCallback creates a host key callback that verifies the server key
