@@ -24,56 +24,30 @@
 
 ## Quick Start
 
-### Install the Server (Linux)
+1. **Provision a server** with a public IP (any Linux VPS will do)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/jclement/gatecrash/main/deploy/install.sh | sh
-```
+2. **Point a hostname** at your server's IP via DNS (e.g. `admin.example.com`)
 
-Or download from [GitHub Releases](https://github.com/jclement/gatecrash/releases).
+3. **Run the installer** — it downloads the binary, generates a config, creates a systemd service, and starts Gatecrash. It will ask for your admin hostname during setup.
 
-### Configure
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/jclement/gatecrash/main/deploy/install.sh | sh
+   ```
 
-Edit `/etc/gatecrash/gatecrash.toml`:
+   Or download from [GitHub Releases](https://github.com/jclement/gatecrash/releases) for manual installation.
 
-```toml
-[server]
-ssh_port = 2222
-bind_addr = "0.0.0.0"
-admin_host = "admin.example.com"
+4. **Open the admin panel** at `https://admin.example.com`, register your passkey, and click **Add Tunnel** to create your first tunnel
 
-[tls]
-acme_email = "you@example.com"
-cert_dir = "./certs"
+5. **Connect a client** using the command shown in the admin panel:
 
-[[tunnel]]
-id = "web-app"
-type = "http"
-hostnames = ["app.example.com"]
-# secret_hash is generated via the admin panel
+   ```bash
+   gatecrash client \
+     --server tunnel.example.com:2222 \
+     --token "web-app:YOUR_SECRET" \
+     --target 127.0.0.1:8000
+   ```
 
-[[tunnel]]
-id = "database"
-type = "tcp"
-listen_port = 13306
-```
-
-### Start the Server
-
-```bash
-sudo systemctl start gatecrash
-```
-
-### Connect a Client
-
-```bash
-gatecrash client \
-  --server tunnel.example.com:2222 \
-  --token "web-app:YOUR_SECRET" \
-  --target 127.0.0.1:8000
-```
-
-That's it. Requests to `app.example.com` now reach your local service on port 8000.
+That's it. Requests to your configured hostname now reach your local service on port 8000.
 
 ---
 
@@ -163,17 +137,6 @@ preserve_path = false
 | `update.enabled` | `true` | Check for updates on startup |
 | `update.check_interval` | `6h` | How often to check for updates |
 | `update.github_repo` | `jclement/gatecrash` | GitHub repo for update checks |
-
-### Tunnel Configuration
-
-| Field | Description |
-|-------|-------------|
-| `id` | Unique tunnel identifier |
-| `type` | `http` or `tcp` |
-| `hostnames` | List of hostnames (HTTP tunnels) |
-| `listen_port` | TCP listen port (TCP tunnels) |
-| `secret_hash` | bcrypt hash of tunnel secret (generated via admin UI) |
-| `preserve_host` | Pass original Host header to backend (default: `false`) |
 
 ### Forwarding Headers
 

@@ -36,6 +36,16 @@
                 <a href="/help" class="px-3 py-1 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>
             </div>
             <div class="ml-auto flex items-center gap-3">
+                <div x-data="updateBanner()" x-init="init()" x-cloak>
+                    <template x-if="available && !isDocker">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs bg-green-600 px-2 py-0.5 rounded" x-text="'v' + latest + ' available'"></span>
+                            <button @click="doUpdate()" :disabled="updating"
+                                    class="text-xs bg-green-500 hover:bg-green-400 px-2 py-1 rounded font-medium disabled:opacity-50"
+                                    x-text="updating ? 'Updating...' : 'Update'"></button>
+                        </div>
+                    </template>
+                </div>
                 <span class="text-xs bg-gray-700 px-2 py-0.5 rounded">v{{.Version}}</span>
                 <form method="POST" action="/logout">
                     <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Logout</button>
@@ -59,6 +69,55 @@
     <footer class="py-2 text-center text-xs text-gray-400">
         <a href="https://github.com/jclement/gatecrash" target="_blank" class="hover:text-gray-600">Gatecrash</a> v{{.Version}}
     </footer>
+
+    {{if .Active}}
+    <script>
+    function updateBanner() {
+        return {
+            available: false,
+            latest: '',
+            isDocker: false,
+            updating: false,
+            init() {
+                this.checkUpdate();
+            },
+            async checkUpdate() {
+                try {
+                    const resp = await fetch('/api/update');
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    this.available = data.available;
+                    this.latest = data.latest;
+                    this.isDocker = data.is_docker;
+                } catch (_) {}
+            },
+            async doUpdate() {
+                if (!confirm('Update to v' + this.latest + '? The server will restart.')) return;
+                this.updating = true;
+                try {
+                    const resp = await fetch('/api/update', { method: 'POST' });
+                    if (!resp.ok) {
+                        alert('Update failed: ' + await resp.text());
+                        this.updating = false;
+                        return;
+                    }
+                    // Server will restart — show message and wait for reconnect
+                    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#666"><div style="text-align:center"><p style="font-size:18px;margin-bottom:8px">Updating to v' + this.latest + '...</p><p>The server is restarting. This page will reload automatically.</p></div></div>';
+                    const poll = setInterval(async () => {
+                        try {
+                            const r = await fetch('/health');
+                            if (r.ok) { clearInterval(poll); location.reload(); }
+                        } catch (_) {}
+                    }, 2000);
+                } catch (e) {
+                    alert('Update failed: ' + e.message);
+                    this.updating = false;
+                }
+            }
+        };
+    }
+    </script>
+    {{end}}
 </body>
 </html>
 {{end}}

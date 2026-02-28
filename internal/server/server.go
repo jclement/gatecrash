@@ -24,6 +24,7 @@ import (
 	"github.com/jclement/gatecrash/internal/admin"
 	"github.com/jclement/gatecrash/internal/config"
 	"github.com/jclement/gatecrash/internal/token"
+	"github.com/jclement/gatecrash/internal/update"
 	"github.com/jclement/gatecrash/web"
 )
 
@@ -46,6 +47,10 @@ type Server struct {
 	// TCP listener management
 	tcpMu        sync.Mutex
 	tcpListeners map[int]net.Listener // port → listener
+
+	// Update state
+	updateMu     sync.RWMutex
+	updateResult *update.CheckResult
 
 	// Auth components
 	passkeyStore *admin.PasskeyStore
@@ -126,6 +131,11 @@ func (s *Server) Run(ctx context.Context) error {
 	watcher := config.NewWatcher(s.configPath)
 	go watcher.Start()
 	defer watcher.Stop()
+
+	// Start periodic update checker
+	if s.cfg.Update.Enabled && s.version != "dev" && !update.IsDocker() {
+		go s.runUpdateChecker(s.cfg.Update.GitHubRepo, s.cfg.CheckIntervalDuration())
+	}
 
 	// Start SSH server
 	go func() {
@@ -279,6 +289,8 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /api/redirects", s.requireAuth(s.handleCreateRedirect))
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireAuth(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireAuth(s.handleDeleteRedirect))
+	s.adminMux.HandleFunc("GET /api/update", s.requireAuth(s.handleGetUpdate))
+	s.adminMux.HandleFunc("POST /api/update", s.requireAuth(s.handlePostUpdate))
 	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
 }
 
@@ -935,6 +947,64 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func (s *Server) handleGetUpdate(w http.ResponseWriter, r *http.Request) {
+	s.updateMu.RLock()
+	result := s.updateResult
+	s.updateMu.RUnlock()
+
+	resp := struct {
+		Available bool   `json:"available"`
+		Current   string `json:"current"`
+		Latest    string `json:"latest"`
+		IsDocker  bool   `json:"is_docker"`
+	}{
+		Current:  strings.TrimPrefix(s.version, "v"),
+		IsDocker: update.IsDocker(),
+	}
+	if result != nil {
+		resp.Available = result.UpdateAvailable
+		resp.Latest = result.LatestVersion
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
+	if update.IsDocker() {
+		http.Error(w, "self-update is not supported in Docker; update your image instead", http.StatusBadRequest)
+		return
+	}
+
+	s.updateMu.RLock()
+	result := s.updateResult
+	s.updateMu.RUnlock()
+
+	if result == nil || !result.UpdateAvailable {
+		http.Error(w, "no update available", http.StatusBadRequest)
+		return
+	}
+	if result.DownloadURL == "" {
+		http.Error(w, "no binary available for this platform", http.StatusBadRequest)
+		return
+	}
+
+	if err := update.SelfUpdate(result.DownloadURL); err != nil {
+		slog.Error("update failed", "error", err)
+		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("update complete, restarting", "new_version", result.LatestVersion)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": result.LatestVersion})
+
+	// Exit so systemd (or Docker) restarts us with the new binary
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
 	tunnels := make([]struct {
@@ -977,6 +1047,30 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 	)
 
 	s.sse.Broadcast("config-reload", "ok")
+}
+
+func (s *Server) runUpdateChecker(repo string, interval time.Duration) {
+	s.checkForUpdate(repo)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.checkForUpdate(repo)
+	}
+}
+
+func (s *Server) checkForUpdate(repo string) {
+	result, err := update.Check(repo, s.version)
+	if err != nil {
+		slog.Debug("update check failed", "error", err)
+		return
+	}
+	s.updateMu.Lock()
+	s.updateResult = result
+	s.updateMu.Unlock()
+	if result.UpdateAvailable {
+		slog.Info("update available", "current", result.CurrentVersion, "latest", result.LatestVersion)
+		s.sse.Broadcast("update-available", result.LatestVersion)
+	}
 }
 
 func (s *Server) httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {

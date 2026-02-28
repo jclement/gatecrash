@@ -259,6 +259,10 @@ function dashboard() {
             });
             es.addEventListener('tunnel-connect', () => this._refreshTunnels());
             es.addEventListener('tunnel-disconnect', () => this._refreshTunnels());
+            es.addEventListener('update-available', () => {
+                const banner = document.querySelector('[x-data="updateBanner()"]');
+                if (banner && banner.__x) banner.__x.$data.checkUpdate();
+            });
             es.onerror = () => {
                 es.close();
                 setTimeout(() => this._connectSSE(), 3000);
