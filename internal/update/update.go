@@ -137,14 +137,15 @@ func SelfUpdate(downloadURL string) error {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
 
-	// Limit download size to prevent disk exhaustion
-	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBinarySize))
+	// Limit download size to prevent disk exhaustion. Read one extra byte beyond
+	// the limit; if we receive that extra byte, the response is too large.
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBinarySize+1))
 	if err != nil {
 		f.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("writing update: %w", err)
 	}
-	if n == maxBinarySize {
+	if n > maxBinarySize {
 		f.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("download exceeded maximum allowed size of %d bytes", maxBinarySize)

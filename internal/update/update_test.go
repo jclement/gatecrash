@@ -1,9 +1,6 @@
 package update
 
 import (
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -64,27 +61,4 @@ func TestSelfUpdateUntrustedURL(t *testing.T) {
 	if !strings.Contains(err.Error(), "URL validation failed") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
-}
-
-func TestSelfUpdateSizeLimit(t *testing.T) {
-	// Serve a response larger than maxBinarySize
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", maxBinarySize+1))
-		// Write exactly maxBinarySize+1 bytes
-		chunk := make([]byte, 4096)
-		written := int64(0)
-		for written < maxBinarySize+1 {
-			n := int64(len(chunk))
-			if written+n > maxBinarySize+1 {
-				n = maxBinarySize + 1 - written
-			}
-			w.Write(chunk[:n])
-			written += n
-		}
-	}))
-	defer ts.Close()
-
-	// We can't easily test with HTTPS in unit tests without injecting a client,
-	// so test validateDownloadURL separately and trust the io.LimitReader logic.
-	_ = ts
 }
