@@ -1,6 +1,6 @@
 {{define "base"}}
 <!DOCTYPE html>
-<html lang="en" style="visibility: hidden;">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,21 +8,6 @@
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link rel="stylesheet" href="/static/fonts/roboto/roboto.css">
     <link rel="stylesheet" href="/static/css/app.css">
-    <script src="/static/js/tailwind.js"></script>
-    <style type="text/tailwindcss">
-        @theme {
-            --font-sans: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-            --font-mono: 'Roboto Mono', 'SF Mono', 'Consolas', monospace;
-        }
-    </style>
-    <script>
-        // Reveal page once Tailwind has compiled styles
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => document.documentElement.style.visibility = '');
-        } else {
-            document.documentElement.style.visibility = '';
-        }
-    </script>
     <script defer src="/static/js/alpine.js"></script>
 </head>
 <body class="bg-gray-50 text-gray-900 text-[13px] leading-tight min-h-screen flex flex-col">

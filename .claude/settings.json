@@ -44,7 +44,11 @@
       "Bash(go test -race -timeout 60s ./internal/...)",
       "Bash(go test -coverprofile=/tmp/cover.out ./internal/...)",
       "Bash(go tool cover -func=/tmp/cover.out)",
-      "Bash(go test -timeout 30s ./internal/...)"
+      "Bash(go test -timeout 30s ./internal/...)",
+      "Bash(mise install)",
+      "Bash(mise run tailwind)",
+      "Bash(npm init -y)",
+      "Bash(npm install -D tailwindcss @tailwindcss/cli)"
     ],
     "additionalDirectories": [
       "/private/tmp"

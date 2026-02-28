@@ -2,6 +2,7 @@
 bin/
 tmp/
 dist/
+node_modules/
 
 # Data
 data/

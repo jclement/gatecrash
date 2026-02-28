@@ -2,10 +2,19 @@
 go = "latest"
 goreleaser = "latest"
 "go:github.com/air-verse/air" = "latest"
+node = "lts"
 
 [tasks.setup]
 description = "Install dependencies"
-run = "go mod tidy"
+run = "go mod tidy && npm install"
+
+[tasks.tailwind]
+description = "Build Tailwind CSS"
+run = "npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --minify"
+
+[tasks."tailwind:watch"]
+description = "Watch and rebuild Tailwind CSS"
+run = "npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --watch"
 
 [tasks.dev]
 description = "Run server with hot-reload"
@@ -37,6 +46,7 @@ run = "go test -v -race -cover ./..."
 
 [tasks.build]
 description = "Build binary"
+depends = ["setup", "tailwind"]
 run = """
 #!/bin/bash
 set -e
