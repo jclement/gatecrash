@@ -20,11 +20,12 @@ type TunnelMetrics struct {
 
 // TunnelState holds the runtime state for a configured tunnel.
 type TunnelState struct {
-	ID           string
-	Type         string // "http" or "tcp"
-	Hostnames    []string
-	ListenPort   int
-	PreserveHost bool
+	ID             string
+	Type           string // "http" or "tcp"
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
 
 	mu          sync.RWMutex
 	connected   bool
@@ -139,11 +140,12 @@ func (r *Registry) AllTunnels() []*TunnelState {
 // Existing tunnels keep their connection state and metrics.
 // New tunnels are added, removed tunnels are dropped (connections will be closed by SSH).
 func (r *Registry) Reload(tunnels []struct {
-	ID           string
-	Type         string
-	Hostnames    []string
-	ListenPort   int
-	PreserveHost bool
+	ID             string
+	Type           string
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
 }) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -162,14 +164,16 @@ func (r *Registry) Reload(tunnels []struct {
 			t.Hostnames = tc.Hostnames
 			t.ListenPort = tc.ListenPort
 			t.PreserveHost = tc.PreserveHost
+			t.TLSPassthrough = tc.TLSPassthrough
 		} else {
 			// New tunnel
 			t = &TunnelState{
-				ID:           tc.ID,
-				Type:         tc.Type,
-				Hostnames:    tc.Hostnames,
-				ListenPort:   tc.ListenPort,
-				PreserveHost: tc.PreserveHost,
+				ID:             tc.ID,
+				Type:           tc.Type,
+				Hostnames:      tc.Hostnames,
+				ListenPort:     tc.ListenPort,
+				PreserveHost:   tc.PreserveHost,
+				TLSPassthrough: tc.TLSPassthrough,
 			}
 		}
 		newByID[tc.ID] = t

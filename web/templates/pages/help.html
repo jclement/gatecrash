@@ -85,6 +85,24 @@
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">TLS Passthrough</h2>
+        <p class="text-sm text-gray-600">
+            By default, HTTP tunnels terminate TLS at the server and automatically provision certificates via Let's Encrypt. With <strong>TLS Passthrough</strong> enabled, the server inspects the TLS ClientHello to read the hostname (SNI) but does <em>not</em> decrypt the traffic. Instead, the raw TLS connection is forwarded directly to your client service, which must handle TLS itself.
+        </p>
+        <p class="text-sm text-gray-600">
+            Use TLS passthrough when:
+        </p>
+        <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+            <li>Your service requires client certificate authentication (mTLS).</li>
+            <li>You need to use your own certificates instead of Let's Encrypt.</li>
+            <li>End-to-end encryption without server-side termination is required.</li>
+        </ul>
+        <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
+            Passthrough hostnames do not get automatic TLS certificates from the server. Your local service must present its own valid certificate.
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
         <h2 class="text-base font-semibold">Redirects</h2>
         <p class="text-sm text-gray-600">
             Redirects let you send traffic from one hostname to another URL without a tunnel. Useful for directing <code class="bg-gray-100 px-1 rounded text-xs">www.example.com</code> to <code class="bg-gray-100 px-1 rounded text-xs">https://example.com</code>, or forwarding a domain to an external service. TLS certificates are provisioned automatically for redirect hostnames too.

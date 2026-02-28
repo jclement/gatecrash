@@ -168,11 +168,12 @@ func TestRegistryReload(t *testing.T) {
 
 	// Reload: keep "a", remove "b", add "c"
 	r.Reload([]struct {
-		ID           string
-		Type         string
-		Hostnames    []string
-		ListenPort   int
-		PreserveHost bool
+		ID             string
+		Type           string
+		Hostnames      []string
+		ListenPort     int
+		PreserveHost   bool
+		TLSPassthrough bool
 	}{
 		{ID: "a", Type: "http", Hostnames: []string{"a.com", "a2.com"}},
 		{ID: "c", Type: "http", Hostnames: []string{"c.com"}},

@@ -20,19 +20,20 @@ type HostCert struct {
 
 // TunnelView is the template data for a single tunnel row.
 type TunnelView struct {
-	ID           string
-	Type         string
-	Hostnames    []string
-	ListenPort   int
-	PreserveHost bool
-	Connected    bool
-	ClientAddr   string
-	Requests     int64
-	BytesIn      int64
-	BytesOut     int64
-	ActiveConns  int32
-	Token        string
-	HostCerts    []HostCert
+	ID             string
+	Type           string
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
+	Connected      bool
+	ClientAddr     string
+	Requests       int64
+	BytesIn        int64
+	BytesOut       int64
+	ActiveConns    int32
+	Token          string
+	HostCerts      []HostCert
 }
 
 // HostnamesCSV returns hostnames as a comma-separated string.

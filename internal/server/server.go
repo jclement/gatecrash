@@ -71,11 +71,12 @@ func (s *Server) Run(ctx context.Context) error {
 	// Build tunnel registry from config
 	for _, tc := range s.cfg.Tunnel {
 		t := &TunnelState{
-			ID:           tc.ID,
-			Type:         tc.Type,
-			Hostnames:    tc.Hostnames,
-			ListenPort:   tc.ListenPort,
-			PreserveHost: tc.PreserveHost,
+			ID:             tc.ID,
+			Type:           tc.Type,
+			Hostnames:      tc.Hostnames,
+			ListenPort:     tc.ListenPort,
+			PreserveHost:   tc.PreserveHost,
+			TLSPassthrough: tc.TLSPassthrough,
 		}
 		s.registry.Register(t)
 
@@ -139,11 +140,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		httpsAddr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.HTTPSPort)
-		listener, err := tls.Listen("tcp", httpsAddr, s.tlsConfig)
+		rawListener, err := net.Listen("tcp", httpsAddr)
 		if err != nil {
 			errCh <- fmt.Errorf("HTTPS listen: %w", err)
 			return
 		}
+		listener := s.newSNIListener(rawListener)
 		slog.Info("HTTPS server listening", "addr", httpsAddr)
 		errCh <- http.Serve(listener, s)
 	}()
@@ -467,18 +469,19 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			hostCerts = append(hostCerts, hc)
 		}
 		views[i] = admin.TunnelView{
-			ID:           t.ID,
-			Type:         t.Type,
-			Hostnames:    t.Hostnames,
-			ListenPort:   t.ListenPort,
-			PreserveHost: t.PreserveHost,
-			Connected:    t.IsConnected(),
-			ClientAddr:   t.ClientAddr(),
-			Requests:     t.Metrics.RequestCount.Load(),
-			BytesIn:      t.Metrics.BytesIn.Load(),
-			BytesOut:     t.Metrics.BytesOut.Load(),
-			ActiveConns:  int32(t.Metrics.ActiveConns.Load()),
-			HostCerts:    hostCerts,
+			ID:             t.ID,
+			Type:           t.Type,
+			Hostnames:      t.Hostnames,
+			ListenPort:     t.ListenPort,
+			PreserveHost:   t.PreserveHost,
+			TLSPassthrough: t.TLSPassthrough,
+			Connected:      t.IsConnected(),
+			ClientAddr:     t.ClientAddr(),
+			Requests:       t.Metrics.RequestCount.Load(),
+			BytesIn:        t.Metrics.BytesIn.Load(),
+			BytesOut:       t.Metrics.BytesOut.Load(),
+			ActiveConns:    int32(t.Metrics.ActiveConns.Load()),
+			HostCerts:      hostCerts,
 		}
 	}
 	return views
@@ -512,11 +515,12 @@ func (s *Server) buildRedirectViews() []RedirectView {
 var tunnelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 type tunnelRequest struct {
-	ID           string   `json:"id"`
-	Type         string   `json:"type"`
-	Hostnames    []string `json:"hostnames"`
-	ListenPort   int      `json:"listen_port"`
-	PreserveHost bool     `json:"preserve_host"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Hostnames      []string `json:"hostnames"`
+	ListenPort     int      `json:"listen_port"`
+	PreserveHost   bool     `json:"preserve_host"`
+	TLSPassthrough bool     `json:"tls_passthrough"`
 }
 
 func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
@@ -605,12 +609,13 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cfg.Tunnel = append(s.cfg.Tunnel, config.Tunnel{
-		ID:           req.ID,
-		Type:         req.Type,
-		Hostnames:    req.Hostnames,
-		ListenPort:   req.ListenPort,
-		SecretHash:   hash,
-		PreserveHost: req.PreserveHost,
+		ID:             req.ID,
+		Type:           req.Type,
+		Hostnames:      req.Hostnames,
+		ListenPort:     req.ListenPort,
+		SecretHash:     hash,
+		PreserveHost:   req.PreserveHost,
+		TLSPassthrough: req.TLSPassthrough,
 	})
 	if err := s.cfg.Save(s.configPath); err != nil {
 		slog.Error("failed to save config", "error", err)
@@ -652,6 +657,7 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tunnel[i].Hostnames = req.Hostnames
 			s.cfg.Tunnel[i].ListenPort = req.ListenPort
 			s.cfg.Tunnel[i].PreserveHost = req.PreserveHost
+			s.cfg.Tunnel[i].TLSPassthrough = req.TLSPassthrough
 			found = true
 			break
 		}
@@ -932,25 +938,28 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
 	tunnels := make([]struct {
-		ID           string
-		Type         string
-		Hostnames    []string
-		ListenPort   int
-		PreserveHost bool
+		ID             string
+		Type           string
+		Hostnames      []string
+		ListenPort     int
+		PreserveHost   bool
+		TLSPassthrough bool
 	}, len(newCfg.Tunnel))
 	for i, tc := range newCfg.Tunnel {
 		tunnels[i] = struct {
-			ID           string
-			Type         string
-			Hostnames    []string
-			ListenPort   int
-			PreserveHost bool
+			ID             string
+			Type           string
+			Hostnames      []string
+			ListenPort     int
+			PreserveHost   bool
+			TLSPassthrough bool
 		}{
-			ID:           tc.ID,
-			Type:         tc.Type,
-			Hostnames:    tc.Hostnames,
-			ListenPort:   tc.ListenPort,
-			PreserveHost: tc.PreserveHost,
+			ID:             tc.ID,
+			Type:           tc.Type,
+			Hostnames:      tc.Hostnames,
+			ListenPort:     tc.ListenPort,
+			PreserveHost:   tc.PreserveHost,
+			TLSPassthrough: tc.TLSPassthrough,
 		}
 	}
 	s.registry.Reload(tunnels)

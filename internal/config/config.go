@@ -44,12 +44,13 @@ type UpdateConfig struct {
 }
 
 type Tunnel struct {
-	ID           string   `toml:"id"`
-	Type         string   `toml:"type"`
-	Hostnames    []string `toml:"hostnames,omitempty"`
-	ListenPort   int      `toml:"listen_port,omitempty"`
-	SecretHash   string   `toml:"secret_hash,omitempty"`
-	PreserveHost bool     `toml:"preserve_host,omitempty"`
+	ID             string   `toml:"id"`
+	Type           string   `toml:"type"`
+	Hostnames      []string `toml:"hostnames,omitempty"`
+	ListenPort     int      `toml:"listen_port,omitempty"`
+	SecretHash     string   `toml:"secret_hash,omitempty"`
+	PreserveHost   bool     `toml:"preserve_host,omitempty"`
+	TLSPassthrough bool     `toml:"tls_passthrough,omitempty"`
 }
 
 type Redirect struct {
@@ -90,6 +91,9 @@ func (c *Config) AllHostnames() []string {
 
 	add(c.Server.AdminHost)
 	for _, t := range c.Tunnel {
+		if t.TLSPassthrough {
+			continue // passthrough tunnels handle their own TLS
+		}
 		for _, h := range t.Hostnames {
 			add(h)
 		}
@@ -296,6 +300,9 @@ func (c *Config) Save(path string) error {
 			}
 			if t.PreserveHost {
 				b.WriteString("preserve_host = true\n")
+			}
+			if t.TLSPassthrough {
+				b.WriteString("tls_passthrough = true\n")
 			}
 			b.WriteString("\n")
 		}

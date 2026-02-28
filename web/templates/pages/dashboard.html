@@ -122,6 +122,13 @@
                     <span>Preserve original Host header</span>
                 </label>
             </div>
+            <div x-show="tunnel.type === 'http'">
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
+                    <span>TLS Passthrough</span>
+                </label>
+                <p class="text-xs text-gray-400 mt-0.5 ml-6">Forward raw TLS to client (no certificate needed).</p>
+            </div>
         </div>
         <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
             <button @click="tunnelOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
@@ -222,7 +229,7 @@ function dashboard() {
         // Tunnel modal
         tunnelOpen: false,
         tunnelMode: 'create',
-        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false },
+        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false },
 
         // Redirect modal
         redirectOpen: false,
@@ -306,13 +313,13 @@ function dashboard() {
         // Tunnel CRUD
         openCreateTunnel() {
             this.tunnelMode = 'create';
-            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false };
+            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false };
             this.tunnelOpen = true;
         },
 
-        openEditTunnel(id, type, hostnames, listenPort, preserveHost) {
+        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough) {
             this.tunnelMode = 'edit';
-            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost };
+            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough };
             this.tunnelOpen = true;
         },
 
@@ -321,6 +328,7 @@ function dashboard() {
             if (this.tunnel.type === 'http') {
                 body.hostnames = this.tunnel.hostnames.split(',').map(h => h.trim()).filter(h => h);
                 body.preserve_host = this.tunnel.preserveHost;
+                body.tls_passthrough = this.tunnel.tlsPassthrough;
             } else {
                 body.listen_port = parseInt(this.tunnel.listenPort, 10) || 0;
             }
@@ -420,11 +428,14 @@ function dashboard() {
         {{else}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">tcp</span>{{end}}
     </td>
     <td class="px-3 py-2">
-        {{if eq .Type "http"}}{{range .HostCerts}}<div class="flex items-center gap-1.5">
+        {{if eq .Type "http"}}{{if .TLSPassthrough}}{{range .Hostnames}}<div class="flex items-center gap-1.5">
+            <code class="text-xs">{{.}}</code>
+            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">passthrough</span>
+        </div>{{end}}{{else}}{{range .HostCerts}}<div class="flex items-center gap-1.5">
             <code class="text-xs">{{.Hostname}}</code>
             {{if .Valid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" title="Expires {{.Expiry}}">{{.Expiry}}</span>
             {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" title="{{.Error}}">No TLS</span>{{end}}
-        </div>{{end}}
+        </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
     <td class="px-3 py-2">{{if .Connected}}<span class="text-xs">{{.ClientAddr}}</span>{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
@@ -433,7 +444,7 @@ function dashboard() {
     <td class="px-3 py-2 text-right font-mono text-sm font-bold">{{.ActiveConns}}</td>
     <td class="px-3 py-2 text-right">
         <div class="flex items-center justify-end gap-1">
-            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}})"
+            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}})"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
             <button @click="regenerateSecret('{{.ID}}')"
                     class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">New Secret</button>
