@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// HostCert holds TLS certificate status for a single hostname.
+type HostCert struct {
+	Hostname string
+	Valid    bool
+	Expiry   string // formatted date, e.g. "May 15, 2026"
+	Error    string // non-empty when cert is missing or invalid
+}
+
 // TunnelView is the template data for a single tunnel row.
 type TunnelView struct {
 	ID           string
@@ -24,6 +32,7 @@ type TunnelView struct {
 	BytesOut     int64
 	ActiveConns  int32
 	Token        string
+	HostCerts    []HostCert
 }
 
 // HostnamesCSV returns hostnames as a comma-separated string.

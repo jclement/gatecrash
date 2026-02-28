@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -26,7 +27,8 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 	hostKeyPath := filepath.Join(filepath.Dir(s.configPath), "host_key")
 
 	sshSrv := &ssh.Server{
-		Addr: fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.SSHPort),
+		Addr:        fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.SSHPort),
+		IdleTimeout: 90 * time.Second, // Client sends heartbeats every 30s; 3 missed = dead
 		PasswordHandler: func(ctx ssh.Context, password string) bool {
 			tunnelID, valid := token.Validate(password, s.cfg.LookupSecretHash)
 			if !valid {
@@ -67,6 +69,7 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 		return nil, fmt.Errorf("host key: %w", err)
 	}
 	sshSrv.AddHostKey(hostKey)
+	s.hostFingerprint = gossh.FingerprintSHA256(hostKey.PublicKey())
 
 	return sshSrv, nil
 }

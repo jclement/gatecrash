@@ -52,7 +52,7 @@
 }
 
 .section { padding: 0.75rem; }
-.container { max-width: 100%; padding: 0 0.75rem; }
+.container { max-width: 100% !important; padding: 0 0.75rem; }
 
 .table td, .table th { padding: 0.2em 0.4em; font-size: 0.9em; }
 .table thead th {
@@ -63,6 +63,7 @@
 }
 
 .navbar { min-height: 2.25rem; }
+.navbar-brand { margin-right: 1rem; }
 .navbar-item, .navbar-link { padding: 0.25rem 0.6rem; font-size: 0.875em; }
 .navbar-item.is-active { color: #fff !important; font-weight: 600; }
 

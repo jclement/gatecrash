@@ -15,7 +15,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 1. Check redirects before tunnel lookup
 	for _, redir := range s.cfg.Redirect {
 		if host == redir.From {
-			target := "https://" + redir.To
+			target := redir.To
+			if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+				target = "https://" + target
+			}
 			if redir.PreservePath {
 				target += r.URL.RequestURI()
 			}

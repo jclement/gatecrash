@@ -2,81 +2,68 @@
 <div id="config-error"></div>
 
 <div hx-ext="sse" sse-connect="/api/events">
-    <div sse-swap="config-reload" hx-get="/api/tunnels/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-connect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-connect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-disconnect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+    <div hx-get="/api/tunnels/html" hx-trigger="sse:config-reload, sse:tunnel-connect, sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body" style="display:none"></div>
+    <div hx-get="/api/redirects/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#redirect-table-body" style="display:none"></div>
 </div>
 
-<div class="level mb-3">
-    <div class="level-left">
-        <div class="level-item"><h2 class="title is-5 mb-0">Tunnels</h2></div>
-    </div>
-    <div class="level-right">
-        <div class="level-item">
-            <button class="button is-primary is-small" onclick="openCreateTunnelModal()">Add Tunnel</button>
+<div class="box">
+    <div class="level mb-3">
+        <div class="level-left">
+            <div class="level-item"><h2 class="title is-5 mb-0">Tunnels</h2></div>
+        </div>
+        <div class="level-right">
+            <div class="level-item">
+                <button class="button is-primary is-small" onclick="openCreateTunnelModal()">Add Tunnel</button>
+            </div>
         </div>
     </div>
+
+    <table class="table is-fullwidth is-hoverable">
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>Tunnel</th>
+                <th>Type</th>
+                <th>Routes</th>
+                <th>Client</th>
+                <th class="has-text-right">Requests</th>
+                <th class="has-text-right">Traffic</th>
+                <th class="has-text-right">Active</th>
+                <th class="has-text-right">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">
+            {{template "tunnel-rows" .Data.Tunnels}}
+        </tbody>
+    </table>
 </div>
 
-<table class="table is-fullwidth is-hoverable">
-    <thead>
-        <tr>
-            <th>Status</th>
-            <th>Tunnel</th>
-            <th>Type</th>
-            <th>Routes</th>
-            <th>Client</th>
-            <th>Requests</th>
-            <th>Traffic</th>
-            <th>Active</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">
-        {{template "tunnel-rows" .Data.Tunnels}}
-    </tbody>
-</table>
-
-<div class="level mt-5 mb-3">
-    <div class="level-left">
-        <div class="level-item"><h2 class="title is-5 mb-0">Redirects</h2></div>
-    </div>
-    <div class="level-right">
-        <div class="level-item">
-            <button class="button is-primary is-small" onclick="openCreateRedirectModal()">Add Redirect</button>
+<div class="box">
+    <div class="level mb-3">
+        <div class="level-left">
+            <div class="level-item"><h2 class="title is-5 mb-0">Redirects</h2></div>
+        </div>
+        <div class="level-right">
+            <div class="level-item">
+                <button class="button is-primary is-small" onclick="openCreateRedirectModal()">Add Redirect</button>
+            </div>
         </div>
     </div>
-</div>
 
-{{if .Data.Redirects}}
-<table class="table is-fullwidth is-hoverable" id="redirect-table">
-    <thead>
-        <tr>
-            <th>From</th>
-            <th>To</th>
-            <th>Preserve Path</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {{range .Data.Redirects}}
-        <tr>
-            <td><code>{{.From}}</code></td>
-            <td><code>{{.To}}</code></td>
-            <td>{{if .PreservePath}}<span class="tag is-success is-light">Yes</span>{{else}}<span class="tag is-light">No</span>{{end}}</td>
-            <td>
-                <div class="buttons are-small">
-                    <button class="button is-outlined" onclick="openEditRedirectModal('{{.From}}', '{{.To}}', {{.PreservePath}})">Edit</button>
-                    <button class="button is-danger is-outlined" onclick="deleteRedirect('{{.From}}')">Delete</button>
-                </div>
-            </td>
-        </tr>
-        {{end}}
-    </tbody>
-</table>
-{{else}}
-<p class="has-text-grey has-text-centered is-size-7">No redirects configured.</p>
-{{end}}
+    <table class="table is-fullwidth is-hoverable">
+        <thead>
+            <tr>
+                <th>From</th>
+                <th>To</th>
+                <th>Preserve Path</th>
+                <th class="has-text-right">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="redirect-table-body">
+            {{template "redirect-rows" .Data.Redirects}}
+        </tbody>
+    </table>
+</div>
 
 <!-- Secret Modal -->
 <div class="modal" id="secret-modal">
@@ -90,37 +77,31 @@
             <div class="notification is-warning is-light">
                 Save this information now — the secret will not be shown again.
             </div>
-            <div class="field">
-                <label class="label">Token</label>
-                <div class="field has-addons">
-                    <div class="control is-expanded">
-                        <input class="input is-family-code" id="secret-token" readonly>
-                    </div>
-                    <div class="control">
-                        <button class="button" onclick="copyField('secret-token', this)">Copy</button>
-                    </div>
+            <div class="field has-addons">
+                <div class="control is-expanded">
+                    <label class="label">Token</label>
+                    <input class="input is-family-code is-small" id="secret-token" readonly>
+                </div>
+                <div class="control" style="align-self: flex-end;">
+                    <button class="button is-small" onclick="copyField('secret-token', this)">Copy</button>
                 </div>
             </div>
-            <div class="field">
-                <label class="label">Client Command</label>
-                <div class="field has-addons">
-                    <div class="control is-expanded">
-                        <input class="input is-family-code is-size-7" id="secret-command" readonly>
-                    </div>
-                    <div class="control">
-                        <button class="button" onclick="copyField('secret-command', this)">Copy</button>
-                    </div>
+            <div class="field has-addons">
+                <div class="control is-expanded">
+                    <label class="label">Client Command</label>
+                    <input class="input is-family-code is-small" id="secret-command" readonly>
+                </div>
+                <div class="control" style="align-self: flex-end;">
+                    <button class="button is-small" onclick="copyField('secret-command', this)">Copy</button>
                 </div>
             </div>
-            <div class="field">
-                <label class="label">Docker Command</label>
-                <div class="field has-addons">
-                    <div class="control is-expanded">
-                        <input class="input is-family-code is-size-7" id="secret-docker" readonly>
-                    </div>
-                    <div class="control">
-                        <button class="button" onclick="copyField('secret-docker', this)">Copy</button>
-                    </div>
+            <div class="field has-addons">
+                <div class="control is-expanded">
+                    <label class="label">Docker Command</label>
+                    <input class="input is-family-code is-small" id="secret-docker" readonly>
+                </div>
+                <div class="control" style="align-self: flex-end;">
+                    <button class="button is-small" onclick="copyField('secret-docker', this)">Copy</button>
                 </div>
             </div>
         </section>
@@ -179,8 +160,10 @@
             </div>
         </section>
         <footer class="modal-card-foot">
-            <button class="button is-primary" id="tunnel-save-btn" onclick="saveTunnel()">Create</button>
-            <button class="button" onclick="closeModal('tunnel-modal')">Cancel</button>
+            <div class="buttons">
+                <button class="button is-primary" id="tunnel-save-btn" onclick="saveTunnel()">Create</button>
+                <button class="button" onclick="closeModal('tunnel-modal')">Cancel</button>
+            </div>
         </footer>
     </div>
 </div>
@@ -216,33 +199,65 @@
             </div>
         </section>
         <footer class="modal-card-foot">
-            <button class="button is-primary" id="redirect-save-btn" onclick="saveRedirect()">Create</button>
-            <button class="button" onclick="closeModal('redirect-modal')">Cancel</button>
+            <div class="buttons">
+                <button class="button is-primary" id="redirect-save-btn" onclick="saveRedirect()">Create</button>
+                <button class="button" onclick="closeModal('redirect-modal')">Cancel</button>
+            </div>
         </footer>
     </div>
 </div>
 
-<!-- Delete Confirmation Modal -->
-<div class="modal" id="delete-modal">
-    <div class="modal-background" onclick="closeModal('delete-modal')"></div>
+<!-- Confirmation Modal (shared for delete, regenerate, etc.) -->
+<div class="modal" id="confirm-modal">
+    <div class="modal-background" onclick="closeModal('confirm-modal')"></div>
     <div class="modal-card">
         <header class="modal-card-head">
-            <p class="modal-card-title">Confirm Delete</p>
-            <button class="delete" onclick="closeModal('delete-modal')"></button>
+            <p class="modal-card-title" id="confirm-modal-title">Confirm</p>
+            <button class="delete" onclick="closeModal('confirm-modal')"></button>
         </header>
         <section class="modal-card-body">
-            <p id="delete-message"></p>
+            <p id="confirm-message"></p>
         </section>
         <footer class="modal-card-foot">
-            <button class="button is-danger" id="delete-confirm-btn">Delete</button>
-            <button class="button" onclick="closeModal('delete-modal')">Cancel</button>
+            <div class="buttons">
+                <button class="button is-danger" id="confirm-action-btn">Confirm</button>
+                <button class="button" onclick="closeModal('confirm-modal')">Cancel</button>
+            </div>
         </footer>
     </div>
 </div>
+
+<!-- Toast notifications -->
+<div id="toast-container" style="position:fixed;top:1rem;right:1rem;z-index:100;display:flex;flex-direction:column;gap:0.5rem;"></div>
 
 <script>
 function closeModal(id) {
     document.getElementById(id).classList.remove('is-active');
+}
+
+function showToast(message, type) {
+    type = type || 'danger';
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = 'notification is-' + type + ' is-light';
+    toast.style.cssText = 'min-width:300px;max-width:500px;padding:0.75rem 2.5rem 0.75rem 1rem;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'delete';
+    closeBtn.onclick = () => toast.remove();
+    toast.appendChild(closeBtn);
+    toast.appendChild(document.createTextNode(message));
+    container.appendChild(toast);
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 5000);
+}
+
+function showConfirm(title, message, btnLabel, btnClass, onConfirm) {
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-message').textContent = message;
+    const btn = document.getElementById('confirm-action-btn');
+    btn.textContent = btnLabel;
+    btn.className = 'button ' + (btnClass || 'is-danger');
+    btn.onclick = () => { closeModal('confirm-modal'); onConfirm(); };
+    document.getElementById('confirm-modal').classList.add('is-active');
 }
 
 function copyField(id, btn) {
@@ -261,11 +276,12 @@ function showSecret(data) {
     document.getElementById('secret-modal').classList.add('is-active');
 }
 
-async function regenerateSecret(tunnelId) {
-    if (!confirm('Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.')) return;
-    const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
-    if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
-    showSecret(await resp.json());
+function regenerateSecret(tunnelId) {
+    showConfirm('Regenerate Secret', 'Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.', 'Regenerate', 'is-warning', async () => {
+        const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
+        if (!resp.ok) { showToast('Failed: ' + await resp.text()); return; }
+        showSecret(await resp.json());
+    });
 }
 
 // Tunnel CRUD
@@ -335,7 +351,7 @@ async function saveTunnel() {
         body: JSON.stringify(body),
     });
     if (!resp.ok) {
-        alert('Error: ' + await resp.text());
+        showToast('Error: ' + await resp.text());
         return;
     }
 
@@ -350,13 +366,10 @@ async function saveTunnel() {
 }
 
 function deleteTunnel(id) {
-    document.getElementById('delete-message').textContent = 'Delete tunnel "' + id + '"? Connected clients will be disconnected.';
-    document.getElementById('delete-confirm-btn').onclick = async () => {
+    showConfirm('Delete Tunnel', 'Delete tunnel "' + id + '"? Connected clients will be disconnected.', 'Delete', 'is-danger', async () => {
         const resp = await fetch('/api/tunnels/' + id, {method: 'DELETE'});
-        if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
-        closeModal('delete-modal');
-    };
-    document.getElementById('delete-modal').classList.add('is-active');
+        if (!resp.ok) { showToast('Failed: ' + await resp.text()); return; }
+    });
 }
 
 // Redirect CRUD
@@ -408,20 +421,17 @@ async function saveRedirect() {
         body: JSON.stringify(body),
     });
     if (!resp.ok) {
-        alert('Error: ' + await resp.text());
+        showToast('Error: ' + await resp.text());
         return;
     }
     closeModal('redirect-modal');
 }
 
 function deleteRedirect(from) {
-    document.getElementById('delete-message').textContent = 'Delete redirect from "' + from + '"?';
-    document.getElementById('delete-confirm-btn').onclick = async () => {
+    showConfirm('Delete Redirect', 'Delete redirect from "' + from + '"?', 'Delete', 'is-danger', async () => {
         const resp = await fetch('/api/redirects/' + encodeURIComponent(from), {method: 'DELETE'});
-        if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
-        closeModal('delete-modal');
-    };
-    document.getElementById('delete-modal').classList.add('is-active');
+        if (!resp.ok) { showToast('Failed: ' + await resp.text()); return; }
+    });
 }
 </script>
 {{end}}
@@ -433,21 +443,41 @@ function deleteRedirect(from) {
     <td><span class="status-dot {{if .Connected}}is-connected{{else}}is-disconnected{{end}}"></span></td>
     <td><strong>{{.ID}}</strong></td>
     <td><span class="tag {{if eq .Type "http"}}is-info{{else}}is-warning{{end}} is-light">{{.Type}}</span></td>
-    <td>{{if eq .Type "http"}}{{range .Hostnames}}<code>{{.}}</code> {{end}}{{else}}<code>:{{.ListenPort}}</code>{{end}}</td>
+    <td>{{if eq .Type "http"}}{{range .HostCerts}}<div><code>{{.Hostname}}</code> {{if .Valid}}<span class="tag is-success is-light" title="Expires {{.Expiry}}">{{.Expiry}}</span>{{else}}<span class="tag is-danger is-light" title="{{.Error}}">No TLS</span>{{end}}</div>{{end}}{{else}}<code>:{{.ListenPort}}</code>{{end}}</td>
     <td>{{if .Connected}}<span class="is-size-7">{{.ClientAddr}}</span>{{else}}<span class="has-text-grey is-size-7">-</span>{{end}}</td>
     <td class="has-text-right"><span class="metric-value">{{.Requests}}</span></td>
     <td class="has-text-right is-size-7">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
     <td class="has-text-right"><span class="metric-value">{{.ActiveConns}}</span></td>
-    <td>
-        <div class="buttons are-small">
-            <button class="button is-outlined" onclick="openEditTunnelModal('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}})">Edit</button>
-            <button class="button is-outlined" onclick="regenerateSecret('{{.ID}}')">New Secret</button>
-            <button class="button is-danger is-outlined" onclick="deleteTunnel('{{.ID}}')">Delete</button>
+    <td class="has-text-right">
+        <div class="buttons are-small is-right">
+            <button class="button is-info is-light" onclick="openEditTunnelModal('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}})">Edit</button>
+            <button class="button is-warning is-light" onclick="regenerateSecret('{{.ID}}')">New Secret</button>
+            <button class="button is-danger is-light" onclick="deleteTunnel('{{.ID}}')">Delete</button>
         </div>
     </td>
 </tr>
 {{end}}
 {{else}}
 <tr><td colspan="9" class="has-text-centered has-text-grey">No tunnels configured. Click "Add Tunnel" to create one.</td></tr>
+{{end}}
+{{end}}
+
+{{define "redirect-rows"}}
+{{if .}}
+{{range .}}
+<tr>
+    <td><code>{{.From}}</code> {{if .CertValid}}<span class="tag is-success is-light" title="Expires {{.CertExpiry}}">{{.CertExpiry}}</span>{{else if .CertError}}<span class="tag is-danger is-light" title="{{.CertError}}">No TLS</span>{{end}}</td>
+    <td><code>{{.To}}</code></td>
+    <td>{{if .PreservePath}}<span class="tag is-success is-light">Yes</span>{{else}}<span class="tag is-light">No</span>{{end}}</td>
+    <td class="has-text-right">
+        <div class="buttons are-small is-right">
+            <button class="button is-info is-light" onclick="openEditRedirectModal('{{.From}}', '{{.To}}', {{.PreservePath}})">Edit</button>
+            <button class="button is-danger is-light" onclick="deleteRedirect('{{.From}}')">Delete</button>
+        </div>
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="4" class="has-text-centered has-text-grey">No redirects configured. Click "Add Redirect" to create one.</td></tr>
 {{end}}
 {{end}}

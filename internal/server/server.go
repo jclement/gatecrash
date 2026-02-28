@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,8 +36,13 @@ type Server struct {
 	sshServer  *ssh.Server
 	adminMux   *http.ServeMux
 	tlsConfig  *tls.Config
-	sse        *SSEBroadcaster
-	staticFS   fs.FS // embedded or disk-based static assets
+	sse              *SSEBroadcaster
+	staticFS         fs.FS // embedded or disk-based static assets
+	hostFingerprint  string // SSH host key fingerprint (SHA256)
+
+	// TCP listener management
+	tcpMu        sync.Mutex
+	tcpListeners map[int]net.Listener // port → listener
 
 	// Auth components
 	passkeyStore *admin.PasskeyStore
@@ -256,6 +263,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
 	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuth(s.handleAPITunnels))
 	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAuth(s.handleAPITunnelsHTML))
+	s.adminMux.HandleFunc("GET /api/redirects/html", s.requireAuth(s.handleAPIRedirectsHTML))
 	s.adminMux.HandleFunc("POST /api/tunnels", s.requireAuth(s.handleCreateTunnel))
 	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireAuth(s.handleEditTunnel))
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireAuth(s.handleDeleteTunnel))
@@ -367,14 +375,14 @@ type RedirectView struct {
 	From         string
 	To           string
 	PreservePath bool
+	CertValid    bool
+	CertExpiry   string
+	CertError    string
 }
 
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.buildTunnelViews()
-	redirects := make([]RedirectView, len(s.cfg.Redirect))
-	for i, r := range s.cfg.Redirect {
-		redirects[i] = RedirectView{From: r.From, To: r.To, PreservePath: r.PreservePath}
-	}
+	redirects := s.buildRedirectViews()
 
 	s.adminH.Render(w, "pages/dashboard.html", &admin.PageData{
 		Title:  "Dashboard",
@@ -396,10 +404,24 @@ func (s *Server) handleAPITunnelsHTML(w http.ResponseWriter, r *http.Request) {
 	s.adminH.RenderPartial(w, "pages/dashboard.html", "tunnel-rows", tunnels)
 }
 
+func (s *Server) handleAPIRedirectsHTML(w http.ResponseWriter, r *http.Request) {
+	redirects := s.buildRedirectViews()
+	s.adminH.RenderPartial(w, "pages/dashboard.html", "redirect-rows", redirects)
+}
+
 func (s *Server) buildTunnelViews() []admin.TunnelView {
 	tunnels := s.registry.AllTunnels()
 	views := make([]admin.TunnelView, len(tunnels))
 	for i, t := range tunnels {
+		var hostCerts []admin.HostCert
+		for _, h := range t.Hostnames {
+			ci := s.getCertInfo(h)
+			hc := admin.HostCert{Hostname: h, Valid: ci.valid, Error: ci.err}
+			if !ci.expiry.IsZero() {
+				hc.Expiry = ci.expiry.Format("Jan 2, 2006")
+			}
+			hostCerts = append(hostCerts, hc)
+		}
 		views[i] = admin.TunnelView{
 			ID:           t.ID,
 			Type:         t.Type,
@@ -412,7 +434,27 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			BytesIn:      t.Metrics.BytesIn.Load(),
 			BytesOut:     t.Metrics.BytesOut.Load(),
 			ActiveConns:  int32(t.Metrics.ActiveConns.Load()),
+			HostCerts:    hostCerts,
 		}
+	}
+	return views
+}
+
+func (s *Server) buildRedirectViews() []RedirectView {
+	views := make([]RedirectView, len(s.cfg.Redirect))
+	for i, r := range s.cfg.Redirect {
+		ci := s.getCertInfo(r.From)
+		rv := RedirectView{
+			From:         r.From,
+			To:           r.To,
+			PreservePath: r.PreservePath,
+			CertValid:    ci.valid,
+			CertError:    ci.err,
+		}
+		if !ci.expiry.IsZero() {
+			rv.CertExpiry = ci.expiry.Format("Jan 2, 2006")
+		}
+		views[i] = rv
 	}
 	return views
 }
@@ -484,11 +526,11 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 
 func (s *Server) secretResponse(tunnelID, plaintext string) map[string]string {
 	tok := token.FormatToken(tunnelID, plaintext)
-	sshAddr := fmt.Sprintf("<server>:%d", s.cfg.Server.SSHPort)
+	sshAddr := fmt.Sprintf("%s:%d", s.cfg.Server.AdminHost, s.cfg.Server.SSHPort)
 	return map[string]string{
 		"token":   tok,
-		"command": fmt.Sprintf("gatecrash client --server %s --token %s --target 127.0.0.1:8000", sshAddr, tok),
-		"docker":  fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, tok),
+		"command": fmt.Sprintf("gatecrash client --server %s --host-key %s --token %s --target 127.0.0.1:8000", sshAddr, s.hostFingerprint, tok),
+		"docker":  fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_HOST_KEY=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, s.hostFingerprint, tok),
 	}
 }
 
@@ -830,6 +872,9 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 	}
 	s.registry.Reload(tunnels)
 	s.cfg = newCfg
+
+	// Start/stop TCP listeners to match new config
+	s.reconcileTCPListeners()
 
 	slog.Info("config reloaded",
 		"tunnels", len(newCfg.Tunnel),

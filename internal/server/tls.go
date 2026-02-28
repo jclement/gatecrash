@@ -8,10 +8,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"math/big"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/caddyserver/certmagic"
@@ -231,6 +233,48 @@ func zapFieldToSlogAttr(f zapcore.Field) slog.Attr {
 		}
 		return slog.Any(f.Key, f.String)
 	}
+}
+
+// certStatus holds certificate info looked up from CertMagic's file storage.
+type certStatus struct {
+	valid  bool
+	expiry time.Time
+	err    string
+}
+
+// getCertInfo reads the ACME certificate for a hostname from CertMagic's file storage.
+// This is a non-blocking disk read — it never triggers ACME provisioning.
+func (s *Server) getCertInfo(hostname string) certStatus {
+	if s.cfg.TLS.CertDir == "" {
+		return certStatus{err: "no cert directory"}
+	}
+
+	issuerDir := "acme-v02.api.letsencrypt.org-directory"
+	if s.cfg.TLS.Staging {
+		issuerDir = "acme-staging-v02.api.letsencrypt.org-directory"
+	}
+
+	certPath := filepath.Join(s.cfg.TLS.CertDir, "certificates", issuerDir, hostname, hostname+".crt")
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return certStatus{err: "not provisioned"}
+	}
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return certStatus{err: "invalid certificate file"}
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return certStatus{err: "invalid certificate"}
+	}
+
+	if time.Now().After(cert.NotAfter) {
+		return certStatus{expiry: cert.NotAfter, err: fmt.Sprintf("expired %s", cert.NotAfter.Format("Jan 2, 2006"))}
+	}
+
+	return certStatus{valid: true, expiry: cert.NotAfter}
 }
 
 // generateSelfSignedCert creates a self-signed ECDSA certificate.

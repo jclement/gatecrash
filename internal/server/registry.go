@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,6 +129,9 @@ func (r *Registry) AllTunnels() []*TunnelState {
 	for _, t := range r.byID {
 		tunnels = append(tunnels, t)
 	}
+	sort.Slice(tunnels, func(i, j int) bool {
+		return tunnels[i].ID < tunnels[j].ID
+	})
 	return tunnels
 }
 
