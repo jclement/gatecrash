@@ -70,7 +70,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	req.Header.Set("X-Request-Id", data.RequestID)
 
 	// Rewrite the request URL to target the local service
-	targetURL := fmt.Sprintf("http://%s%s", c.targetAddr(), data.URI)
+	targetURL := fmt.Sprintf("%s://%s%s", c.targetScheme(), c.targetAddr(), data.URI)
 	req.URL, _ = url.Parse(targetURL)
 	req.RequestURI = "" // Must be empty for http.Client
 
@@ -84,7 +84,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	}
 
 	// Forward to local target
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		slog.Error("target request failed",
 			"target", c.targetAddr(),

@@ -50,6 +50,28 @@
         <p class="text-sm text-gray-600">
             Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel secret and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
         </p>
+        <div class="space-y-2 mt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Target Schemes</p>
+            <p class="text-sm text-gray-600">
+                If your local service uses HTTPS, prefix the target address with a scheme:
+            </p>
+            <table class="w-full text-sm">
+                <tbody class="divide-y divide-gray-100">
+                    <tr>
+                        <td class="py-1.5 pr-3"><code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code></td>
+                        <td class="py-1.5 text-gray-600">Plain HTTP / TCP (default)</td>
+                    </tr>
+                    <tr>
+                        <td class="py-1.5 pr-3"><code class="bg-gray-100 px-1 rounded text-xs">https://localhost:8443</code></td>
+                        <td class="py-1.5 text-gray-600">TLS with certificate verification</td>
+                    </tr>
+                    <tr>
+                        <td class="py-1.5 pr-3"><code class="bg-gray-100 px-1 rounded text-xs">https+insecure://localhost:8443</code></td>
+                        <td class="py-1.5 text-gray-600">TLS without certificate verification (self-signed certs)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">

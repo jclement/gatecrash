@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/charmbracelet/log"
@@ -169,7 +170,7 @@ func runClient(args []string) {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	serverAddr := fs.String("server", envOrDefault("GATECRASH_SERVER", ""), "server SSH address (host:port)")
 	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
-	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address (host:port)")
+	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
 	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
 	fs.Parse(args)
@@ -178,7 +179,7 @@ func runClient(args []string) {
 
 	if *serverAddr == "" || *token == "" || *target == "" {
 		fmt.Fprintf(os.Stderr, "gatecrash client %s\n\n", Version)
-		fmt.Fprintf(os.Stderr, "Usage: gatecrash client --server HOST:PORT --token TOKEN --target HOST:PORT\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: gatecrash client --server HOST:PORT --token TOKEN --target [SCHEME://]HOST:PORT\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
@@ -189,8 +190,8 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
-	// Parse target host:port
-	targetHost, targetPort, err := parseHostPort(*target)
+	// Parse target [scheme://]host:port
+	targetHost, targetPort, targetTLS, err := parseTarget(*target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid target address %q: %v\n", *target, err)
 		os.Exit(1)
@@ -208,6 +209,7 @@ func runClient(args []string) {
 		TargetHost: targetHost,
 		TargetPort: targetPort,
 		HostKey:    *hostKey,
+		TargetTLS:  targetTLS,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -279,17 +281,29 @@ func runUpdate(args []string) {
 	fmt.Printf("Updated to v%s. Restart gatecrash to use the new version.\n", result.LatestVersion)
 }
 
-func parseHostPort(addr string) (string, int, error) {
-	// Try to find the last colon for host:port split
+func parseTarget(addr string) (host string, port int, tlsMode string, err error) {
+	// Strip scheme prefix
+	switch {
+	case strings.HasPrefix(addr, "https+insecure://"):
+		addr = strings.TrimPrefix(addr, "https+insecure://")
+		tlsMode = "tls-insecure"
+	case strings.HasPrefix(addr, "https://"):
+		addr = strings.TrimPrefix(addr, "https://")
+		tlsMode = "tls"
+	case strings.HasPrefix(addr, "http://"):
+		addr = strings.TrimPrefix(addr, "http://")
+	}
+
+	// Parse host:port
 	for i := len(addr) - 1; i >= 0; i-- {
 		if addr[i] == ':' {
-			host := addr[:i]
-			port, err := strconv.Atoi(addr[i+1:])
+			host = addr[:i]
+			port, err = strconv.Atoi(addr[i+1:])
 			if err != nil {
-				return "", 0, fmt.Errorf("invalid port: %w", err)
+				return "", 0, "", fmt.Errorf("invalid port: %w", err)
 			}
-			return host, port, nil
+			return host, port, tlsMode, nil
 		}
 	}
-	return "", 0, fmt.Errorf("expected host:port format")
+	return "", 0, "", fmt.Errorf("expected [scheme://]host:port format")
 }

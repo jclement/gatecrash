@@ -2,11 +2,13 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -24,17 +26,25 @@ type Config struct {
 	TargetHost string // target service host
 	TargetPort int    // target service port
 	HostKey    string // optional SSH host key fingerprint (SHA256:...)
+	TargetTLS  string // "", "tls", or "tls-insecure"
 }
 
 // Client connects to the gatecrash server and handles tunnel requests.
 type Client struct {
-	cfg     Config
-	version string
+	cfg        Config
+	version    string
+	httpClient *http.Client
 }
 
 // New creates a new client instance.
 func New(cfg Config, version string) *Client {
-	return &Client{cfg: cfg, version: version}
+	c := &Client{cfg: cfg, version: version}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = c.targetTLSConfig()
+	c.httpClient = &http.Client{Transport: transport}
+
+	return c
 }
 
 // Run connects to the server and handles requests. Reconnects on failure.
@@ -182,6 +192,24 @@ func (c *Client) heartbeatLoop(ctx context.Context, ch gossh.Channel) {
 
 func (c *Client) targetAddr() string {
 	return net.JoinHostPort(c.cfg.TargetHost, fmt.Sprintf("%d", c.cfg.TargetPort))
+}
+
+func (c *Client) targetScheme() string {
+	if c.cfg.TargetTLS != "" {
+		return "https"
+	}
+	return "http"
+}
+
+func (c *Client) targetTLSConfig() *tls.Config {
+	switch c.cfg.TargetTLS {
+	case "tls":
+		return &tls.Config{ServerName: c.cfg.TargetHost}
+	case "tls-insecure":
+		return &tls.Config{InsecureSkipVerify: true}
+	default:
+		return nil
+	}
 }
 
 // makeHostKeyCallback creates a host key callback that verifies the server key
