@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -48,11 +49,13 @@ type TunnelView struct {
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
 
 // ClientSummary returns a tooltip-friendly summary of all clients with uptime.
+// The output is sorted by address for a stable, deterministic tooltip.
 func (t TunnelView) ClientSummary() string {
 	lines := make([]string, len(t.Clients))
 	for i, c := range t.Clients {
 		lines[i] = c.Addr + " (" + c.Uptime + ")"
 	}
+	sort.Strings(lines)
 	return strings.Join(lines, "\n")
 }
 
