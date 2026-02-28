@@ -2,14 +2,17 @@ package update
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -130,35 +133,92 @@ func SelfUpdate(downloadURL string) error {
 		return fmt.Errorf("finding executable: %w", err)
 	}
 
-	// Write to temp file next to the binary
-	tmpPath := execPath + ".update"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// Write to temp file in the OS temp directory to avoid permission issues
+	// with the binary's directory (e.g. /usr/local/bin may be read-only).
+	tmpFile, err := os.CreateTemp("", "gatecrash-update-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 
 	// Limit download size to prevent disk exhaustion. Read one extra byte beyond
 	// the limit; if we receive that extra byte, the response is too large.
-	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBinarySize+1))
+	n, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxBinarySize+1))
 	if err != nil {
-		f.Close()
+		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("writing update: %w", err)
 	}
 	if n > maxBinarySize {
-		f.Close()
+		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("download exceeded maximum allowed size of %d bytes", maxBinarySize)
 	}
-	f.Close()
+	tmpFile.Close()
 
-	// Replace binary
-	if err := os.Rename(tmpPath, execPath); err != nil {
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("setting permissions on temp file: %w", err)
+	}
+
+	// Replace binary. Try an atomic rename first; if that fails because the
+	// temp dir and the binary dir are on different filesystems (cross-device),
+	// fall back to creating a temp file in the binary's directory and renaming.
+	if err := replaceExecutable(tmpPath, execPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("replacing binary: %w", err)
 	}
 
 	slog.Info("update complete", "path", execPath)
+	return nil
+}
+
+// replaceExecutable replaces dst with the contents of src. It tries an atomic
+// rename first. If that fails because src and dst are on different filesystems
+// (cross-device link error), it falls back to copying src into a temp file
+// inside the same directory as dst and then renaming.
+func replaceExecutable(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	} else {
+		var linkErr *os.LinkError
+		if !errors.As(err, &linkErr) || !errors.Is(linkErr.Err, syscall.EXDEV) {
+			return err
+		}
+	}
+	// Rename failed with a cross-device error. Stage the new binary as a temp
+	// file in the same directory as dst so the final rename is on-device.
+	dstDir := filepath.Dir(dst)
+	staged, err := os.CreateTemp(dstDir, ".gatecrash-update-*")
+	if err != nil {
+		return err
+	}
+	stagedPath := staged.Name()
+
+	srcFile, err := os.Open(src)
+	if err != nil {
+		staged.Close()
+		os.Remove(stagedPath)
+		return err
+	}
+	_, err = io.Copy(staged, srcFile)
+	srcFile.Close()
+	staged.Close()
+	if err != nil {
+		os.Remove(stagedPath)
+		return err
+	}
+	if err := os.Chmod(stagedPath, 0o755); err != nil {
+		os.Remove(stagedPath)
+		return err
+	}
+	if err := os.Rename(stagedPath, dst); err != nil {
+		os.Remove(stagedPath)
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		slog.Warn("failed to remove temp file after update", "path", src, "error", err)
+	}
 	return nil
 }
 
