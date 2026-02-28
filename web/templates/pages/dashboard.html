@@ -1,12 +1,6 @@
 {{define "content"}}
 <div x-data="dashboard()" x-cloak>
 
-<!-- SSE listeners for live updates -->
-<div hx-ext="sse" sse-connect="/api/events">
-    <div hx-get="/api/tunnels/html" hx-trigger="sse:config-reload, sse:tunnel-connect, sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body" style="display:none"></div>
-    <div hx-get="/api/redirects/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#redirect-table-body" style="display:none"></div>
-</div>
-
 <!-- Tunnels Section -->
 <div class="bg-white rounded-lg border border-gray-200 mb-4">
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
@@ -28,7 +22,7 @@
                     <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Actions</th>
                 </tr>
             </thead>
-            <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML" class="divide-y divide-gray-100">
+            <tbody id="tunnel-table-body" class="divide-y divide-gray-100">
                 {{template "tunnel-rows" .Data.Tunnels}}
             </tbody>
         </table>
@@ -234,6 +228,50 @@ function dashboard() {
         redirectOpen: false,
         redirectMode: 'create',
         redirect: { from: '', to: '', preservePath: true, originalFrom: '' },
+
+        // SSE + polling
+        _sse: null,
+        _pollTimer: null,
+
+        init() {
+            this._connectSSE();
+            this._pollTimer = setInterval(() => this._refreshTunnels(), 5000);
+        },
+
+        destroy() {
+            if (this._sse) { this._sse.close(); this._sse = null; }
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+        },
+
+        _connectSSE() {
+            if (this._sse) this._sse.close();
+            const es = new EventSource('/api/events');
+            es.addEventListener('config-reload', () => {
+                this._refreshTunnels();
+                this._refreshRedirects();
+            });
+            es.addEventListener('tunnel-connect', () => this._refreshTunnels());
+            es.addEventListener('tunnel-disconnect', () => this._refreshTunnels());
+            es.onerror = () => {
+                es.close();
+                setTimeout(() => this._connectSSE(), 3000);
+            };
+            this._sse = es;
+        },
+
+        async _refreshTunnels() {
+            try {
+                const resp = await fetch('/api/tunnels/html');
+                if (resp.ok) document.getElementById('tunnel-table-body').innerHTML = await resp.text();
+            } catch (_) {}
+        },
+
+        async _refreshRedirects() {
+            try {
+                const resp = await fetch('/api/redirects/html');
+                if (resp.ok) document.getElementById('redirect-table-body').innerHTML = await resp.text();
+            } catch (_) {}
+        },
 
         showToast(message, type) {
             type = type || 'error';
