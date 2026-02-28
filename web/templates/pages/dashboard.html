@@ -5,7 +5,23 @@
 <div class="bg-white rounded-lg border border-gray-200 mb-4">
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
         <h2 class="text-base font-bold">Tunnels</h2>
-        <button @click="openCreateTunnel()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Tunnel</button>
+        <div class="flex items-center gap-2">
+            <div class="relative">
+                <select x-model="refreshInterval" @change="_setRefreshInterval(Number($event.target.value))"
+                        class="text-xs bg-gray-50 border border-gray-200 text-gray-500 rounded pl-6 pr-2 py-1.5 appearance-none cursor-pointer hover:border-gray-300 focus:outline-none focus:border-blue-400">
+                    <option value="1000">1s</option>
+                    <option value="2000">2s</option>
+                    <option value="5000">5s</option>
+                    <option value="10000">10s</option>
+                    <option value="30000">30s</option>
+                    <option value="0">Off</option>
+                </select>
+                <svg class="absolute left-1.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+            </div>
+            <button @click="openCreateTunnel()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Tunnel</button>
+        </div>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -208,6 +224,19 @@
 </div>
 
 <script>
+function _formatBytes(b) {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
+}
+
+function _escapeHTML(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
 function dashboard() {
     return {
         // Confirm modal state
@@ -236,18 +265,45 @@ function dashboard() {
         redirectMode: 'create',
         redirect: { from: '', to: '', preservePath: true, originalFrom: '' },
 
-        // SSE + polling
+        // SSE + stats polling
         _sse: null,
         _pollTimer: null,
+        _statsCache: {},
+        refreshInterval: parseInt(localStorage.getItem('dashboardRefreshInterval') ?? '5000', 10),
 
         init() {
             this._connectSSE();
-            this._pollTimer = setInterval(() => this._refreshTunnels(), 5000);
+            this._startPollTimer();
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    this._stopPollTimer();
+                } else {
+                    this._refreshStats();
+                    this._startPollTimer();
+                }
+            });
         },
 
         destroy() {
             if (this._sse) { this._sse.close(); this._sse = null; }
+            this._stopPollTimer();
+        },
+
+        _startPollTimer() {
+            this._stopPollTimer();
+            if (this.refreshInterval > 0) {
+                this._pollTimer = setInterval(() => this._refreshStats(), this.refreshInterval);
+            }
+        },
+
+        _stopPollTimer() {
             if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+        },
+
+        _setRefreshInterval(ms) {
+            this.refreshInterval = ms;
+            localStorage.setItem('dashboardRefreshInterval', ms);
+            this._startPollTimer();
         },
 
         _connectSSE() {
@@ -273,7 +329,10 @@ function dashboard() {
         async _refreshTunnels() {
             try {
                 const resp = await fetch('/api/tunnels/html');
-                if (resp.ok) document.getElementById('tunnel-table-body').innerHTML = await resp.text();
+                if (resp.ok) {
+                    document.getElementById('tunnel-table-body').innerHTML = await resp.text();
+                    this._statsCache = {};
+                }
             } catch (_) {}
         },
 
@@ -281,6 +340,50 @@ function dashboard() {
             try {
                 const resp = await fetch('/api/redirects/html');
                 if (resp.ok) document.getElementById('redirect-table-body').innerHTML = await resp.text();
+            } catch (_) {}
+        },
+
+        async _refreshStats() {
+            try {
+                const resp = await fetch('/api/tunnels');
+                if (!resp.ok) return;
+                const tunnels = await resp.json();
+                for (const t of tunnels) {
+                    const row = document.querySelector('tr[data-tunnel-id="' + t.id + '"]');
+                    if (!row) continue;
+                    const prev = this._statsCache[t.id] || {};
+
+                    if (prev.requests !== t.requests) {
+                        const el = row.querySelector('[data-field="requests"]');
+                        if (el) el.textContent = t.requests;
+                    }
+                    if (prev.bytes_in !== t.bytes_in || prev.bytes_out !== t.bytes_out) {
+                        const el = row.querySelector('[data-field="traffic"]');
+                        if (el) el.textContent = _formatBytes(t.bytes_in) + ' in / ' + _formatBytes(t.bytes_out) + ' out';
+                    }
+                    if (prev.active_conns !== t.active_conns) {
+                        const el = row.querySelector('[data-field="active"]');
+                        if (el) el.textContent = t.active_conns;
+                    }
+
+                    const clientEl = row.querySelector('[data-field="client"]');
+                    if (clientEl) {
+                        let html;
+                        if (!t.connected) {
+                            html = '<span class="text-xs text-gray-400">-</span>';
+                        } else if (t.client_count === 1) {
+                            html = '<span class="text-xs">' + _escapeHTML(t.clients[0].addr) + '</span> <span class="text-xs text-gray-400">' + _escapeHTML(t.clients[0].uptime) + '</span>';
+                        } else {
+                            const tip = t.clients.map(c => c.addr + ' (' + c.uptime + ')').sort().join('\n');
+                            html = '<span class="text-xs cursor-default" title="' + _escapeHTML(tip) + '">' + t.client_count + ' clients</span>';
+                        }
+                        const prevClient = prev._clientHTML;
+                        if (prevClient !== html) clientEl.innerHTML = html;
+                        t._clientHTML = html;
+                    }
+
+                    this._statsCache[t.id] = t;
+                }
             } catch (_) {}
         },
 
@@ -424,7 +527,7 @@ function dashboard() {
 {{define "tunnel-rows"}}
 {{if .}}
 {{range .}}
-<tr class="hover:bg-gray-50">
+<tr class="hover:bg-gray-50" data-tunnel-id="{{.ID}}">
     <td class="px-3 py-2"><span class="status-dot {{if .Connected}}connected{{else}}disconnected{{end}}"></span></td>
     <td class="px-3 py-2 font-semibold">{{.ID}}</td>
     <td class="px-3 py-2">
@@ -442,10 +545,10 @@ function dashboard() {
         </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
-    <td class="px-3 py-2">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
-    <td class="px-3 py-2 text-right font-mono text-sm font-bold">{{.Requests}}</td>
-    <td class="px-3 py-2 text-right text-xs text-gray-500">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
-    <td class="px-3 py-2 text-right font-mono text-sm font-bold">{{.ActiveConns}}</td>
+    <td class="px-3 py-2" data-field="client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests">{{.Requests}}</td>
+    <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active">{{.ActiveConns}}</td>
     <td class="px-3 py-2 text-right">
         <div class="flex items-center justify-end gap-1">
             <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}})"
