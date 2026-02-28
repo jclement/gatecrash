@@ -1,0 +1,83 @@
+{{define "content"}}
+<div class="max-w-3xl mx-auto space-y-6">
+    <h1 class="text-xl font-bold">Getting Started</h1>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">How Gatecrash Works</h2>
+        <p class="text-sm text-gray-600">
+            Gatecrash exposes your local services to the internet through secure SSH tunnels. The server runs on a public host with a domain name, and clients run on your local machines to establish tunnels back to the server.
+        </p>
+        <div class="flex items-center gap-3 text-sm text-gray-500 bg-gray-50 rounded p-3 font-mono">
+            <span>Local Service</span>
+            <span>&rarr;</span>
+            <span>Gatecrash Client</span>
+            <span>&rarr;</span>
+            <span class="text-blue-600">SSH Tunnel</span>
+            <span>&rarr;</span>
+            <span>Gatecrash Server</span>
+            <span>&rarr;</span>
+            <span>Internet</span>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">1. Create a Tunnel</h2>
+        <p class="text-sm text-gray-600">
+            Go to the <a href="/" class="text-blue-600 hover:underline">Dashboard</a> and click <strong>Add Tunnel</strong>. Choose a type:
+        </p>
+        <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+            <li><strong>HTTP</strong> &mdash; Routes web traffic by hostname. Assign one or more hostnames that point to this server (via DNS). TLS certificates are provisioned automatically.</li>
+            <li><strong>TCP</strong> &mdash; Forwards raw TCP on a specific port. Use for SSH, databases, game servers, etc.</li>
+        </ul>
+        <p class="text-sm text-gray-600">
+            After creating the tunnel, you'll be shown a secret token. <strong>Save it immediately</strong> &mdash; it cannot be retrieved later (but you can regenerate a new one).
+        </p>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">2. Connect a Client</h2>
+        <p class="text-sm text-gray-600">
+            Run the gatecrash client on the machine hosting your local service. The connection command is shown when you create the tunnel or regenerate the secret.
+        </p>
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Binary</p>
+            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">gatecrash client --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
+        </div>
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Docker</p>
+            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">docker run --rm --network host ghcr.io/jclement/gatecrash client --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
+        </div>
+        <p class="text-sm text-gray-600">
+            Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel secret and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
+        </p>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">3. DNS Setup</h2>
+        <p class="text-sm text-gray-600">
+            For HTTP tunnels, point your hostnames to this server's IP address using DNS A/AAAA records. TLS certificates will be automatically provisioned via ACME (Let's Encrypt) once DNS is configured.
+        </p>
+        <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
+            DNS changes can take up to 48 hours to propagate. Certificate provisioning will retry automatically.
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">Redirects</h2>
+        <p class="text-sm text-gray-600">
+            Redirects let you send traffic from one hostname to another URL without a tunnel. Useful for directing <code class="bg-gray-100 px-1 rounded text-xs">www.example.com</code> to <code class="bg-gray-100 px-1 rounded text-xs">https://example.com</code>, or forwarding a domain to an external service. TLS certificates are provisioned automatically for redirect hostnames too.
+        </p>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">Tips</h2>
+        <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+            <li>The client automatically reconnects if the connection drops.</li>
+            <li>The dashboard updates in real-time &mdash; no need to refresh.</li>
+            <li>Use <strong>New Secret</strong> to rotate a tunnel's credentials. The old secret stops working immediately.</li>
+            <li>The <strong>Preserve Host</strong> option (HTTP tunnels) forwards the original Host header to your local service, useful when your app cares about the hostname.</li>
+            <li>Server fingerprint: <code class="bg-gray-100 px-1 rounded text-xs">{{.Data.Fingerprint}}</code></li>
+        </ul>
+    </div>
+</div>
+{{end}}

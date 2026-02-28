@@ -1,6 +1,6 @@
 {{define "base"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="visibility: hidden;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,6 +15,14 @@
             --font-mono: 'Roboto Mono', 'SF Mono', 'Consolas', monospace;
         }
     </style>
+    <script>
+        // Reveal page once Tailwind has compiled styles
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => document.documentElement.style.visibility = '');
+        } else {
+            document.documentElement.style.visibility = '';
+        }
+    </script>
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/htmx-sse.js"></script>
     <script defer src="/static/js/alpine.js"></script>
@@ -27,6 +35,7 @@
             <div class="flex items-center gap-1">
                 <a href="/" class="px-3 py-1 rounded text-sm {{if eq .Active "dashboard"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Dashboard</a>
                 <a href="/passkeys" class="px-3 py-1 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>
+                <a href="/help" class="px-3 py-1 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>
             </div>
             <div class="ml-auto flex items-center gap-3">
                 <span class="text-xs bg-gray-700 px-2 py-0.5 rounded">v{{.Version}}</span>

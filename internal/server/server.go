@@ -259,6 +259,7 @@ func (s *Server) setupAdminRoutes() {
 
 	// Protected routes — require auth
 	s.adminMux.HandleFunc("GET /", s.requireAuth(s.handleAdminDashboard))
+	s.adminMux.HandleFunc("GET /help", s.requireAuth(s.handleHelp))
 	s.adminMux.HandleFunc("GET /passkeys", s.requireAuth(s.handlePasskeys))
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
 	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuth(s.handleAPITunnels))
@@ -378,6 +379,21 @@ type RedirectView struct {
 	CertValid    bool
 	CertExpiry   string
 	CertError    string
+}
+
+func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
+	sshAddr := fmt.Sprintf("%s:%d", s.cfg.Server.AdminHost, s.cfg.Server.SSHPort)
+	s.adminH.Render(w, "pages/help.html", &admin.PageData{
+		Title:  "Help",
+		Active: "help",
+		Data: struct {
+			SSHAddr     string
+			Fingerprint string
+		}{
+			SSHAddr:     sshAddr,
+			Fingerprint: s.hostFingerprint,
+		},
+	})
 }
 
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
