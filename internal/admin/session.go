@@ -2,6 +2,9 @@ package admin
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"time"
 
@@ -108,4 +111,24 @@ func (sm *SessionManager) RequireAuth(next http.Handler) http.Handler {
 func IsAuthenticated(r *http.Request) bool {
 	auth, _ := r.Context().Value(ctxKeyAuthenticated).(bool)
 	return auth
+}
+
+// CSRFToken generates a CSRF token derived from the session cookie.
+// Returns empty string if there is no valid session.
+func (sm *SessionManager) CSRFToken(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, sm.secret)
+	mac.Write([]byte("csrf:" + cookie.Value))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ValidCSRFToken checks that a submitted CSRF token matches the session.
+func (sm *SessionManager) ValidCSRFToken(r *http.Request, token string) bool {
+	if token == "" {
+		return false
+	}
+	return hmac.Equal([]byte(sm.CSRFToken(r)), []byte(token))
 }

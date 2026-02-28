@@ -127,7 +127,9 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 // onDemandDecision controls which hostnames get on-demand certificates.
 // Only configured hostnames are allowed — prevents abuse from arbitrary domains.
 func (s *Server) onDemandDecision(_ context.Context, name string) error {
+	s.cfgMu.RLock()
 	configured := s.cfg.AllHostnames()
+	s.cfgMu.RUnlock()
 
 	for _, h := range configured {
 		if h == name {

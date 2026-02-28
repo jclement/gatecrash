@@ -40,6 +40,9 @@ type Server struct {
 	staticFS         fs.FS // embedded or disk-based static assets
 	hostFingerprint  string // SSH host key fingerprint (SHA256)
 
+	// Config mutation lock — protects s.cfg reads/writes from admin API and config reload
+	cfgMu sync.RWMutex
+
 	// TCP listener management
 	tcpMu        sync.Mutex
 	tcpListeners map[int]net.Listener // port → listener
@@ -248,9 +251,11 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("GET /login", s.handleLogin)
 	s.adminMux.HandleFunc("GET /setup", s.handleSetup)
 
-	// WebAuthn API endpoints — public (called by JS on login/setup pages)
-	s.adminMux.HandleFunc("POST /auth/register/begin", s.webauthn.HandleRegisterBegin)
-	s.adminMux.HandleFunc("POST /auth/register/finish", s.webauthn.HandleRegisterFinish)
+	// WebAuthn API endpoints
+	// Registration requires either setup mode (no passkeys) or an authenticated session
+	s.adminMux.HandleFunc("POST /auth/register/begin", s.requireAuthOrSetup(s.webauthn.HandleRegisterBegin))
+	s.adminMux.HandleFunc("POST /auth/register/finish", s.requireAuthOrSetup(s.webauthn.HandleRegisterFinish))
+	// Login endpoints are public (called by JS on login page)
 	s.adminMux.HandleFunc("POST /auth/login/begin", s.webauthn.HandleLoginBegin)
 	s.adminMux.HandleFunc("POST /auth/login/finish", s.webauthn.HandleLoginFinish)
 
@@ -273,6 +278,22 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireAuth(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireAuth(s.handleDeleteRedirect))
 	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
+}
+
+// requireAuthOrSetup allows access if no passkeys exist (setup mode) or the user is authenticated.
+// Used for passkey registration endpoints — first registration is open, subsequent ones require auth.
+func (s *Server) requireAuthOrSetup(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.webauthn.NeedsSetup() {
+			next(w, r)
+			return
+		}
+		if !s.sessionMgr.ValidateSession(r) {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // requireAuth wraps a handler with authentication checks.
@@ -337,15 +358,22 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 		Data: struct {
 			Passkeys  []admin.PasskeyView
 			CanDelete bool
+			CSRFToken string
 		}{
 			Passkeys:  passkeys,
 			CanDelete: len(creds) > 1,
+			CSRFToken: s.sessionMgr.CSRFToken(r),
 		},
 	})
 }
 
 // handleDeletePasskey removes a passkey.
 func (s *Server) handleDeletePasskey(w http.ResponseWriter, r *http.Request) {
+	if !s.sessionMgr.ValidCSRFToken(r, r.FormValue("csrf_token")) {
+		http.Error(w, "invalid CSRF token", http.StatusForbidden)
+		return
+	}
+
 	idB64 := r.FormValue("id")
 	if idB64 == "" {
 		http.Redirect(w, r, "/passkeys", http.StatusSeeOther)
@@ -457,8 +485,12 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 }
 
 func (s *Server) buildRedirectViews() []RedirectView {
-	views := make([]RedirectView, len(s.cfg.Redirect))
-	for i, r := range s.cfg.Redirect {
+	s.cfgMu.RLock()
+	redirects := s.cfg.Redirect
+	s.cfgMu.RUnlock()
+
+	views := make([]RedirectView, len(redirects))
+	for i, r := range redirects {
 		ci := s.getCertInfo(r.From)
 		rv := RedirectView{
 			From:         r.From,
@@ -557,6 +589,9 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
 	if err := s.validateTunnel(req, ""); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -602,6 +637,9 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = tunnelID
 
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
 	if err := s.validateTunnel(req, tunnelID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -640,6 +678,9 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing tunnel ID", http.StatusBadRequest)
 		return
 	}
+
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 
 	found := false
 	for i := range s.cfg.Tunnel {
@@ -715,6 +756,9 @@ func (s *Server) handleCreateRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
 	if err := s.validateRedirect(req, ""); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -749,6 +793,9 @@ func (s *Server) handleEditRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.From = fromHost
+
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 
 	if err := s.validateRedirect(req, fromHost); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -786,6 +833,9 @@ func (s *Server) handleDeleteRedirect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing redirect from", http.StatusBadRequest)
 		return
 	}
+
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 
 	found := false
 	for i := range s.cfg.Redirect {
@@ -826,6 +876,9 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
 	// Update config file with new hash
 	for i := range s.cfg.Tunnel {
 		if s.cfg.Tunnel[i].ID == tunnelID {
@@ -845,21 +898,35 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, `{"status":"ok","version":"%s"}`, s.version)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": s.version})
 }
 
 func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, "[")
-	for i, t := range s.registry.AllTunnels() {
-		if i > 0 {
-			fmt.Fprint(w, ",")
-		}
-		fmt.Fprintf(w, `{"id":"%s","type":"%s","connected":%v,"active_conns":%d,"bytes_in":%d,"bytes_out":%d,"requests":%d}`,
-			t.ID, t.Type, t.IsConnected(), t.Metrics.ActiveConns.Load(),
-			t.Metrics.BytesIn.Load(), t.Metrics.BytesOut.Load(), t.Metrics.RequestCount.Load())
+	tunnels := s.registry.AllTunnels()
+	type tunnelJSON struct {
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		Connected   bool   `json:"connected"`
+		ActiveConns int32  `json:"active_conns"`
+		BytesIn     int64  `json:"bytes_in"`
+		BytesOut    int64  `json:"bytes_out"`
+		Requests    int64  `json:"requests"`
 	}
-	fmt.Fprint(w, "]")
+	result := make([]tunnelJSON, len(tunnels))
+	for i, t := range tunnels {
+		result[i] = tunnelJSON{
+			ID:          t.ID,
+			Type:        t.Type,
+			Connected:   t.IsConnected(),
+			ActiveConns: t.Metrics.ActiveConns.Load(),
+			BytesIn:     t.Metrics.BytesIn.Load(),
+			BytesOut:    t.Metrics.BytesOut.Load(),
+			Requests:    t.Metrics.RequestCount.Load(),
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
@@ -887,7 +954,10 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 		}
 	}
 	s.registry.Reload(tunnels)
+
+	s.cfgMu.Lock()
 	s.cfg = newCfg
+	s.cfgMu.Unlock()
 
 	// Start/stop TCP listeners to match new config
 	s.reconcileTCPListeners()
@@ -901,9 +971,13 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 }
 
 func (s *Server) httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.RLock()
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
 	host := stripPort(r.Host)
-	if s.cfg.Server.HTTPSPort != 443 {
-		host = fmt.Sprintf("%s:%d", host, s.cfg.Server.HTTPSPort)
+	if httpsPort != 443 {
+		host = fmt.Sprintf("%s:%d", host, httpsPort)
 	}
 	target := "https://" + host + r.RequestURI
 	http.Redirect(w, r, target, http.StatusMovedPermanently)

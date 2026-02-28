@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,8 +13,14 @@ import (
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
 
+	// Snapshot config fields under read lock (released before proxying)
+	s.cfgMu.RLock()
+	redirects := s.cfg.Redirect
+	adminHost := s.cfg.Server.AdminHost
+	s.cfgMu.RUnlock()
+
 	// 1. Check redirects before tunnel lookup
-	for _, redir := range s.cfg.Redirect {
+	for _, redir := range redirects {
 		if host == redir.From {
 			target := redir.To
 			if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
@@ -29,7 +36,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Admin panel — served at admin_host's root
-	if s.cfg.Server.AdminHost != "" && host == s.cfg.Server.AdminHost {
+	if adminHost != "" && host == adminHost {
 		s.adminMux.ServeHTTP(w, r)
 		return
 	}
@@ -40,7 +47,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("no tunnel for host", "host", host)
 		s.serveErrorPage(w, r, http.StatusNotFound,
 			"No Tunnel Configured",
-			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.", host),
+			fmt.Sprintf("There is no tunnel configured for <strong>%s</strong>.", html.EscapeString(host)),
 		)
 		return
 	}
@@ -48,7 +55,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !tunnel.IsConnected() {
 		s.serveErrorPage(w, r, http.StatusBadGateway,
 			"Service Offline",
-			fmt.Sprintf("The tunnel <strong>%s</strong> is currently offline. The service may be restarting.", tunnel.ID),
+			fmt.Sprintf("The tunnel <strong>%s</strong> is currently offline. The service may be restarting.", html.EscapeString(tunnel.ID)),
 		)
 		return
 	}

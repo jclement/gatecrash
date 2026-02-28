@@ -121,6 +121,7 @@ func NewHandlers(version string, templateFS fs.FS) (*Handlers, error) {
 			"pages/setup.html",
 			"pages/passkeys.html",
 			"pages/dashboard.html",
+			"pages/help.html",
 		} {
 			tmpl, err := h.compilePage(page)
 			if err != nil {

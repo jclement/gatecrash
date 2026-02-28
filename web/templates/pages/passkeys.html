@@ -42,6 +42,7 @@
                             <form method="POST" action="/passkeys/delete" class="inline"
                                   @submit.prevent="askDelete($el)">
                                 <input type="hidden" name="id" value="{{.IDB64}}">
+                                <input type="hidden" name="csrf_token" value="{{$.Data.CSRFToken}}">
                                 <button type="submit" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Remove</button>
                             </form>
                             {{else}}
