@@ -24,7 +24,7 @@
         </div>
     </div>
     <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full text-sm responsive-table">
             <thead>
                 <tr class="border-b border-gray-200 bg-gray-50">
                     <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
@@ -52,7 +52,7 @@
         <button @click="openCreateRedirect()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Redirect</button>
     </div>
     <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full text-sm responsive-table">
             <thead>
                 <tr class="border-b border-gray-200 bg-gray-50">
                     <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">From</th>
@@ -528,13 +528,13 @@ function dashboard() {
 {{if .}}
 {{range .}}
 <tr class="hover:bg-gray-50" data-tunnel-id="{{.ID}}">
-    <td class="px-3 py-2"><span class="status-dot {{if .Connected}}connected{{else}}disconnected{{end}}"></span></td>
-    <td class="px-3 py-2 font-semibold">{{.ID}}</td>
-    <td class="px-3 py-2">
+    <td class="px-3 py-2" data-label="Status"><span class="status-dot {{if .Connected}}connected{{else}}disconnected{{end}}"></span></td>
+    <td class="px-3 py-2 font-semibold" data-label="Tunnel">{{.ID}}</td>
+    <td class="px-3 py-2" data-label="Type">
         {{if eq .Type "http"}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">http</span>
         {{else}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">tcp</span>{{end}}
     </td>
-    <td class="px-3 py-2">
+    <td class="px-3 py-2" data-label="Routes">
         {{if eq .Type "http"}}{{if .TLSPassthrough}}{{range .Hostnames}}<div class="flex items-center gap-1.5">
             <code class="text-xs">{{.}}</code>
             <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">passthrough</span>
@@ -545,11 +545,11 @@ function dashboard() {
         </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
-    <td class="px-3 py-2" data-field="client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
-    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests">{{.Requests}}</td>
-    <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
-    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active">{{.ActiveConns}}</td>
-    <td class="px-3 py-2 text-right">
+    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests" data-label="Requests">{{.Requests}}</td>
+    <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic" data-label="Traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>
+    <td class="px-3 py-2 text-right card-actions">
         <div class="flex items-center justify-end gap-1">
             <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}})"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
@@ -562,7 +562,7 @@ function dashboard() {
 </tr>
 {{end}}
 {{else}}
-<tr><td colspan="9" class="px-3 py-6 text-center text-gray-400">No tunnels configured. Click "Add Tunnel" to create one.</td></tr>
+<tr class="empty-row"><td colspan="9" class="px-3 py-6 text-center text-gray-400">No tunnels configured. Click "Add Tunnel" to create one.</td></tr>
 {{end}}
 {{end}}
 
@@ -570,19 +570,19 @@ function dashboard() {
 {{if .}}
 {{range .}}
 <tr class="hover:bg-gray-50">
-    <td class="px-3 py-2">
+    <td class="px-3 py-2" data-label="From">
         <div class="flex items-center gap-1.5">
             <code class="text-xs">{{.From}}</code>
             {{if .CertValid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" title="Expires {{.CertExpiry}}">{{.CertExpiry}}</span>
             {{else if .CertError}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" title="{{.CertError}}">No TLS</span>{{end}}
         </div>
     </td>
-    <td class="px-3 py-2"><code class="text-xs">{{.To}}</code></td>
-    <td class="px-3 py-2">
+    <td class="px-3 py-2" data-label="To"><code class="text-xs">{{.To}}</code></td>
+    <td class="px-3 py-2" data-label="Path">
         {{if .PreservePath}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">Yes</span>
         {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">No</span>{{end}}
     </td>
-    <td class="px-3 py-2 text-right">
+    <td class="px-3 py-2 text-right card-actions">
         <div class="flex items-center justify-end gap-1">
             <button @click="openEditRedirect('{{.From}}', '{{.To}}', {{.PreservePath}})"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
@@ -593,6 +593,6 @@ function dashboard() {
 </tr>
 {{end}}
 {{else}}
-<tr><td colspan="4" class="px-3 py-6 text-center text-gray-400">No redirects configured. Click "Add Redirect" to create one.</td></tr>
+<tr class="empty-row"><td colspan="4" class="px-3 py-6 text-center text-gray-400">No redirects configured. Click "Add Redirect" to create one.</td></tr>
 {{end}}
 {{end}}

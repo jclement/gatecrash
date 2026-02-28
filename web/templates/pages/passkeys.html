@@ -22,7 +22,7 @@
         <p id="status" class="text-xs mb-3 text-gray-500"></p>
 
         <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <table class="w-full text-sm">
+            <table class="w-full text-sm responsive-table">
                 <thead>
                     <tr class="border-b border-gray-200 bg-gray-50">
                         <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
@@ -34,10 +34,10 @@
                 <tbody class="divide-y divide-gray-100">
                     {{range .Data.Passkeys}}
                     <tr class="hover:bg-gray-50">
-                        <td class="px-3 py-2 font-medium">{{.Name}}</td>
-                        <td class="px-3 py-2 text-xs text-gray-500">{{.CreatedAt}}</td>
-                        <td class="px-3 py-2 text-xs text-gray-500">{{.LastUsedAt}}</td>
-                        <td class="px-3 py-2 text-right">
+                        <td class="px-3 py-2 font-medium" data-label="Name">{{.Name}}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500" data-label="Created">{{.CreatedAt}}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500" data-label="Last Used">{{.LastUsedAt}}</td>
+                        <td class="px-3 py-2 text-right card-actions">
                             {{if $.Data.CanDelete}}
                             <form method="POST" action="/passkeys/delete" class="inline"
                                   @submit.prevent="askDelete($el)">
@@ -52,7 +52,7 @@
                         </td>
                     </tr>
                     {{else}}
-                    <tr>
+                    <tr class="empty-row">
                         <td colspan="4" class="px-3 py-6 text-center text-gray-400">No passkeys registered.</td>
                     </tr>
                     {{end}}

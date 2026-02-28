@@ -12,3 +12,63 @@
 }
 .status-dot.connected { background-color: #22c55e; }
 .status-dot.disconnected { background-color: #d1d5db; }
+
+/* Responsive tables → cards on mobile */
+@media (max-width: 767px) {
+    .responsive-table thead {
+        display: none;
+    }
+    .responsive-table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 0.5rem;
+    }
+    .responsive-table tbody tr {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        background: #fff;
+    }
+    .responsive-table tbody tr:hover {
+        background: #f9fafb;
+    }
+    .responsive-table tbody tr td {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+        padding: 0.15rem 0;
+        text-align: left !important;
+    }
+    .responsive-table tbody tr td[data-label]::before {
+        content: attr(data-label);
+        flex-shrink: 0;
+        width: 5.5rem;
+        font-size: 11px;
+        font-weight: 500;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.025em;
+    }
+    .responsive-table tbody tr td.card-actions {
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid #f3f4f6;
+        justify-content: flex-end;
+    }
+    .responsive-table tbody tr td.card-actions::before {
+        display: none;
+    }
+    .responsive-table tbody tr.empty-row {
+        border: none;
+        text-align: center;
+    }
+    .responsive-table tbody tr.empty-row td {
+        display: block;
+    }
+    .responsive-table tbody tr.empty-row td::before {
+        display: none;
+    }
+}

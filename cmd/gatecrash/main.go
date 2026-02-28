@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/charmbracelet/log"
@@ -87,6 +88,15 @@ func setupLogging(debug bool) {
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envOrDefaultInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
@@ -172,6 +182,7 @@ func runClient(args []string) {
 	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
 	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
 	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
+	count := fs.Int("count", envOrDefaultInt("GATECRASH_COUNT", 1), "number of tunnel connections for redundancy")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
 	fs.Parse(args)
 
@@ -187,6 +198,12 @@ func runClient(args []string) {
 		fmt.Fprintf(os.Stderr, "  GATECRASH_TOKEN     Tunnel token\n")
 		fmt.Fprintf(os.Stderr, "  GATECRASH_TARGET    Target service address\n")
 		fmt.Fprintf(os.Stderr, "  GATECRASH_HOST_KEY  Server SSH host key fingerprint\n")
+		fmt.Fprintf(os.Stderr, "  GATECRASH_COUNT     Number of tunnel connections\n")
+		os.Exit(1)
+	}
+
+	if *count < 1 {
+		fmt.Fprintf(os.Stderr, "count must be at least 1\n")
 		os.Exit(1)
 	}
 
@@ -201,6 +218,7 @@ func runClient(args []string) {
 		"version", Version,
 		"server", *serverAddr,
 		"target", *target,
+		"count", *count,
 	)
 
 	cfg := client.Config{
@@ -223,10 +241,26 @@ func runClient(args []string) {
 		cancel()
 	}()
 
-	c := client.New(cfg, Version)
-	if err := c.Run(ctx); err != nil && ctx.Err() == nil {
-		slog.Error("client error", "error", err)
-		os.Exit(1)
+	if *count == 1 {
+		c := client.New(cfg, Version)
+		if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("client error", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		var wg sync.WaitGroup
+		for i := range *count {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slog.Info("starting tunnel instance", "instance", i+1, "of", *count)
+				c := client.New(cfg, Version)
+				if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+					slog.Error("tunnel instance error", "instance", i+1, "error", err)
+				}
+			}()
+		}
+		wg.Wait()
 	}
 }
 

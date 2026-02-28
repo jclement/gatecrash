@@ -171,7 +171,7 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${CONFIG_DIR}
+ReadWritePaths=${CONFIG_DIR} ${INSTALL_DIR}/gatecrash
 PrivateTmp=true
 
 # Allow binding to privileged ports (80, 443)

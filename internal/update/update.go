@@ -2,6 +2,7 @@ package update
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -130,12 +132,13 @@ func SelfUpdate(downloadURL string) error {
 		return fmt.Errorf("finding executable: %w", err)
 	}
 
-	// Write to temp file next to the binary
-	tmpPath := execPath + ".update"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// Write to temp file in OS temp directory to avoid permission issues
+	// when the binary's directory (e.g. /usr/local/bin) isn't writable.
+	f, err := os.CreateTemp("", "gatecrash-update-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
+	tmpPath := f.Name()
 
 	// Limit download size to prevent disk exhaustion. Read one extra byte beyond
 	// the limit; if we receive that extra byte, the response is too large.
@@ -152,13 +155,56 @@ func SelfUpdate(downloadURL string) error {
 	}
 	f.Close()
 
-	// Replace binary
-	if err := os.Rename(tmpPath, execPath); err != nil {
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("setting permissions: %w", err)
+	}
+
+	// Replace binary — try atomic rename first, fall back to copy if
+	// the temp dir is on a different filesystem (EXDEV).
+	if err := replaceBinary(tmpPath, execPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("replacing binary: %w", err)
 	}
 
 	slog.Info("update complete", "path", execPath)
+	return nil
+}
+
+// replaceBinary moves src to dst. If os.Rename fails due to a cross-device
+// link, it falls back to reading src and overwriting dst in place.
+func replaceBinary(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+
+	// Check for cross-device link error
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+
+	// Fall back: copy src content into dst (overwrite)
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening temp file: %w", err)
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("opening destination: %w", err)
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return fmt.Errorf("copying binary: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("closing destination: %w", err)
+	}
+
+	os.Remove(src)
 	return nil
 }
 

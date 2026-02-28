@@ -43,7 +43,8 @@
       "Bash(go test ./internal/token/ -v -count=1)",
       "Bash(go test -race -timeout 60s ./internal/...)",
       "Bash(go test -coverprofile=/tmp/cover.out ./internal/...)",
-      "Bash(go tool cover -func=/tmp/cover.out)"
+      "Bash(go tool cover -func=/tmp/cover.out)",
+      "Bash(go test -timeout 30s ./internal/...)"
     ],
     "additionalDirectories": [
       "/private/tmp"
