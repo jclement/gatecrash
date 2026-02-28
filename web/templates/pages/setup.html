@@ -1,21 +1,18 @@
 {{define "content"}}
-<div class="columns is-centered" style="margin-top: 3rem;">
-    <div class="column is-half">
-        <div class="box">
-            <h1 class="title has-text-centered">Welcome to Gatecrash</h1>
-            <p class="subtitle has-text-centered">Set up your admin passkey to secure this panel.</p>
+<div class="columns is-centered is-vcentered" style="min-height: 70vh;">
+    <div class="column is-narrow has-text-centered" style="max-width: 400px;">
+        <img src="/static/logo.png" alt="Gatecrash" style="width: 96px; height: 96px; margin-bottom: 1.5rem;">
+        <h1 class="title is-3">Welcome to Gatecrash</h1>
+        <p class="subtitle is-6 has-text-grey">Set up your admin passkey to secure this panel.</p>
 
-            <div class="content">
-                <p>A passkey is a secure, phishing-resistant credential stored on your device. You'll use it to log in to the admin panel.</p>
-            </div>
-
-            <div class="has-text-centered">
-                <button id="register-btn" class="button is-primary is-medium" onclick="registerPasskey()">
-                    Register Passkey
-                </button>
-                <p id="status" class="is-size-7 mt-2"></p>
-            </div>
+        <div class="content has-text-left">
+            <p>A passkey is a secure, phishing-resistant credential stored on your device. You'll use it to log in to the admin panel.</p>
         </div>
+
+        <button id="register-btn" class="button is-primary is-medium" onclick="registerPasskey()">
+            Register Passkey
+        </button>
+        <p id="status" class="is-size-7 mt-3"></p>
     </div>
 </div>
 

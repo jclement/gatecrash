@@ -64,6 +64,7 @@
 
 .navbar { min-height: 2.25rem; }
 .navbar-item, .navbar-link { padding: 0.25rem 0.6rem; font-size: 0.875em; }
+.navbar-item.is-active { color: #fff !important; font-weight: 600; }
 
 .field:not(:last-child) { margin-bottom: 0.35rem; }
 .label { font-size: 0.75rem; font-weight: 500; margin-bottom: 0.15em; }

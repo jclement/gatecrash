@@ -112,6 +112,10 @@ func (h *WebAuthnHandler) user() *webauthnUser {
 				AAGUID:    sc.AAGUID,
 				SignCount: sc.SignCount,
 			},
+			Flags: webauthn.CredentialFlags{
+				BackupEligible: sc.BackupEligible,
+				BackupState:    sc.BackupState,
+			},
 		}
 	}
 	return &webauthnUser{
@@ -161,13 +165,15 @@ func (h *WebAuthnHandler) HandleRegisterFinish(w http.ResponseWriter, r *http.Re
 
 	// Store credential
 	sc := StoredCredential{
-		ID:        credential.ID,
-		PublicKey: credential.PublicKey,
-		Name:      "Passkey",
-		AAGUID:   credential.Authenticator.AAGUID,
-		SignCount: credential.Authenticator.SignCount,
-		Transport: transports,
-		AttType:   credential.AttestationType,
+		ID:             credential.ID,
+		PublicKey:      credential.PublicKey,
+		Name:           "Passkey",
+		AAGUID:        credential.Authenticator.AAGUID,
+		SignCount:      credential.Authenticator.SignCount,
+		Transport:      transports,
+		AttType:        credential.AttestationType,
+		BackupEligible: credential.Flags.BackupEligible,
+		BackupState:    credential.Flags.BackupState,
 	}
 	if err := h.store.AddCredential(sc); err != nil {
 		slog.Error("failed to store credential", "error", err)

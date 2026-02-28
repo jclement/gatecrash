@@ -21,7 +21,8 @@
       "Bash(go build ./internal/server/)",
       "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml --admin-host admin.example.com)",
       "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "WebFetch(domain:github.com)"
     ],
     "additionalDirectories": [
       "/private/tmp"

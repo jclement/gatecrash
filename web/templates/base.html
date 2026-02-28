@@ -11,15 +11,14 @@
     <script src="/static/js/htmx.min.js"></script>
 </head>
 <body>
+    {{if .Active}}
     <nav class="navbar is-spaced" role="navigation">
         <div class="container">
             <div class="navbar-brand">
                 <a class="navbar-item" href="/">
-                    <img src="/static/logo.png" alt="Gatecrash" style="max-height: 28px; margin-right: 8px;">
                     <span class="has-text-weight-bold is-size-5">Gatecrash</span>
                 </a>
             </div>
-            {{if .Active}}
             <div class="navbar-menu">
                 <div class="navbar-start">
                     <a class="navbar-item {{if eq .Active "dashboard"}}is-active{{end}}" href="/">Dashboard</a>
@@ -36,9 +35,9 @@
                     </div>
                 </div>
             </div>
-            {{end}}
         </div>
     </nav>
+    {{end}}
 
     <main class="section">
         <div class="container">

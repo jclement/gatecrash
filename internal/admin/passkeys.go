@@ -24,15 +24,17 @@ type PasskeyData struct {
 
 // StoredCredential represents a single WebAuthn credential.
 type StoredCredential struct {
-	ID          []byte    `json:"id"`
-	PublicKey   []byte    `json:"public_key"`
-	Name        string    `json:"name"`
-	AAGUID      []byte    `json:"aaguid"`
-	SignCount   uint32    `json:"sign_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	LastUsedAt  time.Time `json:"last_used_at"`
-	Transport   []string  `json:"transport"`
-	AttType     string    `json:"att_type"`
+	ID             []byte    `json:"id"`
+	PublicKey      []byte    `json:"public_key"`
+	Name           string    `json:"name"`
+	AAGUID         []byte    `json:"aaguid"`
+	SignCount      uint32    `json:"sign_count"`
+	CreatedAt      time.Time `json:"created_at"`
+	LastUsedAt     time.Time `json:"last_used_at"`
+	Transport      []string  `json:"transport"`
+	AttType        string    `json:"att_type"`
+	BackupEligible bool      `json:"backup_eligible"`
+	BackupState    bool      `json:"backup_state"`
 }
 
 // NewPasskeyStore loads or creates a passkey store at the given path.

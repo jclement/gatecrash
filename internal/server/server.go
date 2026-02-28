@@ -375,7 +375,6 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
   <div class="container">
     <div class="navbar-brand">
       <a class="navbar-item" href="/">
-        <img src="/static/logo.png" alt="Gatecrash" style="max-height:28px;margin-right:8px">
         <span class="has-text-weight-bold is-size-5">Gatecrash</span>
       </a>
     </div>
