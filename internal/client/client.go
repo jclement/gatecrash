@@ -27,6 +27,7 @@ type Config struct {
 	TargetPort int    // target service port
 	HostKey    string // optional SSH host key fingerprint (SHA256:...)
 	TargetTLS  string // "", "tls", or "tls-insecure"
+	Count      int    // number of parallel connections to the server (default 1)
 }
 
 // Client connects to the gatecrash server and handles tunnel requests.
@@ -55,7 +56,31 @@ func New(cfg Config, version string) *Client {
 }
 
 // Run connects to the server and handles requests. Reconnects on failure.
+// If cfg.Count > 1, that many parallel connections are opened.
 func (c *Client) Run(ctx context.Context) error {
+	count := c.cfg.Count
+	if count <= 1 {
+		return c.runOne(ctx)
+	}
+
+	errCh := make(chan error, count)
+	for i := 0; i < count; i++ {
+		go func() {
+			errCh <- c.runOne(ctx)
+		}()
+	}
+
+	var firstErr error
+	for i := 0; i < count; i++ {
+		if err := <-errCh; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// runOne runs the reconnect loop for a single connection to the server.
+func (c *Client) runOne(ctx context.Context) error {
 	backoff := time.Second
 	maxBackoff := 60 * time.Second
 

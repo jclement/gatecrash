@@ -172,6 +172,7 @@ func runClient(args []string) {
 	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
 	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
 	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
+	count := fs.Int("count", 1, "number of parallel connections to open to the server")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
 	fs.Parse(args)
 
@@ -190,6 +191,11 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
+	if *count < 1 {
+		fmt.Fprintf(os.Stderr, "--count must be at least 1\n")
+		os.Exit(1)
+	}
+
 	// Parse target [scheme://]host:port
 	targetHost, targetPort, targetTLS, err := parseTarget(*target)
 	if err != nil {
@@ -201,6 +207,7 @@ func runClient(args []string) {
 		"version", Version,
 		"server", *serverAddr,
 		"target", *target,
+		"count", *count,
 	)
 
 	cfg := client.Config{
@@ -210,6 +217,7 @@ func runClient(args []string) {
 		TargetPort: targetPort,
 		HostKey:    *hostKey,
 		TargetTLS:  targetTLS,
+		Count:      *count,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
