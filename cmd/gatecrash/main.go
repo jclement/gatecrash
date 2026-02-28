@@ -202,8 +202,8 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
-	if *count < 1 {
-		fmt.Fprintf(os.Stderr, "count must be at least 1\n")
+	if *count < 1 || *count > 10 {
+		fmt.Fprintf(os.Stderr, "count must be between 1 and 10\n")
 		os.Exit(1)
 	}
 
