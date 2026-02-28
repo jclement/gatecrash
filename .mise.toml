@@ -10,10 +10,16 @@ run = """
 set -e
 mkdir -p web/static/js web/static/css web/static/fonts/roboto data
 
-# Download Bulma CSS
-if [ ! -f "web/static/css/bulma.min.css" ]; then
-    echo "Downloading Bulma CSS..."
-    curl -sL https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css -o web/static/css/bulma.min.css
+# Download Tailwind CSS (browser build)
+if [ ! -f "web/static/js/tailwind.js" ]; then
+    echo "Downloading Tailwind CSS..."
+    curl -sL https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4 -o web/static/js/tailwind.js
+fi
+
+# Download Alpine.js
+if [ ! -f "web/static/js/alpine.js" ]; then
+    echo "Downloading Alpine.js..."
+    curl -sL https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js -o web/static/js/alpine.js
 fi
 
 # Download HTMX

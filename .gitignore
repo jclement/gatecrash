@@ -15,10 +15,10 @@ host_key
 host_key.pub
 
 # Frontend (downloaded by mise run setup)
-web/static/css/bulma.min.css
 web/static/js/htmx.min.js
 web/static/js/htmx-sse.js
-web/static/js/alpine.min.js
+web/static/js/tailwind.js
+web/static/js/alpine.js
 web/static/fonts/roboto/*.woff2
 
 # IDE

@@ -6,56 +6,51 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{if .Title}}{{.Title}} - {{end}}Gatecrash</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
-    <link rel="stylesheet" href="/static/css/bulma.min.css">
+    <link rel="stylesheet" href="/static/fonts/roboto/roboto.css">
     <link rel="stylesheet" href="/static/css/app.css">
+    <script src="/static/js/tailwind.js"></script>
+    <style type="text/tailwindcss">
+        @theme {
+            --font-sans: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'Roboto Mono', 'SF Mono', 'Consolas', monospace;
+        }
+    </style>
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/htmx-sse.js"></script>
+    <script defer src="/static/js/alpine.js"></script>
 </head>
-<body>
+<body class="bg-gray-50 text-gray-900 text-[13px] leading-tight min-h-screen flex flex-col">
     {{if .Active}}
-    <nav class="navbar is-spaced" role="navigation">
-        <div class="container">
-            <div class="navbar-brand">
-                <a class="navbar-item" href="/">
-                    <span class="has-text-weight-bold is-size-5">Gatecrash</span>
-                </a>
+    <nav class="bg-gray-800 text-white">
+        <div class="max-w-full mx-auto px-4 flex items-center h-10">
+            <a href="/" class="font-bold text-base mr-6 hover:text-gray-200">Gatecrash</a>
+            <div class="flex items-center gap-1">
+                <a href="/" class="px-3 py-1 rounded text-sm {{if eq .Active "dashboard"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Dashboard</a>
+                <a href="/passkeys" class="px-3 py-1 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>
             </div>
-            <div class="navbar-menu">
-                <div class="navbar-start">
-                    <a class="navbar-item {{if eq .Active "dashboard"}}is-active{{end}}" href="/">Dashboard</a>
-                    <a class="navbar-item {{if eq .Active "passkeys"}}is-active{{end}}" href="/passkeys">Passkeys</a>
-                </div>
-                <div class="navbar-end">
-                    <div class="navbar-item">
-                        <span class="tag is-light">v{{.Version}}</span>
-                    </div>
-                    <div class="navbar-item">
-                        <form method="POST" action="/logout">
-                            <button type="submit" class="button is-small is-light">Logout</button>
-                        </form>
-                    </div>
-                </div>
+            <div class="ml-auto flex items-center gap-3">
+                <span class="text-xs bg-gray-700 px-2 py-0.5 rounded">v{{.Version}}</span>
+                <form method="POST" action="/logout">
+                    <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Logout</button>
+                </form>
             </div>
         </div>
     </nav>
     {{end}}
 
-    <main class="section">
-        <div class="container">
-            {{if .Flash}}
-            <div class="notification is-{{.Flash.Type}} is-light">
-                <button class="delete" onclick="this.parentElement.remove()"></button>
-                {{.Flash.Message}}
-            </div>
-            {{end}}
-            {{template "content" .}}
+    <main class="flex-1 p-3 max-w-full mx-auto w-full">
+        {{if .Flash}}
+        <div x-data="{show: true}" x-show="show" x-transition
+             class="mb-3 px-4 py-2 rounded text-sm flex items-center gap-2 {{if eq .Flash.Type "success"}}bg-green-50 text-green-800 border border-green-200{{else if eq .Flash.Type "warning"}}bg-amber-50 text-amber-800 border border-amber-200{{else}}bg-red-50 text-red-800 border border-red-200{{end}}">
+            <span class="flex-1">{{.Flash.Message}}</span>
+            <button @click="show = false" class="text-lg leading-none opacity-50 hover:opacity-100">&times;</button>
         </div>
+        {{end}}
+        {{template "content" .}}
     </main>
 
-    <footer class="footer" style="padding: 0.75rem;">
-        <div class="content has-text-centered">
-            <p class="is-size-7 has-text-grey">Gatecrash v{{.Version}}</p>
-        </div>
+    <footer class="py-2 text-center text-xs text-gray-400">
+        Gatecrash v{{.Version}}
     </footer>
 </body>
 </html>

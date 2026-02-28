@@ -1,78 +1,7 @@
-/* Gatecrash - Compact technical UI theme */
+/* Gatecrash - Custom styles (non-Tailwind) */
 
-:root {
-    --bulma-family-primary: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-    --bulma-family-secondary: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-    --bulma-family-code: 'Roboto Mono', 'SF Mono', 'Consolas', monospace;
-    --bulma-body-size: 13px;
-    --bulma-body-line-height: 1.3;
-
-    --bulma-primary-h: 217;
-    --bulma-primary-s: 71%;
-    --bulma-primary-l: 45%;
-
-    --bulma-link-h: 217;
-    --bulma-link-s: 71%;
-    --bulma-link-l: 45%;
-
-    --bulma-info-h: 207;
-    --bulma-info-s: 90%;
-    --bulma-info-l: 54%;
-
-    --bulma-success-h: 152;
-    --bulma-success-s: 56%;
-    --bulma-success-l: 40%;
-
-    --bulma-warning-h: 38;
-    --bulma-warning-s: 92%;
-    --bulma-warning-l: 50%;
-
-    --bulma-danger-h: 0;
-    --bulma-danger-s: 72%;
-    --bulma-danger-l: 51%;
-
-    --bulma-scheme-h: 217;
-    --bulma-scheme-s: 14%;
-
-    --bulma-section-padding: 0.75rem;
-    --bulma-section-padding-desktop: 1rem;
-    --bulma-block-spacing: 0.5rem;
-    --bulma-gap: 0.375rem;
-
-    --bulma-control-size: 0.8125em;
-    --bulma-control-padding-vertical: 0.2em;
-    --bulma-control-padding-horizontal: 0.4em;
-    --bulma-control-radius: 3px;
-
-    --bulma-box-padding: 0.75rem;
-    --bulma-card-content-padding: 0.5rem;
-
-    --bulma-title-size: 1.25rem;
-    --bulma-subtitle-size: 0.95rem;
-}
-
-.section { padding: 0.75rem; }
-.container { max-width: 100% !important; padding: 0 0.75rem; }
-
-.table td, .table th { padding: 0.2em 0.4em; font-size: 0.9em; }
-.table thead th {
-    font-size: 0.8em;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--bulma-text-weak);
-}
-
-.navbar { min-height: 2.25rem; }
-.navbar-brand { margin-right: 1rem; }
-.navbar-item, .navbar-link { padding: 0.25rem 0.6rem; font-size: 0.875em; }
-.navbar-item.is-active { color: #fff !important; font-weight: 600; }
-
-.field:not(:last-child) { margin-bottom: 0.35rem; }
-.label { font-size: 0.75rem; font-weight: 500; margin-bottom: 0.15em; }
-.input, .textarea, .select select { font-size: 0.875em; padding: 0.2em 0.4em; }
-
-.notification { padding: 0.5rem 0.75rem; font-size: 0.875em; }
-.tag { font-size: 0.7rem; padding-left: 0.5em; padding-right: 0.5em; height: 1.5em; }
+/* Alpine.js cloak - hide elements until Alpine initializes */
+[x-cloak] { display: none !important; }
 
 /* Status indicators */
 .status-dot {
@@ -80,39 +9,11 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    margin-right: 0.3em;
 }
-.status-dot.is-connected { background-color: hsl(152, 56%, 40%); }
-.status-dot.is-disconnected { background-color: hsl(0, 0%, 71%); }
-
-/* Token display */
-.token-display {
-    font-family: var(--bulma-family-code);
-    font-size: 0.8em;
-    background: hsl(0, 0%, 96%);
-    padding: 0.3em 0.5em;
-    border-radius: 3px;
-    word-break: break-all;
-    cursor: pointer;
-}
-.token-display:hover {
-    background: hsl(0, 0%, 92%);
-}
+.status-dot.connected { background-color: #22c55e; }
+.status-dot.disconnected { background-color: #d1d5db; }
 
 /* HTMX loading states */
 .htmx-request { opacity: 0.5; transition: opacity 200ms; }
 .htmx-indicator { display: none; }
 .htmx-request .htmx-indicator { display: inline-block; }
-
-/* Metric counters */
-.metric-value {
-    font-family: var(--bulma-family-code);
-    font-size: 1.1em;
-    font-weight: 700;
-}
-.metric-label {
-    font-size: 0.7em;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--bulma-text-weak);
-}

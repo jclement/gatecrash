@@ -22,7 +22,10 @@
       "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml --admin-host admin.example.com)",
       "Bash(go run ./cmd/gatecrash make-config --output /tmp/gatecrash-test.toml)",
       "Bash(echo \"exit: $?\")",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(ls -la /Users/jsc/Developer/gatecrash/web/static/css/bulma* /Users/jsc/Developer/gatecrash/web/static/js/htmx.min*)",
+      "Bash(curl -sL \"https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4/cdn.min.js\" -o web/static/js/tailwind.js)",
+      "Bash(curl -sL \"https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js\" -o web/static/js/alpine.js)"
     ],
     "additionalDirectories": [
       "/private/tmp"

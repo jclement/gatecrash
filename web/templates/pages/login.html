@@ -1,14 +1,15 @@
 {{define "content"}}
-<div class="columns is-centered is-vcentered" style="min-height: 70vh;">
-    <div class="column is-narrow has-text-centered">
-        <img src="/static/logo.png" alt="Gatecrash" style="width: 96px; height: 96px; margin-bottom: 1.5rem;">
-        <h1 class="title is-3">Gatecrash</h1>
-        <p class="subtitle is-6 has-text-grey">Authenticate with your passkey to continue.</p>
+<div class="flex items-center justify-center min-h-[70vh]">
+    <div class="text-center">
+        <img src="/static/logo.png" alt="Gatecrash" class="w-24 h-24 mx-auto mb-6">
+        <h1 class="text-2xl font-bold mb-1">Gatecrash</h1>
+        <p class="text-sm text-gray-500 mb-6">Authenticate with your passkey to continue.</p>
 
-        <button id="login-btn" class="button is-primary is-medium" onclick="authenticatePasskey()">
+        <button id="login-btn" onclick="authenticatePasskey()"
+                class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded transition-colors">
             Sign In
         </button>
-        <p id="status" class="is-size-7 mt-3"></p>
+        <p id="status" class="text-xs mt-3 text-gray-500"></p>
     </div>
 </div>
 
