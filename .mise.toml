@@ -4,48 +4,8 @@ goreleaser = "latest"
 "go:github.com/air-verse/air" = "latest"
 
 [tasks.setup]
-description = "Download frontend assets and dependencies"
-run = """
-#!/bin/bash
-set -e
-mkdir -p web/static/js web/static/css web/static/fonts/roboto data
-
-# Download Tailwind CSS (browser build)
-if [ ! -f "web/static/js/tailwind.js" ]; then
-    echo "Downloading Tailwind CSS..."
-    curl -sL https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4 -o web/static/js/tailwind.js
-fi
-
-# Download Alpine.js
-if [ ! -f "web/static/js/alpine.js" ]; then
-    echo "Downloading Alpine.js..."
-    curl -sL https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js -o web/static/js/alpine.js
-fi
-
-# Download HTMX
-if [ ! -f "web/static/js/htmx.min.js" ]; then
-    echo "Downloading HTMX..."
-    curl -sL https://unpkg.com/htmx.org/dist/htmx.min.js -o web/static/js/htmx.min.js
-fi
-
-# Download HTMX SSE extension
-if [ ! -f "web/static/js/htmx-sse.js" ]; then
-    echo "Downloading HTMX SSE extension..."
-    curl -sL https://unpkg.com/htmx-ext-sse/sse.js -o web/static/js/htmx-sse.js
-fi
-
-# Download Roboto font files
-if [ ! -f "web/static/fonts/roboto/roboto-regular.woff2" ]; then
-    echo "Downloading Roboto font..."
-    curl -sL "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.woff2" \
-        -o web/static/fonts/roboto/roboto-regular.woff2
-    curl -sL "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWuaabWmT.woff2" \
-        -o web/static/fonts/roboto/roboto-bold.woff2
-fi
-
-go mod tidy
-echo "Setup complete!"
-"""
+description = "Install dependencies"
+run = "go mod tidy"
 
 [tasks.dev]
 description = "Run server with hot-reload"

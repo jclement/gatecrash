@@ -1,14 +1,8 @@
 @font-face {
     font-family: 'Roboto';
     font-style: normal;
-    font-weight: 400;
+    font-weight: 400 700;
+    font-stretch: 100%;
     font-display: swap;
-    src: url('roboto-regular.woff2') format('woff2');
-}
-@font-face {
-    font-family: 'Roboto';
-    font-style: normal;
-    font-weight: 700;
-    font-display: swap;
-    src: url('roboto-bold.woff2') format('woff2');
+    src: url('roboto-latin.woff2') format('woff2');
 }
