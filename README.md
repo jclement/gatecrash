@@ -178,7 +178,32 @@ gatecrash help                  Show help
 | `--token` | `GATECRASH_TOKEN` | Tunnel token (`tunnel_id:secret`) |
 | `--target` | `GATECRASH_TARGET` | Target service address (`[scheme://]host:port`) |
 | `--host-key` | `GATECRASH_HOST_KEY` | Server SSH fingerprint (`SHA256:...`) |
+| `--tunnel` | | Tunnel spec (repeatable, see below) |
 | `--debug` | | Enable debug logging |
+
+#### Multiple Tunnels
+
+To maintain multiple SSH tunnel connections from a single client process, use the `--tunnel` flag once per tunnel:
+
+```bash
+gatecrash client \
+  --tunnel "server=tunnel.example.com:2222,token=web-app:SECRET,target=localhost:8080" \
+  --tunnel "server=tunnel.example.com:2222,token=api:SECRET,target=https://localhost:3000" \
+  --tunnel "server=tunnel.example.com:2222,token=db:SECRET,target=localhost:5432,host-key=SHA256:..."
+```
+
+Each `--tunnel` value is a comma-separated list of `key=value` pairs:
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `server` | yes | Server SSH address (`host:port`) |
+| `token` | yes | Tunnel token (`tunnel_id:secret`) |
+| `target` | yes | Target service address (`[scheme://]host:port`) |
+| `host-key` | no | Server SSH fingerprint (`SHA256:...`) |
+
+Each tunnel maintains its own independent SSH connection with automatic reconnection. The process exits only when all tunnels stop or a signal is received.
+
+The legacy `--server` / `--token` / `--target` flags still work for a single tunnel and can be combined with `--tunnel` flags.
 
 #### Target Schemes
 

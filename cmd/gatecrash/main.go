@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/charmbracelet/log"
@@ -166,6 +167,15 @@ func runMakeConfig(args []string) {
 	}
 }
 
+// tunnelFlag is a repeatable --tunnel flag value.
+type tunnelFlag []string
+
+func (f *tunnelFlag) String() string { return strings.Join(*f, ", ") }
+func (f *tunnelFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
 func runClient(args []string) {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	serverAddr := fs.String("server", envOrDefault("GATECRASH_SERVER", ""), "server SSH address (host:port)")
@@ -173,13 +183,59 @@ func runClient(args []string) {
 	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
 	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
+	var tunnels tunnelFlag
+	fs.Var(&tunnels, "tunnel", "tunnel spec: server=HOST:PORT,token=ID:SECRET,target=[scheme://]HOST:PORT[,host-key=SHA256:...] (may be repeated for multiple tunnels)")
 	fs.Parse(args)
 
 	setupLogging(*debug)
 
-	if *serverAddr == "" || *token == "" || *target == "" {
+	// Collect all tunnel configs.
+	var configs []client.Config
+
+	// Legacy single-tunnel flags (--server / --token / --target).
+	if *serverAddr != "" || *token != "" || *target != "" {
+		if *serverAddr == "" || *token == "" || *target == "" {
+			fmt.Fprintf(os.Stderr, "gatecrash client %s\n\n", Version)
+			fmt.Fprintf(os.Stderr, "Usage: gatecrash client --server HOST:PORT --token TOKEN --target [SCHEME://]HOST:PORT\n\n")
+			fmt.Fprintf(os.Stderr, "       gatecrash client --tunnel server=HOST:PORT,token=ID:SECRET,target=[SCHEME://]HOST:PORT [--tunnel ...]\n\n")
+			fmt.Fprintf(os.Stderr, "Flags:\n")
+			fs.PrintDefaults()
+			fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
+			fmt.Fprintf(os.Stderr, "  GATECRASH_SERVER    Server SSH address\n")
+			fmt.Fprintf(os.Stderr, "  GATECRASH_TOKEN     Tunnel token\n")
+			fmt.Fprintf(os.Stderr, "  GATECRASH_TARGET    Target service address\n")
+			fmt.Fprintf(os.Stderr, "  GATECRASH_HOST_KEY  Server SSH host key fingerprint\n")
+			os.Exit(1)
+		}
+		targetHost, targetPort, targetTLS, err := parseTarget(*target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid target address %q: %v\n", *target, err)
+			os.Exit(1)
+		}
+		configs = append(configs, client.Config{
+			ServerAddr: *serverAddr,
+			Token:      *token,
+			TargetHost: targetHost,
+			TargetPort: targetPort,
+			HostKey:    *hostKey,
+			TargetTLS:  targetTLS,
+		})
+	}
+
+	// --tunnel flags.
+	for _, spec := range tunnels {
+		cfg, err := parseTunnelSpec(spec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --tunnel %q: %v\n", spec, err)
+			os.Exit(1)
+		}
+		configs = append(configs, cfg)
+	}
+
+	if len(configs) == 0 {
 		fmt.Fprintf(os.Stderr, "gatecrash client %s\n\n", Version)
 		fmt.Fprintf(os.Stderr, "Usage: gatecrash client --server HOST:PORT --token TOKEN --target [SCHEME://]HOST:PORT\n\n")
+		fmt.Fprintf(os.Stderr, "       gatecrash client --tunnel server=HOST:PORT,token=ID:SECRET,target=[SCHEME://]HOST:PORT [--tunnel ...]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
@@ -190,27 +246,7 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
-	// Parse target [scheme://]host:port
-	targetHost, targetPort, targetTLS, err := parseTarget(*target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid target address %q: %v\n", *target, err)
-		os.Exit(1)
-	}
-
-	slog.Info("gatecrash client starting",
-		"version", Version,
-		"server", *serverAddr,
-		"target", *target,
-	)
-
-	cfg := client.Config{
-		ServerAddr: *serverAddr,
-		Token:      *token,
-		TargetHost: targetHost,
-		TargetPort: targetPort,
-		HostKey:    *hostKey,
-		TargetTLS:  targetTLS,
-	}
+	slog.Info("gatecrash client starting", "version", Version, "tunnels", len(configs))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -223,11 +259,70 @@ func runClient(args []string) {
 		cancel()
 	}()
 
-	c := client.New(cfg, Version)
-	if err := c.Run(ctx); err != nil && ctx.Err() == nil {
-		slog.Error("client error", "error", err)
-		os.Exit(1)
+	if len(configs) == 1 {
+		c := client.New(configs[0], Version)
+		if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("client error", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
+
+	// Multiple tunnels: run each concurrently; exit when all finish or ctx done.
+	var wg sync.WaitGroup
+	for _, cfg := range configs {
+		wg.Add(1)
+		go func(cfg client.Config) {
+			defer wg.Done()
+			c := client.New(cfg, Version)
+			if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("tunnel error", "server", cfg.ServerAddr, "error", err)
+			}
+		}(cfg)
+	}
+	wg.Wait()
+}
+
+// parseTunnelSpec parses a --tunnel flag value of the form:
+//
+//	server=HOST:PORT,token=ID:SECRET,target=[scheme://]HOST:PORT[,host-key=SHA256:...]
+func parseTunnelSpec(spec string) (client.Config, error) {
+	parts := strings.Split(spec, ",")
+	kv := make(map[string]string, len(parts))
+	for _, p := range parts {
+		idx := strings.IndexByte(p, '=')
+		if idx < 0 {
+			return client.Config{}, fmt.Errorf("expected key=value, got %q", p)
+		}
+		kv[strings.TrimSpace(p[:idx])] = strings.TrimSpace(p[idx+1:])
+	}
+
+	server, ok := kv["server"]
+	if !ok || server == "" {
+		return client.Config{}, fmt.Errorf("missing server")
+	}
+	tok, ok := kv["token"]
+	if !ok || tok == "" {
+		return client.Config{}, fmt.Errorf("missing token")
+	}
+	tgt, ok := kv["target"]
+	if !ok || tgt == "" {
+		return client.Config{}, fmt.Errorf("missing target")
+	}
+
+	targetHost, targetPort, targetTLS, err := parseTarget(tgt)
+	if err != nil {
+		return client.Config{}, fmt.Errorf("invalid target %q: %w", tgt, err)
+	}
+
+	return client.Config{
+		ServerAddr: server,
+		Token:      tok,
+		TargetHost: targetHost,
+		TargetPort: targetPort,
+		HostKey:    kv["host-key"],
+		TargetTLS:  targetTLS,
+	}, nil
 }
 
 func runUpdate(args []string) {
