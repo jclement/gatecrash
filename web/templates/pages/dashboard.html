@@ -1,13 +1,23 @@
 {{define "content"}}
-<h1 class="title">Dashboard</h1>
-<p class="subtitle">SSH Port: <code>{{.Data.SSHPort}}</code></p>
+<div id="config-error"></div>
 
-<div hx-get="/api/tunnels/html" hx-trigger="every 2s" hx-swap="innerHTML">
-    {{template "tunnel_table" .Data.Tunnels}}
+<div hx-ext="sse" sse-connect="/api/events">
+    <div sse-swap="config-reload" hx-get="/api/tunnels/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+    <div sse-swap="tunnel-connect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-connect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
+    <div sse-swap="tunnel-disconnect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
 </div>
-{{end}}
 
-{{define "tunnel_table"}}
+<div class="level mb-3">
+    <div class="level-left">
+        <div class="level-item"><h2 class="title is-5 mb-0">Tunnels</h2></div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary is-small" onclick="openCreateTunnelModal()">Add Tunnel</button>
+        </div>
+    </div>
+</div>
+
 <table class="table is-fullwidth is-hoverable">
     <thead>
         <tr>
@@ -19,49 +29,425 @@
             <th>Requests</th>
             <th>Traffic</th>
             <th>Active</th>
-            <th>Token</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">
+        {{template "tunnel-rows" .Data.Tunnels}}
+    </tbody>
+</table>
+
+<div class="level mt-5 mb-3">
+    <div class="level-left">
+        <div class="level-item"><h2 class="title is-5 mb-0">Redirects</h2></div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary is-small" onclick="openCreateRedirectModal()">Add Redirect</button>
+        </div>
+    </div>
+</div>
+
+{{if .Data.Redirects}}
+<table class="table is-fullwidth is-hoverable" id="redirect-table">
+    <thead>
+        <tr>
+            <th>From</th>
+            <th>To</th>
+            <th>Preserve Path</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
-        {{range .}}
+        {{range .Data.Redirects}}
         <tr>
+            <td><code>{{.From}}</code></td>
+            <td><code>{{.To}}</code></td>
+            <td>{{if .PreservePath}}<span class="tag is-success is-light">Yes</span>{{else}}<span class="tag is-light">No</span>{{end}}</td>
             <td>
-                {{if .Connected}}
-                <span class="status-dot is-connected"></span>
-                {{else}}
-                <span class="status-dot is-disconnected"></span>
-                {{end}}
+                <div class="buttons are-small">
+                    <button class="button is-outlined" onclick="openEditRedirectModal('{{.From}}', '{{.To}}', {{.PreservePath}})">Edit</button>
+                    <button class="button is-danger is-outlined" onclick="deleteRedirect('{{.From}}')">Delete</button>
+                </div>
             </td>
-            <td><strong>{{.ID}}</strong></td>
-            <td><span class="tag {{if eq .Type "http"}}is-info{{else}}is-warning{{end}} is-light">{{.Type}}</span></td>
-            <td>
-                {{if eq .Type "http"}}
-                    {{range .Hostnames}}<code>{{.}}</code> {{end}}
-                {{else}}
-                    <code>:{{.ListenPort}}</code>
-                {{end}}
-            </td>
-            <td>
-                {{if .Connected}}
-                <span class="is-size-7">{{.ClientAddr}}</span>
-                {{else}}
-                <span class="has-text-grey is-size-7">-</span>
-                {{end}}
-            </td>
-            <td class="has-text-right"><span class="metric-value">{{.Requests}}</span></td>
-            <td class="has-text-right is-size-7">
-                {{.BytesInFmt}} in / {{.BytesOutFmt}} out
-            </td>
-            <td class="has-text-right"><span class="metric-value">{{.ActiveConns}}</span></td>
-            <td>
-                <span class="token-display" onclick="navigator.clipboard.writeText(this.textContent.trim())" title="Click to copy">{{.Token}}</span>
-            </td>
-        </tr>
-        {{else}}
-        <tr>
-            <td colspan="9" class="has-text-centered has-text-grey">No tunnels configured. Edit gatecrash.toml to add tunnels.</td>
         </tr>
         {{end}}
     </tbody>
 </table>
+{{else}}
+<p class="has-text-grey has-text-centered is-size-7">No redirects configured.</p>
+{{end}}
+
+<!-- Secret Modal -->
+<div class="modal" id="secret-modal">
+    <div class="modal-background" onclick="closeModal('secret-modal')"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Tunnel Secret</p>
+            <button class="delete" onclick="closeModal('secret-modal')"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="notification is-warning is-light">
+                Save this information now — the secret will not be shown again.
+            </div>
+            <div class="field">
+                <label class="label">Token</label>
+                <div class="field has-addons">
+                    <div class="control is-expanded">
+                        <input class="input is-family-code" id="secret-token" readonly>
+                    </div>
+                    <div class="control">
+                        <button class="button" onclick="copyField('secret-token', this)">Copy</button>
+                    </div>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Client Command</label>
+                <div class="field has-addons">
+                    <div class="control is-expanded">
+                        <input class="input is-family-code is-size-7" id="secret-command" readonly>
+                    </div>
+                    <div class="control">
+                        <button class="button" onclick="copyField('secret-command', this)">Copy</button>
+                    </div>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Docker Command</label>
+                <div class="field has-addons">
+                    <div class="control is-expanded">
+                        <input class="input is-family-code is-size-7" id="secret-docker" readonly>
+                    </div>
+                    <div class="control">
+                        <button class="button" onclick="copyField('secret-docker', this)">Copy</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button" onclick="closeModal('secret-modal')">Done</button>
+        </footer>
+    </div>
+</div>
+
+<!-- Create/Edit Tunnel Modal -->
+<div class="modal" id="tunnel-modal">
+    <div class="modal-background" onclick="closeModal('tunnel-modal')"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="tunnel-modal-title">Add Tunnel</p>
+            <button class="delete" onclick="closeModal('tunnel-modal')"></button>
+        </header>
+        <section class="modal-card-body">
+            <input type="hidden" id="tunnel-edit-mode" value="create">
+            <div class="field">
+                <label class="label">Tunnel ID</label>
+                <div class="control">
+                    <input class="input" id="tunnel-id" type="text" placeholder="my-app" pattern="[a-z0-9][a-z0-9-]*">
+                </div>
+                <p class="help">Lowercase letters, numbers, and hyphens only.</p>
+            </div>
+            <div class="field">
+                <label class="label">Type</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="tunnel-type" onchange="toggleTunnelTypeFields()">
+                            <option value="http">HTTP</option>
+                            <option value="tcp">TCP</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="field" id="field-hostnames">
+                <label class="label">Hostnames</label>
+                <div class="control">
+                    <input class="input" id="tunnel-hostnames" type="text" placeholder="app.example.com, www.example.com">
+                </div>
+                <p class="help">Comma-separated list of hostnames to route to this tunnel.</p>
+            </div>
+            <div class="field" id="field-listen-port" style="display:none">
+                <label class="label">Listen Port</label>
+                <div class="control">
+                    <input class="input" id="tunnel-listen-port" type="number" min="1" max="65535" placeholder="9000">
+                </div>
+            </div>
+            <div class="field" id="field-preserve-host">
+                <label class="label">
+                    <input type="checkbox" id="tunnel-preserve-host">
+                    Preserve original Host header
+                </label>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" id="tunnel-save-btn" onclick="saveTunnel()">Create</button>
+            <button class="button" onclick="closeModal('tunnel-modal')">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<!-- Create/Edit Redirect Modal -->
+<div class="modal" id="redirect-modal">
+    <div class="modal-background" onclick="closeModal('redirect-modal')"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="redirect-modal-title">Add Redirect</p>
+            <button class="delete" onclick="closeModal('redirect-modal')"></button>
+        </header>
+        <section class="modal-card-body">
+            <input type="hidden" id="redirect-edit-mode" value="create">
+            <input type="hidden" id="redirect-original-from" value="">
+            <div class="field">
+                <label class="label">From Hostname</label>
+                <div class="control">
+                    <input class="input" id="redirect-from" type="text" placeholder="www.example.com">
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">To URL</label>
+                <div class="control">
+                    <input class="input" id="redirect-to" type="text" placeholder="https://example.com">
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="redirect-preserve-path" checked>
+                    Preserve path
+                </label>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" id="redirect-save-btn" onclick="saveRedirect()">Create</button>
+            <button class="button" onclick="closeModal('redirect-modal')">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal" id="delete-modal">
+    <div class="modal-background" onclick="closeModal('delete-modal')"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Confirm Delete</p>
+            <button class="delete" onclick="closeModal('delete-modal')"></button>
+        </header>
+        <section class="modal-card-body">
+            <p id="delete-message"></p>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-danger" id="delete-confirm-btn">Delete</button>
+            <button class="button" onclick="closeModal('delete-modal')">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<script>
+function closeModal(id) {
+    document.getElementById(id).classList.remove('is-active');
+}
+
+function copyField(id, btn) {
+    const el = document.getElementById(id);
+    navigator.clipboard.writeText(el.value);
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('is-success');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('is-success'); }, 2000);
+}
+
+function showSecret(data) {
+    document.getElementById('secret-token').value = data.token;
+    document.getElementById('secret-command').value = data.command;
+    document.getElementById('secret-docker').value = data.docker;
+    document.getElementById('secret-modal').classList.add('is-active');
+}
+
+async function regenerateSecret(tunnelId) {
+    if (!confirm('Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.')) return;
+    const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
+    if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
+    showSecret(await resp.json());
+}
+
+// Tunnel CRUD
+function toggleTunnelTypeFields() {
+    const type = document.getElementById('tunnel-type').value;
+    document.getElementById('field-hostnames').style.display = type === 'http' ? '' : 'none';
+    document.getElementById('field-listen-port').style.display = type === 'tcp' ? '' : 'none';
+    document.getElementById('field-preserve-host').style.display = type === 'http' ? '' : 'none';
+}
+
+function openCreateTunnelModal() {
+    document.getElementById('tunnel-modal-title').textContent = 'Add Tunnel';
+    document.getElementById('tunnel-save-btn').textContent = 'Create';
+    document.getElementById('tunnel-edit-mode').value = 'create';
+    document.getElementById('tunnel-id').value = '';
+    document.getElementById('tunnel-id').disabled = false;
+    document.getElementById('tunnel-type').value = 'http';
+    document.getElementById('tunnel-hostnames').value = '';
+    document.getElementById('tunnel-listen-port').value = '';
+    document.getElementById('tunnel-preserve-host').checked = false;
+    toggleTunnelTypeFields();
+    document.getElementById('tunnel-modal').classList.add('is-active');
+}
+
+function openEditTunnelModal(id, type, hostnames, listenPort, preserveHost) {
+    document.getElementById('tunnel-modal-title').textContent = 'Edit Tunnel';
+    document.getElementById('tunnel-save-btn').textContent = 'Save';
+    document.getElementById('tunnel-edit-mode').value = 'edit';
+    document.getElementById('tunnel-id').value = id;
+    document.getElementById('tunnel-id').disabled = true;
+    document.getElementById('tunnel-type').value = type;
+    document.getElementById('tunnel-hostnames').value = hostnames;
+    document.getElementById('tunnel-listen-port').value = listenPort || '';
+    document.getElementById('tunnel-preserve-host').checked = preserveHost;
+    toggleTunnelTypeFields();
+    document.getElementById('tunnel-modal').classList.add('is-active');
+}
+
+async function saveTunnel() {
+    const mode = document.getElementById('tunnel-edit-mode').value;
+    const id = document.getElementById('tunnel-id').value.trim();
+    const type = document.getElementById('tunnel-type').value;
+    const hostnames = document.getElementById('tunnel-hostnames').value.trim();
+    const listenPort = document.getElementById('tunnel-listen-port').value.trim();
+    const preserveHost = document.getElementById('tunnel-preserve-host').checked;
+
+    const body = { id, type };
+    if (type === 'http') {
+        body.hostnames = hostnames.split(',').map(h => h.trim()).filter(h => h);
+        body.preserve_host = preserveHost;
+    } else {
+        body.listen_port = parseInt(listenPort, 10) || 0;
+    }
+
+    let url, method;
+    if (mode === 'create') {
+        url = '/api/tunnels';
+        method = 'POST';
+    } else {
+        url = '/api/tunnels/' + id;
+        method = 'PUT';
+    }
+
+    const resp = await fetch(url, {
+        method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        alert('Error: ' + await resp.text());
+        return;
+    }
+
+    closeModal('tunnel-modal');
+
+    if (mode === 'create') {
+        const data = await resp.json();
+        if (data.token) {
+            showSecret(data);
+        }
+    }
+}
+
+function deleteTunnel(id) {
+    document.getElementById('delete-message').textContent = 'Delete tunnel "' + id + '"? Connected clients will be disconnected.';
+    document.getElementById('delete-confirm-btn').onclick = async () => {
+        const resp = await fetch('/api/tunnels/' + id, {method: 'DELETE'});
+        if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
+        closeModal('delete-modal');
+    };
+    document.getElementById('delete-modal').classList.add('is-active');
+}
+
+// Redirect CRUD
+function openCreateRedirectModal() {
+    document.getElementById('redirect-modal-title').textContent = 'Add Redirect';
+    document.getElementById('redirect-save-btn').textContent = 'Create';
+    document.getElementById('redirect-edit-mode').value = 'create';
+    document.getElementById('redirect-original-from').value = '';
+    document.getElementById('redirect-from').value = '';
+    document.getElementById('redirect-from').disabled = false;
+    document.getElementById('redirect-to').value = '';
+    document.getElementById('redirect-preserve-path').checked = true;
+    document.getElementById('redirect-modal').classList.add('is-active');
+}
+
+function openEditRedirectModal(from, to, preservePath) {
+    document.getElementById('redirect-modal-title').textContent = 'Edit Redirect';
+    document.getElementById('redirect-save-btn').textContent = 'Save';
+    document.getElementById('redirect-edit-mode').value = 'edit';
+    document.getElementById('redirect-original-from').value = from;
+    document.getElementById('redirect-from').value = from;
+    document.getElementById('redirect-from').disabled = true;
+    document.getElementById('redirect-to').value = to;
+    document.getElementById('redirect-preserve-path').checked = preservePath;
+    document.getElementById('redirect-modal').classList.add('is-active');
+}
+
+async function saveRedirect() {
+    const mode = document.getElementById('redirect-edit-mode').value;
+    const from = document.getElementById('redirect-from').value.trim();
+    const to = document.getElementById('redirect-to').value.trim();
+    const preservePath = document.getElementById('redirect-preserve-path').checked;
+    const originalFrom = document.getElementById('redirect-original-from').value;
+
+    const body = { from, to, preserve_path: preservePath };
+
+    let url, method;
+    if (mode === 'create') {
+        url = '/api/redirects';
+        method = 'POST';
+    } else {
+        url = '/api/redirects/' + encodeURIComponent(originalFrom);
+        method = 'PUT';
+    }
+
+    const resp = await fetch(url, {
+        method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        alert('Error: ' + await resp.text());
+        return;
+    }
+    closeModal('redirect-modal');
+}
+
+function deleteRedirect(from) {
+    document.getElementById('delete-message').textContent = 'Delete redirect from "' + from + '"?';
+    document.getElementById('delete-confirm-btn').onclick = async () => {
+        const resp = await fetch('/api/redirects/' + encodeURIComponent(from), {method: 'DELETE'});
+        if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
+        closeModal('delete-modal');
+    };
+    document.getElementById('delete-modal').classList.add('is-active');
+}
+</script>
+{{end}}
+
+{{define "tunnel-rows"}}
+{{if .}}
+{{range .}}
+<tr data-id="{{.ID}}" data-type="{{.Type}}" data-hostnames="{{.HostnamesCSV}}" data-listen-port="{{.ListenPort}}" data-preserve-host="{{.PreserveHost}}">
+    <td><span class="status-dot {{if .Connected}}is-connected{{else}}is-disconnected{{end}}"></span></td>
+    <td><strong>{{.ID}}</strong></td>
+    <td><span class="tag {{if eq .Type "http"}}is-info{{else}}is-warning{{end}} is-light">{{.Type}}</span></td>
+    <td>{{if eq .Type "http"}}{{range .Hostnames}}<code>{{.}}</code> {{end}}{{else}}<code>:{{.ListenPort}}</code>{{end}}</td>
+    <td>{{if .Connected}}<span class="is-size-7">{{.ClientAddr}}</span>{{else}}<span class="has-text-grey is-size-7">-</span>{{end}}</td>
+    <td class="has-text-right"><span class="metric-value">{{.Requests}}</span></td>
+    <td class="has-text-right is-size-7">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
+    <td class="has-text-right"><span class="metric-value">{{.ActiveConns}}</span></td>
+    <td>
+        <div class="buttons are-small">
+            <button class="button is-outlined" onclick="openEditTunnelModal('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}})">Edit</button>
+            <button class="button is-outlined" onclick="regenerateSecret('{{.ID}}')">New Secret</button>
+            <button class="button is-danger is-outlined" onclick="deleteTunnel('{{.ID}}')">Delete</button>
+        </div>
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="9" class="has-text-centered has-text-grey">No tunnels configured. Click "Add Tunnel" to create one.</td></tr>
+{{end}}
 {{end}}

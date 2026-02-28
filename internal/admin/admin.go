@@ -7,22 +7,27 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // TunnelView is the template data for a single tunnel row.
 type TunnelView struct {
-	ID          string
-	Type        string
-	Hostnames   []string
-	ListenPort  int
-	Connected   bool
-	ClientAddr  string
-	Requests    int64
-	BytesIn     int64
-	BytesOut    int64
-	ActiveConns int32
-	Token       string
+	ID           string
+	Type         string
+	Hostnames    []string
+	ListenPort   int
+	PreserveHost bool
+	Connected    bool
+	ClientAddr   string
+	Requests     int64
+	BytesIn      int64
+	BytesOut     int64
+	ActiveConns  int32
+	Token        string
 }
+
+// HostnamesCSV returns hostnames as a comma-separated string.
+func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
 
 // BytesInFmt formats bytes in as a human-readable string.
 func (t TunnelView) BytesInFmt() string { return formatBytes(t.BytesIn) }
@@ -174,6 +179,43 @@ func (h *Handlers) Render(w http.ResponseWriter, page string, data *PageData) {
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, "base", data); err != nil {
 		slog.Error("template exec failed", "page", page, "error", err)
+		http.Error(w, "Internal server error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
+}
+
+// RenderPartial renders a named template block without the base layout.
+func (h *Handlers) RenderPartial(w http.ResponseWriter, page, block string, data any) {
+	var tmpl *template.Template
+	var err error
+
+	if h.isDev {
+		base, readErr := fs.ReadFile(h.tmplFS, "base.html")
+		if readErr != nil {
+			slog.Error("template read failed", "error", readErr)
+			http.Error(w, "Internal server error", 500)
+			return
+		}
+		h.baseHTML = string(base)
+		tmpl, err = h.compilePage(page)
+	} else {
+		tmpl = h.pages[page]
+		if tmpl == nil {
+			err = fmt.Errorf("unknown page template: %s", page)
+		}
+	}
+
+	if err != nil {
+		slog.Error("template compile failed", "page", page, "error", err)
+		http.Error(w, "Internal server error", 500)
+		return
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, block, data); err != nil {
+		slog.Error("partial exec failed", "page", page, "block", block, "error", err)
 		http.Error(w, "Internal server error", 500)
 		return
 	}

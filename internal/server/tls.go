@@ -129,12 +129,12 @@ func (s *Server) onDemandDecision(_ context.Context, name string) error {
 
 	for _, h := range configured {
 		if h == name {
-			slog.Info("on-demand TLS: issuing certificate", "hostname", name)
+			slog.Debug("on-demand TLS: hostname allowed", "hostname", name)
 			return nil
 		}
 	}
 
-	slog.Warn("on-demand TLS: rejected unconfigured hostname", "hostname", name)
+	slog.Warn("on-demand TLS: hostname not configured, rejecting", "hostname", name)
 	return fmt.Errorf("hostname %q not configured", name)
 }
 

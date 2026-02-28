@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -254,7 +256,13 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
 	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuth(s.handleAPITunnels))
 	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAuth(s.handleAPITunnelsHTML))
+	s.adminMux.HandleFunc("POST /api/tunnels", s.requireAuth(s.handleCreateTunnel))
+	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireAuth(s.handleEditTunnel))
+	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireAuth(s.handleDeleteTunnel))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireAuth(s.handleRegenerateSecret))
+	s.adminMux.HandleFunc("POST /api/redirects", s.requireAuth(s.handleCreateRedirect))
+	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireAuth(s.handleEditRedirect))
+	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireAuth(s.handleDeleteRedirect))
 	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
 }
 
@@ -354,218 +362,38 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// RedirectView is the template data for a single redirect row.
+type RedirectView struct {
+	From         string
+	To           string
+	PreservePath bool
+}
+
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.buildTunnelViews()
+	redirects := make([]RedirectView, len(s.cfg.Redirect))
+	for i, r := range s.cfg.Redirect {
+		redirects[i] = RedirectView{From: r.From, To: r.To, PreservePath: r.PreservePath}
+	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gatecrash</title>
-<link rel="icon" type="image/png" href="/static/favicon.png">
-<link rel="stylesheet" href="/static/css/bulma.min.css">
-<link rel="stylesheet" href="/static/css/app.css">
-<script src="/static/js/htmx.min.js"></script>
-<script src="/static/js/htmx-sse.js"></script>
-</head>
-<body>
-<nav class="navbar is-spaced">
-  <div class="container">
-    <div class="navbar-brand">
-      <a class="navbar-item" href="/">
-        <span class="has-text-weight-bold is-size-5">Gatecrash</span>
-      </a>
-    </div>
-    <div class="navbar-menu">
-      <div class="navbar-start">
-        <a class="navbar-item is-active" href="/">Dashboard</a>
-        <a class="navbar-item" href="/passkeys">Passkeys</a>
-      </div>
-      <div class="navbar-end">
-        <div class="navbar-item"><span class="tag is-light">v%s</span></div>
-        <div class="navbar-item"><span class="tag is-light">SSH :%d</span></div>
-        <div class="navbar-item">
-          <form method="POST" action="/logout">
-            <button type="submit" class="button is-small is-light">Logout</button>
-          </form>
-        </div>
-      </div>
-    </div>
-  </div>
-</nav>
-<main class="section">
-<div class="container">
-  <div id="config-error"></div>
-  <div hx-ext="sse" sse-connect="/api/events">
-    <div sse-swap="config-reload" hx-get="/api/tunnels/html" hx-trigger="sse:config-reload" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-connect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-connect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-    <div sse-swap="tunnel-disconnect" hx-get="/api/tunnels/html" hx-trigger="sse:tunnel-disconnect" hx-swap="innerHTML" hx-target="#tunnel-table-body"></div>
-  </div>
-  <table class="table is-fullwidth is-hoverable">
-    <thead>
-      <tr>
-        <th>Status</th>
-        <th>Tunnel</th>
-        <th>Type</th>
-        <th>Routes</th>
-        <th>Client</th>
-        <th>Requests</th>
-        <th>Traffic</th>
-        <th>Active</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody id="tunnel-table-body" hx-get="/api/tunnels/html" hx-trigger="every 5s" hx-swap="innerHTML">`, s.version, s.cfg.Server.SSHPort)
-
-	s.writeTunnelRows(w, tunnels)
-
-	fmt.Fprintf(w, `
-    </tbody>
-  </table>
-</div>
-</main>
-
-<!-- Secret Modal -->
-<div class="modal" id="secret-modal">
-  <div class="modal-background" onclick="closeSecretModal()"></div>
-  <div class="modal-card">
-    <header class="modal-card-head">
-      <p class="modal-card-title">New Tunnel Secret</p>
-      <button class="delete" onclick="closeSecretModal()"></button>
-    </header>
-    <section class="modal-card-body">
-      <div class="notification is-warning is-light">
-        Save this information now — the secret will not be shown again.
-      </div>
-      <div class="field">
-        <label class="label">Token</label>
-        <div class="control">
-          <div class="field has-addons">
-            <div class="control is-expanded">
-              <input class="input is-family-code" id="secret-token" readonly>
-            </div>
-            <div class="control">
-              <button class="button" onclick="copyField('secret-token', this)">Copy</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="field">
-        <label class="label">Client Command</label>
-        <div class="control">
-          <div class="field has-addons">
-            <div class="control is-expanded">
-              <input class="input is-family-code is-size-7" id="secret-command" readonly>
-            </div>
-            <div class="control">
-              <button class="button" onclick="copyField('secret-command', this)">Copy</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="field">
-        <label class="label">Docker Command</label>
-        <div class="control">
-          <div class="field has-addons">
-            <div class="control is-expanded">
-              <input class="input is-family-code is-size-7" id="secret-docker" readonly>
-            </div>
-            <div class="control">
-              <button class="button" onclick="copyField('secret-docker', this)">Copy</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-    <footer class="modal-card-foot">
-      <button class="button" onclick="closeSecretModal()">Done</button>
-    </footer>
-  </div>
-</div>
-
-<footer class="footer" style="padding:0.75rem">
-  <div class="content has-text-centered">
-    <p class="is-size-7 has-text-grey">Gatecrash v%s</p>
-  </div>
-</footer>
-
-<script>
-async function regenerateSecret(tunnelId) {
-  if (!confirm('Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.')) return;
-  const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', {method: 'POST'});
-  if (!resp.ok) { alert('Failed: ' + await resp.text()); return; }
-  const data = await resp.json();
-  document.getElementById('secret-token').value = data.token;
-  document.getElementById('secret-command').value = data.command;
-  document.getElementById('secret-docker').value = data.docker;
-  document.getElementById('secret-modal').classList.add('is-active');
-}
-
-function closeSecretModal() {
-  document.getElementById('secret-modal').classList.remove('is-active');
-}
-
-function copyField(id, btn) {
-  const el = document.getElementById(id);
-  navigator.clipboard.writeText(el.value);
-  const orig = btn.textContent;
-  btn.textContent = 'Copied!';
-  btn.classList.add('is-success');
-  setTimeout(() => { btn.textContent = orig; btn.classList.remove('is-success'); }, 2000);
-}
-</script>
-</body>
-</html>`, s.version)
+	s.adminH.Render(w, "pages/dashboard.html", &admin.PageData{
+		Title:  "Dashboard",
+		Active: "dashboard",
+		Data: struct {
+			Tunnels   []admin.TunnelView
+			Redirects []RedirectView
+			SSHPort   int
+		}{
+			Tunnels:   tunnels,
+			Redirects: redirects,
+			SSHPort:   s.cfg.Server.SSHPort,
+		},
+	})
 }
 
 func (s *Server) handleAPITunnelsHTML(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.buildTunnelViews()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.writeTunnelRows(w, tunnels)
-}
-
-func (s *Server) writeTunnelRows(w http.ResponseWriter, tunnels []admin.TunnelView) {
-	if len(tunnels) == 0 {
-		fmt.Fprint(w, `<tr><td colspan="9" class="has-text-centered has-text-grey">No tunnels configured. Edit gatecrash.toml to add tunnels.</td></tr>`)
-		return
-	}
-	for _, t := range tunnels {
-		statusClass := "is-disconnected"
-		if t.Connected {
-			statusClass = "is-connected"
-		}
-		typeClass := "is-warning"
-		if t.Type == "http" {
-			typeClass = "is-info"
-		}
-		routes := ""
-		if t.Type == "http" {
-			for _, h := range t.Hostnames {
-				routes += fmt.Sprintf(`<code>%s</code> `, h)
-			}
-		} else {
-			routes = fmt.Sprintf(`<code>:%d</code>`, t.ListenPort)
-		}
-		clientInfo := `<span class="has-text-grey is-size-7">-</span>`
-		if t.Connected {
-			clientInfo = fmt.Sprintf(`<span class="is-size-7">%s</span>`, t.ClientAddr)
-		}
-
-		fmt.Fprintf(w, `<tr>
-  <td><span class="status-dot %s"></span></td>
-  <td><strong>%s</strong></td>
-  <td><span class="tag %s is-light">%s</span></td>
-  <td>%s</td>
-  <td>%s</td>
-  <td class="has-text-right"><span class="metric-value">%d</span></td>
-  <td class="has-text-right is-size-7">%s in / %s out</td>
-  <td class="has-text-right"><span class="metric-value">%d</span></td>
-  <td><button class="button is-small is-outlined" onclick="regenerateSecret('%s')">New Secret</button></td>
-</tr>`, statusClass, t.ID, typeClass, t.Type, routes, clientInfo,
-			t.Requests, t.BytesInFmt(), t.BytesOutFmt(), t.ActiveConns, t.ID)
-	}
+	s.adminH.RenderPartial(w, "pages/dashboard.html", "tunnel-rows", tunnels)
 }
 
 func (s *Server) buildTunnelViews() []admin.TunnelView {
@@ -573,19 +401,356 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 	views := make([]admin.TunnelView, len(tunnels))
 	for i, t := range tunnels {
 		views[i] = admin.TunnelView{
-			ID:          t.ID,
-			Type:        t.Type,
-			Hostnames:   t.Hostnames,
-			ListenPort:  t.ListenPort,
-			Connected:   t.IsConnected(),
-			ClientAddr:  t.ClientAddr(),
-			Requests:    t.Metrics.RequestCount.Load(),
-			BytesIn:     t.Metrics.BytesIn.Load(),
-			BytesOut:    t.Metrics.BytesOut.Load(),
-			ActiveConns: int32(t.Metrics.ActiveConns.Load()),
+			ID:           t.ID,
+			Type:         t.Type,
+			Hostnames:    t.Hostnames,
+			ListenPort:   t.ListenPort,
+			PreserveHost: t.PreserveHost,
+			Connected:    t.IsConnected(),
+			ClientAddr:   t.ClientAddr(),
+			Requests:     t.Metrics.RequestCount.Load(),
+			BytesIn:      t.Metrics.BytesIn.Load(),
+			BytesOut:     t.Metrics.BytesOut.Load(),
+			ActiveConns:  int32(t.Metrics.ActiveConns.Load()),
 		}
 	}
 	return views
+}
+
+// --- Tunnel CRUD ---
+
+var tunnelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+type tunnelRequest struct {
+	ID           string   `json:"id"`
+	Type         string   `json:"type"`
+	Hostnames    []string `json:"hostnames"`
+	ListenPort   int      `json:"listen_port"`
+	PreserveHost bool     `json:"preserve_host"`
+}
+
+func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
+	if req.ID == "" || !tunnelIDPattern.MatchString(req.ID) {
+		return fmt.Errorf("invalid tunnel ID: must be lowercase alphanumeric with hyphens")
+	}
+	if req.Type != "http" && req.Type != "tcp" {
+		return fmt.Errorf("type must be \"http\" or \"tcp\"")
+	}
+	if req.Type == "http" && len(req.Hostnames) == 0 {
+		return fmt.Errorf("HTTP tunnels require at least one hostname")
+	}
+	if req.Type == "tcp" && req.ListenPort <= 0 {
+		return fmt.Errorf("TCP tunnels require a listen_port > 0")
+	}
+
+	// Check for conflicts
+	for _, t := range s.cfg.Tunnel {
+		if t.ID == excludeID {
+			continue
+		}
+		if t.ID == req.ID && excludeID == "" {
+			return fmt.Errorf("tunnel ID %q already exists", req.ID)
+		}
+		if req.Type == "http" {
+			for _, h := range req.Hostnames {
+				for _, th := range t.Hostnames {
+					if strings.EqualFold(h, th) {
+						return fmt.Errorf("hostname %q conflicts with tunnel %q", h, t.ID)
+					}
+				}
+			}
+		}
+		if req.Type == "tcp" && t.Type == "tcp" && req.ListenPort == t.ListenPort {
+			return fmt.Errorf("port %d conflicts with tunnel %q", req.ListenPort, t.ID)
+		}
+	}
+
+	// Check hostname conflicts with admin_host
+	if req.Type == "http" && s.cfg.Server.AdminHost != "" {
+		for _, h := range req.Hostnames {
+			if strings.EqualFold(h, s.cfg.Server.AdminHost) {
+				return fmt.Errorf("hostname %q conflicts with admin_host", h)
+			}
+		}
+	}
+
+	// Check port conflicts with SSH port
+	if req.Type == "tcp" && req.ListenPort == s.cfg.Server.SSHPort {
+		return fmt.Errorf("port %d conflicts with SSH port", req.ListenPort)
+	}
+
+	return nil
+}
+
+func (s *Server) secretResponse(tunnelID, plaintext string) map[string]string {
+	tok := token.FormatToken(tunnelID, plaintext)
+	sshAddr := fmt.Sprintf("<server>:%d", s.cfg.Server.SSHPort)
+	return map[string]string{
+		"token":   tok,
+		"command": fmt.Sprintf("gatecrash client --server %s --token %s --target 127.0.0.1:8000", sshAddr, tok),
+		"docker":  fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, tok),
+	}
+}
+
+func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
+	var req tunnelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.validateTunnel(req, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	plaintext, hash, err := token.GenerateSecret()
+	if err != nil {
+		slog.Error("failed to generate secret", "error", err)
+		http.Error(w, "failed to generate secret", http.StatusInternalServerError)
+		return
+	}
+
+	s.cfg.Tunnel = append(s.cfg.Tunnel, config.Tunnel{
+		ID:           req.ID,
+		Type:         req.Type,
+		Hostnames:    req.Hostnames,
+		ListenPort:   req.ListenPort,
+		SecretHash:   hash,
+		PreserveHost: req.PreserveHost,
+	})
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("tunnel created", "id", req.ID, "type", req.Type)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.secretResponse(req.ID, plaintext))
+}
+
+func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
+	tunnelID := r.PathValue("id")
+	if tunnelID == "" {
+		http.Error(w, "missing tunnel ID", http.StatusBadRequest)
+		return
+	}
+
+	var req tunnelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	req.ID = tunnelID
+
+	if err := s.validateTunnel(req, tunnelID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	found := false
+	for i := range s.cfg.Tunnel {
+		if s.cfg.Tunnel[i].ID == tunnelID {
+			s.cfg.Tunnel[i].Type = req.Type
+			s.cfg.Tunnel[i].Hostnames = req.Hostnames
+			s.cfg.Tunnel[i].ListenPort = req.ListenPort
+			s.cfg.Tunnel[i].PreserveHost = req.PreserveHost
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("tunnel updated", "id", tunnelID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
+	tunnelID := r.PathValue("id")
+	if tunnelID == "" {
+		http.Error(w, "missing tunnel ID", http.StatusBadRequest)
+		return
+	}
+
+	found := false
+	for i := range s.cfg.Tunnel {
+		if s.cfg.Tunnel[i].ID == tunnelID {
+			s.cfg.Tunnel = append(s.cfg.Tunnel[:i], s.cfg.Tunnel[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("tunnel deleted", "id", tunnelID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// --- Redirect CRUD ---
+
+type redirectRequest struct {
+	From         string `json:"from"`
+	To           string `json:"to"`
+	PreservePath bool   `json:"preserve_path"`
+}
+
+func (s *Server) validateRedirect(req redirectRequest, excludeFrom string) error {
+	if req.From == "" {
+		return fmt.Errorf("from hostname is required")
+	}
+	if req.To == "" {
+		return fmt.Errorf("to URL is required")
+	}
+
+	// Check for conflicts with admin_host
+	if strings.EqualFold(req.From, s.cfg.Server.AdminHost) {
+		return fmt.Errorf("hostname %q conflicts with admin_host", req.From)
+	}
+
+	// Check for conflicts with tunnel hostnames
+	for _, t := range s.cfg.Tunnel {
+		for _, h := range t.Hostnames {
+			if strings.EqualFold(req.From, h) {
+				return fmt.Errorf("hostname %q conflicts with tunnel %q", req.From, t.ID)
+			}
+		}
+	}
+
+	// Check for duplicate redirects
+	for _, r := range s.cfg.Redirect {
+		if r.From == excludeFrom {
+			continue
+		}
+		if strings.EqualFold(r.From, req.From) {
+			return fmt.Errorf("redirect from %q already exists", req.From)
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) handleCreateRedirect(w http.ResponseWriter, r *http.Request) {
+	var req redirectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.validateRedirect(req, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.cfg.Redirect = append(s.cfg.Redirect, config.Redirect{
+		From:         req.From,
+		To:           req.To,
+		PreservePath: req.PreservePath,
+	})
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("redirect created", "from", req.From, "to", req.To)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleEditRedirect(w http.ResponseWriter, r *http.Request) {
+	fromHost := r.PathValue("from")
+	if fromHost == "" {
+		http.Error(w, "missing redirect from", http.StatusBadRequest)
+		return
+	}
+
+	var req redirectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	req.From = fromHost
+
+	if err := s.validateRedirect(req, fromHost); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	found := false
+	for i := range s.cfg.Redirect {
+		if s.cfg.Redirect[i].From == fromHost {
+			s.cfg.Redirect[i].To = req.To
+			s.cfg.Redirect[i].PreservePath = req.PreservePath
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "redirect not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("redirect updated", "from", fromHost)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleDeleteRedirect(w http.ResponseWriter, r *http.Request) {
+	fromHost := r.PathValue("from")
+	if fromHost == "" {
+		http.Error(w, "missing redirect from", http.StatusBadRequest)
+		return
+	}
+
+	found := false
+	for i := range s.cfg.Redirect {
+		if s.cfg.Redirect[i].From == fromHost {
+			s.cfg.Redirect = append(s.cfg.Redirect[:i], s.cfg.Redirect[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "redirect not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.cfg.Save(s.configPath); err != nil {
+		slog.Error("failed to save config", "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("redirect deleted", "from", fromHost)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) {
@@ -616,17 +781,9 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tok := token.FormatToken(tunnelID, plaintext)
-	sshAddr := fmt.Sprintf("<server>:%d", s.cfg.Server.SSHPort)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"token":   tok,
-		"command": fmt.Sprintf("gatecrash client --server %s --token %s --target 127.0.0.1:8000", sshAddr, tok),
-		"docker":  fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, tok),
-	})
-
 	slog.Info("regenerated tunnel secret", "tunnel", tunnelID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.secretResponse(tunnelID, plaintext))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
