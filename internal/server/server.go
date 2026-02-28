@@ -488,7 +488,8 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			PreserveHost:   t.PreserveHost,
 			TLSPassthrough: t.TLSPassthrough,
 			Connected:      t.IsConnected(),
-			ClientAddr:     t.ClientAddr(),
+			ClientCount:    t.ClientCount(),
+			ClientAddrs:    t.ClientAddrs(),
 			Requests:       t.Metrics.RequestCount.Load(),
 			BytesIn:        t.Metrics.BytesIn.Load(),
 			BytesOut:       t.Metrics.BytesOut.Load(),
@@ -923,13 +924,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.registry.AllTunnels()
 	type tunnelJSON struct {
-		ID          string `json:"id"`
-		Type        string `json:"type"`
-		Connected   bool   `json:"connected"`
-		ActiveConns int32  `json:"active_conns"`
-		BytesIn     int64  `json:"bytes_in"`
-		BytesOut    int64  `json:"bytes_out"`
-		Requests    int64  `json:"requests"`
+		ID          string   `json:"id"`
+		Type        string   `json:"type"`
+		Connected   bool     `json:"connected"`
+		ClientCount int      `json:"client_count"`
+		ClientAddrs []string `json:"client_addrs,omitempty"`
+		ActiveConns int32    `json:"active_conns"`
+		BytesIn     int64    `json:"bytes_in"`
+		BytesOut    int64    `json:"bytes_out"`
+		Requests    int64    `json:"requests"`
 	}
 	result := make([]tunnelJSON, len(tunnels))
 	for i, t := range tunnels {
@@ -937,6 +940,8 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 			ID:          t.ID,
 			Type:        t.Type,
 			Connected:   t.IsConnected(),
+			ClientCount: t.ClientCount(),
+			ClientAddrs: t.ClientAddrs(),
 			ActiveConns: t.Metrics.ActiveConns.Load(),
 			BytesIn:     t.Metrics.BytesIn.Load(),
 			BytesOut:    t.Metrics.BytesOut.Load(),

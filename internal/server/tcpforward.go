@@ -103,7 +103,7 @@ func (s *Server) reconcileTCPListeners() {
 func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	defer conn.Close()
 
-	sshConn := tunnel.SSHConn()
+	sshConn := tunnel.PickConn()
 	if sshConn == nil {
 		slog.Debug("TCP forward: tunnel offline", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
 		return

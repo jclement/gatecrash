@@ -17,7 +17,7 @@ import (
 
 // proxyHTTP forwards an HTTP request through the SSH tunnel to the client.
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *TunnelState) {
-	conn := tunnel.SSHConn()
+	conn := tunnel.PickConn()
 	if conn == nil {
 		http.Error(w, "tunnel offline", http.StatusBadGateway)
 		return

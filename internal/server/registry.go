@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand/v2"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,12 @@ type TunnelMetrics struct {
 	LastRequestAt atomic.Value // time.Time
 }
 
+// clientConn represents one client connection in the pool.
+type clientConn struct {
+	addr        string
+	connectedAt time.Time
+}
+
 // TunnelState holds the runtime state for a configured tunnel.
 type TunnelState struct {
 	ID             string
@@ -27,53 +34,72 @@ type TunnelState struct {
 	PreserveHost   bool
 	TLSPassthrough bool
 
-	mu          sync.RWMutex
-	connected   bool
-	sshConn     ssh.Conn
-	clientAddr  string
-	connectedAt time.Time
-	Metrics     TunnelMetrics
+	mu      sync.RWMutex
+	clients map[ssh.Conn]clientConn
+	Metrics TunnelMetrics
 }
 
 func (t *TunnelState) IsConnected() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.connected
+	return len(t.clients) > 0
 }
 
-func (t *TunnelState) SSHConn() ssh.Conn {
+// PickConn returns a randomly selected SSH connection, or nil if none.
+func (t *TunnelState) PickConn() ssh.Conn {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.sshConn
+	n := len(t.clients)
+	if n == 0 {
+		return nil
+	}
+	idx := rand.IntN(n)
+	i := 0
+	for conn := range t.clients {
+		if i == idx {
+			return conn
+		}
+		i++
+	}
+	return nil
 }
 
-func (t *TunnelState) SetConnected(conn ssh.Conn, addr string) {
+// AddClient registers a new client connection.
+func (t *TunnelState) AddClient(conn ssh.Conn, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.connected = true
-	t.sshConn = conn
-	t.clientAddr = addr
-	t.connectedAt = time.Now()
+	if t.clients == nil {
+		t.clients = make(map[ssh.Conn]clientConn)
+	}
+	t.clients[conn] = clientConn{
+		addr:        addr,
+		connectedAt: time.Now(),
+	}
 }
 
-func (t *TunnelState) SetDisconnected() {
+// RemoveClient removes a specific client connection.
+func (t *TunnelState) RemoveClient(conn ssh.Conn) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.connected = false
-	t.sshConn = nil
-	t.clientAddr = ""
+	delete(t.clients, conn)
 }
 
-func (t *TunnelState) ClientAddr() string {
+// ClientCount returns the number of connected clients.
+func (t *TunnelState) ClientCount() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.clientAddr
+	return len(t.clients)
 }
 
-func (t *TunnelState) ConnectedAt() time.Time {
+// ClientAddrs returns all connected client addresses.
+func (t *TunnelState) ClientAddrs() []string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.connectedAt
+	addrs := make([]string, 0, len(t.clients))
+	for _, c := range t.clients {
+		addrs = append(addrs, c.addr)
+	}
+	return addrs
 }
 
 // Registry holds all configured tunnels and provides lookups.

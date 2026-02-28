@@ -89,38 +89,68 @@ func TestRegistry_AllTunnels(t *testing.T) {
 	}
 }
 
-func TestTunnelState_ConnectionState(t *testing.T) {
+func TestTunnelState_MultiClient(t *testing.T) {
 	tunnel := &TunnelState{ID: "test", Type: "http"}
 
 	// Initially disconnected
 	if tunnel.IsConnected() {
 		t.Fatal("should be disconnected initially")
 	}
-	if tunnel.ClientAddr() != "" {
-		t.Fatal("client addr should be empty")
+	if tunnel.ClientCount() != 0 {
+		t.Fatal("client count should be 0")
 	}
 
-	// Connect (using nil conn for test - just testing state management)
-	tunnel.SetConnected(nil, "192.168.1.100:54321")
+	var conn1 fakeConn = 1
+	var conn2 fakeConn = 2
+
+	// Add first client
+	tunnel.AddClient(conn1, "192.168.1.100:54321")
 
 	if !tunnel.IsConnected() {
-		t.Fatal("should be connected after SetConnected")
+		t.Fatal("should be connected after AddClient")
 	}
-	if tunnel.ClientAddr() != "192.168.1.100:54321" {
-		t.Fatalf("wrong client addr: %s", tunnel.ClientAddr())
+	if tunnel.ClientCount() != 1 {
+		t.Fatalf("expected 1 client, got %d", tunnel.ClientCount())
 	}
-	if tunnel.ConnectedAt().IsZero() {
-		t.Fatal("connected_at should be set")
+	addrs := tunnel.ClientAddrs()
+	if len(addrs) != 1 || addrs[0] != "192.168.1.100:54321" {
+		t.Fatalf("unexpected addrs: %v", addrs)
 	}
 
-	// Disconnect
-	tunnel.SetDisconnected()
+	// Add second client
+	tunnel.AddClient(conn2, "10.0.0.1:12345")
+
+	if tunnel.ClientCount() != 2 {
+		t.Fatalf("expected 2 clients, got %d", tunnel.ClientCount())
+	}
+
+	// PickConn should return one of the two
+	picked := tunnel.PickConn()
+	if picked == nil {
+		t.Fatal("PickConn should not return nil when clients exist")
+	}
+
+	// Remove first client — second should still be connected
+	tunnel.RemoveClient(conn1)
+
+	if tunnel.ClientCount() != 1 {
+		t.Fatalf("expected 1 client after remove, got %d", tunnel.ClientCount())
+	}
+	if !tunnel.IsConnected() {
+		t.Fatal("should still be connected with one client remaining")
+	}
+
+	// Remove second client
+	tunnel.RemoveClient(conn2)
 
 	if tunnel.IsConnected() {
-		t.Fatal("should be disconnected after SetDisconnected")
+		t.Fatal("should be disconnected after removing all clients")
 	}
-	if tunnel.ClientAddr() != "" {
-		t.Fatal("client addr should be empty after disconnect")
+	if tunnel.ClientCount() != 0 {
+		t.Fatal("client count should be 0")
+	}
+	if tunnel.PickConn() != nil {
+		t.Fatal("PickConn should return nil when no clients")
 	}
 }
 

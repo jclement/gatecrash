@@ -164,7 +164,7 @@ func TestRegistryReload(t *testing.T) {
 	r.Register(&TunnelState{ID: "b", Type: "tcp", ListenPort: 3306})
 
 	// Simulate connection on tunnel "a"
-	r.FindByID("a").SetConnected(nil, "1.2.3.4:5678")
+	r.FindByID("a").AddClient(fakeConn(99), "1.2.3.4:5678")
 
 	// Reload: keep "a", remove "b", add "c"
 	r.Reload([]struct {

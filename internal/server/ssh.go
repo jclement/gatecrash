@@ -97,13 +97,13 @@ func (s *Server) handleControlChannel(srv *ssh.Server, conn *gossh.ServerConn, n
 	}
 
 	// Register the SSH connection with the tunnel
-	tunnel.SetConnected(conn, conn.RemoteAddr().String())
-	slog.Info("tunnel connected", "tunnel", tunnelID, "remote", conn.RemoteAddr())
+	tunnel.AddClient(conn, conn.RemoteAddr().String())
+	slog.Info("tunnel client connected", "tunnel", tunnelID, "remote", conn.RemoteAddr(), "clients", tunnel.ClientCount())
 	s.sse.Broadcast("tunnel-connect", tunnelID)
 
 	defer func() {
-		tunnel.SetDisconnected()
-		slog.Info("tunnel disconnected", "tunnel", tunnelID)
+		tunnel.RemoveClient(conn)
+		slog.Info("tunnel client disconnected", "tunnel", tunnelID, "remote", conn.RemoteAddr(), "clients", tunnel.ClientCount())
 		s.sse.Broadcast("tunnel-disconnect", tunnelID)
 	}()
 

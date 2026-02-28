@@ -27,7 +27,8 @@ type TunnelView struct {
 	PreserveHost   bool
 	TLSPassthrough bool
 	Connected      bool
-	ClientAddr     string
+	ClientCount    int
+	ClientAddrs    []string
 	Requests       int64
 	BytesIn        int64
 	BytesOut       int64
@@ -38,6 +39,9 @@ type TunnelView struct {
 
 // HostnamesCSV returns hostnames as a comma-separated string.
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
+
+// ClientAddrsList returns client addresses as a newline-separated string for tooltips.
+func (t TunnelView) ClientAddrsList() string { return strings.Join(t.ClientAddrs, "\n") }
 
 // BytesInFmt formats bytes in as a human-readable string.
 func (t TunnelView) BytesInFmt() string { return formatBytes(t.BytesIn) }
