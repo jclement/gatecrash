@@ -32,7 +32,18 @@
       "Bash(curl -sL -A \"Mozilla/5.0\" \"https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap\")",
       "Bash(curl -sL -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 Chrome/120\" \"https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap\")",
       "Bash(curl -sL \"https://fonts.gstatic.com/s/roboto/v51/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBHMdazQ.woff2\" -o /Users/jsc/Developer/gatecrash/web/static/fonts/roboto/roboto-latin.woff2)",
-      "Bash(wc -c /Users/jsc/Developer/gatecrash/web/static/js/*.js /Users/jsc/Developer/gatecrash/web/static/css/*.css /Users/jsc/Developer/gatecrash/web/static/fonts/roboto/*.woff2 /Users/jsc/Developer/gatecrash/web/static/fonts/roboto/*.css)"
+      "Bash(wc -c /Users/jsc/Developer/gatecrash/web/static/js/*.js /Users/jsc/Developer/gatecrash/web/static/css/*.css /Users/jsc/Developer/gatecrash/web/static/fonts/roboto/*.woff2 /Users/jsc/Developer/gatecrash/web/static/fonts/roboto/*.css)",
+      "Bash(go test ./internal/admin/... ./internal/server/...)",
+      "Bash(go test -v -timeout 30s ./internal/server/...)",
+      "Bash(go test ./internal/config/ -v -run \"TestLookupSecretHash_Found|TestLookupSecretHash_NotFound|TestAllHostnames|TestAllHostnames_Empty|TestAllHostnames_ExcludesTLSPassthrough|TestConfigSave|TestCheckIntervalDuration_Empty|TestLoad_InvalidTOML|TestLoad_MissingSecret|TestLoad_MissingSSHPort\")",
+      "Bash(go test ./internal/token/ -v -run \"TestValidate_MultipleColons|TestValidate_WhitespaceToken|TestHashSecret_Empty|TestHashSecret_LongInput|TestFormatToken_Empty|TestFormatToken_WithColons|TestGenerateSecret_HashMatchesPlaintext\" -count=1)",
+      "Bash(go test -race -v ./internal/server/ -run \"TestPickConn_Distribution|TestPickConn_SingleClient|TestPickConn_Empty|TestRemoveClient_Idempotent|TestAddClient_DuplicateConn|TestRegistry_ConcurrentAccess|TestVhostIPAddressRequest|TestVhostTunnelOffline|TestVhostStripPortVariants\")",
+      "Bash(go test ./internal/config/ -v)",
+      "Bash(go test -race ./internal/server/)",
+      "Bash(go test ./internal/token/ -v -count=1)",
+      "Bash(go test -race -timeout 60s ./internal/...)",
+      "Bash(go test -coverprofile=/tmp/cover.out ./internal/...)",
+      "Bash(go tool cover -func=/tmp/cover.out)"
     ],
     "additionalDirectories": [
       "/private/tmp"

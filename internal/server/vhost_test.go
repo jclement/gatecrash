@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jclement/gatecrash/internal/config"
@@ -212,5 +213,90 @@ func TestRegistryReload(t *testing.T) {
 	// Total should be 2
 	if len(r.AllTunnels()) != 2 {
 		t.Fatalf("expected 2 tunnels, got %d", len(r.AllTunnels()))
+	}
+}
+
+func TestVhostIPAddressRequest(t *testing.T) {
+	cfg := &config.Config{}
+	srv := &Server{
+		cfg:      cfg,
+		registry: NewRegistry(),
+		adminMux: http.NewServeMux(),
+	}
+
+	// Request with IP address in Host header — no tunnel will match,
+	// so vhost.go returns a 404 "No Tunnel Configured" error page.
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "192.168.1.1:8080"
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for IP address host, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Fatalf("expected HTML content type, got %s", ct)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "No Tunnel Configured") {
+		t.Fatalf("expected 'No Tunnel Configured' in body, got: %s", body)
+	}
+}
+
+func TestVhostTunnelOffline(t *testing.T) {
+	cfg := &config.Config{}
+	registry := NewRegistry()
+	// Register a tunnel but do NOT connect any client
+	registry.Register(&TunnelState{
+		ID:        "offline-app",
+		Type:      "http",
+		Hostnames: []string{"offline.example.com"},
+	})
+
+	srv := &Server{
+		cfg:      cfg,
+		registry: registry,
+		adminMux: http.NewServeMux(),
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "offline.example.com"
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for offline tunnel, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Service Offline") {
+		t.Fatalf("expected 'Service Offline' in body, got: %s", body)
+	}
+	if !strings.Contains(body, "offline-app") {
+		t.Fatalf("expected tunnel ID 'offline-app' in body, got: %s", body)
+	}
+}
+
+func TestVhostStripPortVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty string", "", ""},
+		{"port only", ":443", ""},
+		{"just colon", ":", ""},
+		{"host with empty port", "example.com:", "example.com"},
+		{"ipv6 no port", "::1", "::1"},
+		{"ipv6 brackets no port", "[::1]", "[::1]"},
+		{"ipv6 brackets with port", "[::1]:443", "::1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripPort(tt.input)
+			if result != tt.expected {
+				t.Fatalf("stripPort(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }

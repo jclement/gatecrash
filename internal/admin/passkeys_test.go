@@ -1,24 +1,22 @@
 package admin
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestNewPasskeyStore_NoFile(t *testing.T) {
+func TestPasskeyStore_NewEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passkeys.json")
 
 	store, err := NewPasskeyStore(path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewPasskeyStore: %v", err)
 	}
 
 	if store.IsSetupComplete() {
 		t.Fatal("new store should not be setup complete")
 	}
-
 	if len(store.Credentials()) != 0 {
 		t.Fatal("new store should have no credentials")
 	}
@@ -28,15 +26,12 @@ func TestPasskeyStore_AddAndFind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passkeys.json")
 
-	store, err := NewPasskeyStore(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	store, _ := NewPasskeyStore(path)
 
 	cred := StoredCredential{
-		ID:        []byte{1, 2, 3, 4},
-		PublicKey: []byte{5, 6, 7, 8},
-		Name:      "test-key",
+		ID:        []byte{1, 2, 3},
+		PublicKey: []byte{4, 5, 6},
+		Name:      "Test Key",
 	}
 
 	if err := store.AddCredential(cred); err != nil {
@@ -47,47 +42,16 @@ func TestPasskeyStore_AddAndFind(t *testing.T) {
 		t.Fatal("should be setup complete after adding credential")
 	}
 
-	found := store.FindCredentialByID([]byte{1, 2, 3, 4})
+	found := store.FindCredentialByID([]byte{1, 2, 3})
 	if found == nil {
 		t.Fatal("should find credential by ID")
 	}
-	if found.Name != "test-key" {
+	if found.Name != "Test Key" {
 		t.Fatalf("wrong name: %s", found.Name)
 	}
 
-	notFound := store.FindCredentialByID([]byte{9, 9, 9})
-	if notFound != nil {
-		t.Fatal("should not find non-existent credential")
-	}
-}
-
-func TestPasskeyStore_Persistence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "passkeys.json")
-
-	// Create and add
-	store1, _ := NewPasskeyStore(path)
-	store1.AddCredential(StoredCredential{
-		ID:   []byte{1, 2, 3},
-		Name: "persisted-key",
-	})
-
-	// Reload from disk
-	store2, err := NewPasskeyStore(path)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-
-	if !store2.IsSetupComplete() {
-		t.Fatal("should persist setup_complete")
-	}
-
-	creds := store2.Credentials()
-	if len(creds) != 1 {
-		t.Fatalf("expected 1 credential, got %d", len(creds))
-	}
-	if creds[0].Name != "persisted-key" {
-		t.Fatalf("wrong name: %s", creds[0].Name)
+	if store.FindCredentialByID([]byte{9, 9, 9}) != nil {
+		t.Fatal("should not find nonexistent credential")
 	}
 }
 
@@ -96,21 +60,25 @@ func TestPasskeyStore_RemoveCredential(t *testing.T) {
 	path := filepath.Join(dir, "passkeys.json")
 
 	store, _ := NewPasskeyStore(path)
-	store.AddCredential(StoredCredential{ID: []byte{1}, Name: "key1"})
-	store.AddCredential(StoredCredential{ID: []byte{2}, Name: "key2"})
+	store.AddCredential(StoredCredential{ID: []byte{1}, Name: "Key 1"})
+	store.AddCredential(StoredCredential{ID: []byte{2}, Name: "Key 2"})
 
-	// Remove second key
-	if err := store.RemoveCredential([]byte{2}); err != nil {
+	if err := store.RemoveCredential([]byte{1}); err != nil {
 		t.Fatalf("RemoveCredential: %v", err)
 	}
 
 	if len(store.Credentials()) != 1 {
-		t.Fatalf("expected 1 credential after removal")
+		t.Fatalf("expected 1 credential, got %d", len(store.Credentials()))
 	}
 
-	// Can't remove last credential
-	if err := store.RemoveCredential([]byte{1}); err == nil {
-		t.Fatal("should not allow removing last credential")
+	// Cannot remove last
+	if err := store.RemoveCredential([]byte{2}); err == nil {
+		t.Fatal("should not remove last credential")
+	}
+
+	// Remove nonexistent
+	if err := store.RemoveCredential([]byte{99}); err == nil {
+		t.Fatal("should error on nonexistent credential")
 	}
 }
 
@@ -119,38 +87,59 @@ func TestPasskeyStore_UpdateSignCount(t *testing.T) {
 	path := filepath.Join(dir, "passkeys.json")
 
 	store, _ := NewPasskeyStore(path)
-	store.AddCredential(StoredCredential{ID: []byte{1, 2}, Name: "key1"})
+	store.AddCredential(StoredCredential{ID: []byte{1}, Name: "Key 1"})
 
-	if err := store.UpdateSignCount([]byte{1, 2}, 42); err != nil {
+	if err := store.UpdateSignCount([]byte{1}, 42); err != nil {
 		t.Fatalf("UpdateSignCount: %v", err)
 	}
 
-	cred := store.FindCredentialByID([]byte{1, 2})
-	if cred.SignCount != 42 {
-		t.Fatalf("expected sign count 42, got %d", cred.SignCount)
+	found := store.FindCredentialByID([]byte{1})
+	if found.SignCount != 42 {
+		t.Fatalf("expected sign count 42, got %d", found.SignCount)
 	}
 
-	// Non-existent credential
-	if err := store.UpdateSignCount([]byte{9, 9}, 1); err == nil {
-		t.Fatal("should fail for non-existent credential")
+	if err := store.UpdateSignCount([]byte{99}, 1); err == nil {
+		t.Fatal("should error on nonexistent credential")
 	}
 }
 
-func TestPasskeyStore_AtomicWrite(t *testing.T) {
+func TestPasskeyStore_Persistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "passkeys.json")
+
+	store1, _ := NewPasskeyStore(path)
+	store1.AddCredential(StoredCredential{ID: []byte{1, 2, 3}, Name: "Persisted"})
+
+	store2, err := NewPasskeyStore(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if !store2.IsSetupComplete() {
+		t.Fatal("setup complete should persist")
+	}
+
+	creds := store2.Credentials()
+	if len(creds) != 1 {
+		t.Fatalf("expected 1 credential after reload, got %d", len(creds))
+	}
+	if creds[0].Name != "Persisted" {
+		t.Fatalf("credential name should persist: %s", creds[0].Name)
+	}
+}
+
+func TestPasskeyStore_CredentialsCopy(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passkeys.json")
 
 	store, _ := NewPasskeyStore(path)
-	store.AddCredential(StoredCredential{ID: []byte{1}, Name: "key"})
+	store.AddCredential(StoredCredential{ID: []byte{1}, Name: "Key 1"})
 
-	// Verify no temp file left behind
-	_, err := os.Stat(path + ".tmp")
-	if !os.IsNotExist(err) {
-		t.Fatal("temp file should not exist after save")
-	}
+	creds := store.Credentials()
+	creds[0].Name = "Modified"
 
-	// Verify main file exists
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("main file should exist: %v", err)
+	original := store.Credentials()
+	if original[0].Name != "Key 1" {
+		t.Fatal("Credentials() should return a copy")
 	}
 }

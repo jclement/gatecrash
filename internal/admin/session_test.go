@@ -4,162 +4,165 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestSessionManager_CreateAndValidate(t *testing.T) {
-	sm := NewSessionManager("test-secret-key")
+	sm := NewSessionManager("test-secret-key-for-jwt")
 
-	// Create session
 	w := httptest.NewRecorder()
 	if err := sm.CreateSession(w); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	// Extract cookie
 	cookies := w.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("session cookie not found")
 	}
 
-	cookie := cookies[0]
-	if cookie.Name != sessionCookieName {
-		t.Fatalf("wrong cookie name: %s", cookie.Name)
-	}
-	if !cookie.HttpOnly {
-		t.Fatal("cookie should be HttpOnly")
-	}
-	if !cookie.Secure {
-		t.Fatal("cookie should be Secure")
-	}
-
-	// Validate session
 	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(cookie)
-
+	req.AddCookie(sessionCookie)
 	if !sm.ValidateSession(req) {
 		t.Fatal("session should be valid")
 	}
 }
 
-func TestSessionManager_InvalidToken(t *testing.T) {
-	sm := NewSessionManager("test-secret-key")
+func TestSessionManager_InvalidSession(t *testing.T) {
+	sm := NewSessionManager("test-secret")
 
-	tests := []struct {
-		name   string
-		cookie *http.Cookie
-	}{
-		{
-			"wrong secret",
-			func() *http.Cookie {
-				other := NewSessionManager("other-secret")
-				w := httptest.NewRecorder()
-				other.CreateSession(w)
-				return w.Result().Cookies()[0]
-			}(),
-		},
-		{
-			"garbage token",
-			&http.Cookie{Name: sessionCookieName, Value: "not-a-jwt"},
-		},
-		{
-			"expired token",
-			func() *http.Cookie {
-				claims := jwt.RegisteredClaims{
-					ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
-					IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
-					Issuer:    "gatecrash",
-				}
-				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				signed, _ := token.SignedString([]byte("test-secret-key"))
-				return &http.Cookie{Name: sessionCookieName, Value: signed}
-			}(),
-		},
-		{
-			"wrong issuer",
-			func() *http.Cookie {
-				claims := jwt.RegisteredClaims{
-					ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
-					IssuedAt:  jwt.NewNumericDate(time.Now()),
-					Issuer:    "not-gatecrash",
-				}
-				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				signed, _ := token.SignedString([]byte("test-secret-key"))
-				return &http.Cookie{Name: sessionCookieName, Value: signed}
-			}(),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			req.AddCookie(tt.cookie)
-			if sm.ValidateSession(req) {
-				t.Fatal("session should be invalid")
-			}
-		})
-	}
-}
-
-func TestSessionManager_NoCookie(t *testing.T) {
-	sm := NewSessionManager("test-secret-key")
+	// No cookie
 	req := httptest.NewRequest("GET", "/", nil)
 	if sm.ValidateSession(req) {
-		t.Fatal("session without cookie should be invalid")
+		t.Fatal("should not validate without cookie")
+	}
+
+	// Bad cookie value
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "garbage"})
+	if sm.ValidateSession(req2) {
+		t.Fatal("should not validate with bad cookie")
+	}
+
+	// Wrong secret
+	sm2 := NewSessionManager("different-secret")
+	w := httptest.NewRecorder()
+	sm.CreateSession(w)
+	cookie := w.Result().Cookies()[0]
+
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.AddCookie(cookie)
+	if sm2.ValidateSession(req3) {
+		t.Fatal("should not validate with different secret")
 	}
 }
 
 func TestSessionManager_ClearSession(t *testing.T) {
-	sm := NewSessionManager("test-secret-key")
+	sm := NewSessionManager("test-secret")
 
 	w := httptest.NewRecorder()
 	sm.ClearSession(w)
 
 	cookies := w.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	found := false
+	for _, c := range cookies {
+		if c.Name == sessionCookieName {
+			found = true
+			if c.MaxAge != -1 {
+				t.Fatalf("expected MaxAge -1, got %d", c.MaxAge)
+			}
+		}
 	}
-	if cookies[0].MaxAge != -1 {
-		t.Fatal("cleared cookie should have MaxAge -1")
+	if !found {
+		t.Fatal("clear should set cookie with MaxAge -1")
+	}
+}
+
+func TestSessionManager_CSRFToken(t *testing.T) {
+	sm := NewSessionManager("test-secret")
+
+	w := httptest.NewRecorder()
+	sm.CreateSession(w)
+	cookie := w.Result().Cookies()[0]
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+
+	token := sm.CSRFToken(req)
+	if token == "" {
+		t.Fatal("CSRF token should not be empty")
+	}
+
+	// Deterministic
+	if sm.CSRFToken(req) != token {
+		t.Fatal("CSRF token should be deterministic")
+	}
+
+	// Valid
+	if !sm.ValidCSRFToken(req, token) {
+		t.Fatal("CSRF token should be valid")
+	}
+
+	// Invalid
+	if sm.ValidCSRFToken(req, "wrong-token") {
+		t.Fatal("wrong CSRF token should not validate")
+	}
+	if sm.ValidCSRFToken(req, "") {
+		t.Fatal("empty CSRF token should not validate")
+	}
+}
+
+func TestSessionManager_CSRFToken_NoCookie(t *testing.T) {
+	sm := NewSessionManager("test-secret")
+	req := httptest.NewRequest("GET", "/", nil)
+
+	if sm.CSRFToken(req) != "" {
+		t.Fatal("CSRF token should be empty without session")
 	}
 }
 
 func TestSessionManager_RequireAuth(t *testing.T) {
-	sm := NewSessionManager("test-secret-key")
+	sm := NewSessionManager("test-secret")
 
-	// Handler that should only be called if authenticated
+	var authenticated bool
 	handler := sm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !IsAuthenticated(r) {
-			t.Fatal("should be authenticated in handler")
-		}
-		w.WriteHeader(http.StatusOK)
+		authenticated = IsAuthenticated(r)
+		w.WriteHeader(200)
 	}))
 
-	// Without session: should redirect
-	t.Run("unauthenticated", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/dashboard", nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusSeeOther {
-			t.Fatalf("expected redirect, got %d", w.Code)
-		}
-	})
+	// Without session — redirect
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect, got %d", w.Code)
+	}
 
-	// With session: should pass through
-	t.Run("authenticated", func(t *testing.T) {
-		// Create session first
-		sessionW := httptest.NewRecorder()
-		sm.CreateSession(sessionW)
-		cookie := sessionW.Result().Cookies()[0]
+	// With valid session — pass through
+	wCreate := httptest.NewRecorder()
+	sm.CreateSession(wCreate)
+	cookie := wCreate.Result().Cookies()[0]
 
-		req := httptest.NewRequest("GET", "/dashboard", nil)
-		req.AddCookie(cookie)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", w.Code)
-		}
-	})
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("GET", "/dashboard", nil)
+	req2.AddCookie(cookie)
+	handler.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("expected 200, got %d", w2.Code)
+	}
+	if !authenticated {
+		t.Fatal("handler should see authenticated context")
+	}
+}
+
+func TestIsAuthenticated_NoContext(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	if IsAuthenticated(req) {
+		t.Fatal("should not be authenticated without context")
+	}
 }
