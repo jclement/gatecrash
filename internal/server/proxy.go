@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,13 +62,19 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 		return
 	}
 
-	// Signal we're done writing the request
-	if cw, ok := ch.(interface{ CloseWrite() error }); ok {
-		cw.CloseWrite()
+	// Only signal end-of-request for non-upgrade requests. Upgrade requests
+	// (WebSocket) need the channel to remain bidirectional.
+	upgrade := isUpgradeRequest(r)
+	if !upgrade {
+		if cw, ok := ch.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		}
 	}
 
-	// Read response from channel
-	resp, err := http.ReadResponse(bufio.NewReader(ch), r)
+	// Read response from channel. Keep the bufio.Reader so any data buffered
+	// beyond the HTTP headers (e.g. WebSocket frames) isn't lost.
+	chReader := bufio.NewReader(ch)
+	resp, err := http.ReadResponse(chReader, r)
 	if err != nil {
 		slog.Error("failed to read response from tunnel", "tunnel", tunnel.ID, "error", err)
 		http.Error(w, "tunnel read failed", http.StatusBadGateway)
@@ -77,7 +84,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 
 	// Check for WebSocket upgrade
 	if isWebSocketUpgrade(resp) {
-		s.handleWebSocketUpgrade(w, ch, resp)
+		s.handleWebSocketUpgrade(w, ch, chReader, resp)
 		return
 	}
 
@@ -105,7 +112,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 }
 
 // handleWebSocketUpgrade hijacks the connection for bidirectional streaming.
-func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel, resp *http.Response) {
+func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel, chReader *bufio.Reader, resp *http.Response) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "websocket hijack not supported", http.StatusInternalServerError)
@@ -124,19 +131,33 @@ func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel,
 
 	done := make(chan struct{}, 2)
 	go func() {
-		io.Copy(ch, clientConn)
+		io.Copy(ch, clientConn) // public client → tunnel
+		if cw, ok := ch.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		}
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(clientConn, ch)
+		io.Copy(clientConn, chReader) // tunnel → public client (use buffered reader)
 		done <- struct{}{}
 	}()
 	<-done
 }
 
+// isUpgradeRequest checks whether the request asks for a protocol upgrade
+// (e.g. WebSocket). Used to decide whether to keep the channel bidirectional.
+func isUpgradeRequest(r *http.Request) bool {
+	for _, v := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(v), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
 func isWebSocketUpgrade(resp *http.Response) bool {
 	return resp.StatusCode == http.StatusSwitchingProtocols &&
-		resp.Header.Get("Upgrade") == "websocket"
+		strings.EqualFold(resp.Header.Get("Upgrade"), "websocket")
 }
 
 // marshalHTTPChannelData encodes HTTP channel extra data.

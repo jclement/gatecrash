@@ -151,14 +151,17 @@ preserve_path = false
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `server.secret` | auto-generated | Server secret (used internally) |
+| `server.secret` | auto-generated | Session signing secret (do not share) |
 | `server.ssh_port` | random high port | SSH listen port for tunnel connections |
+| `server.https_port` | `443` | HTTPS listen port |
+| `server.http_port` | `80` | HTTP→HTTPS redirect port (0 to disable) |
 | `server.bind_addr` | `0.0.0.0` | Bind address |
-| `server.admin_host` | (IP access) | Hostname for admin panel |
+| `server.admin_host` | _(disabled)_ | Hostname for admin panel (required to enable it) |
 | `tls.acme_email` | | Email for Let's Encrypt |
 | `tls.cert_dir` | `./certs` | Certificate storage directory |
 | `tls.staging` | `false` | Use Let's Encrypt staging CA |
 | `update.enabled` | `true` | Check for updates on startup |
+| `update.check_interval` | `6h` | How often to check for updates |
 | `update.github_repo` | `jclement/gatecrash` | GitHub repo for update checks |
 
 ### Tunnel Configuration
@@ -189,10 +192,12 @@ For HTTP tunnels, the following headers are injected:
 ## CLI Reference
 
 ```
-gatecrash server [flags]    Start the tunnel server
-gatecrash client [flags]    Connect a tunnel client
-gatecrash version           Print version
-gatecrash help              Show help
+gatecrash server      [flags]   Start the tunnel server
+gatecrash client      [flags]   Connect a tunnel client
+gatecrash make-config [flags]   Generate a config file
+gatecrash update      [flags]   Self-update to latest release
+gatecrash version               Print version
+gatecrash help                  Show help
 ```
 
 ### Server Flags
@@ -200,7 +205,6 @@ gatecrash help              Show help
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--config` | `GATECRASH_CONFIG` | `/etc/gatecrash/gatecrash.toml` | Config file path |
-| `--no-web-admin` | `GATECRASH_NO_WEB_ADMIN` | `false` | Disable web admin panel |
 | `--debug` | | `false` (auto in dev) | Enable debug logging |
 
 ### Client Flags
@@ -209,9 +213,28 @@ gatecrash help              Show help
 |------|---------|-------------|
 | `--server` | `GATECRASH_SERVER` | Server SSH address (`host:port`) |
 | `--token` | `GATECRASH_TOKEN` | Tunnel token (`tunnel_id:secret`) |
-| `--target` | `GATECRASH_TARGET` | Local service address (`host:port`) |
+| `--target` | `GATECRASH_TARGET` | Target service address (`[scheme://]host:port`) |
 | `--host-key` | `GATECRASH_HOST_KEY` | Server SSH fingerprint (`SHA256:...`) |
 | `--debug` | | Enable debug logging |
+
+#### Target Schemes
+
+The `--target` flag supports optional scheme prefixes:
+
+| Target | Behavior |
+|--------|----------|
+| `localhost:8080` | Plain HTTP (default) |
+| `https://localhost:8443` | TLS with certificate verification |
+| `https+insecure://localhost:8443` | TLS without certificate verification (self-signed certs) |
+
+### make-config Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output` | `/etc/gatecrash/gatecrash.toml` | Output config file path |
+| `--admin-host` | | Admin panel hostname |
+| `--acme-email` | | ACME/Let's Encrypt email |
+| `--force` | `false` | Overwrite existing config file |
 
 ---
 
@@ -296,7 +319,8 @@ gatecrash/
 │   ├── client/          # SSH client, HTTP/TCP handlers, reconnect logic
 │   ├── admin/           # Web admin panel (passkeys, sessions, templates)
 │   ├── protocol/        # SSH channel types and control messages
-│   └── token/           # bcrypt-based tunnel authentication
+│   ├── token/           # bcrypt-based tunnel authentication
+│   └── update/          # Self-update via GitHub releases
 ├── web/                 # HTML templates + static assets
 ├── deploy/              # Install script, systemd service
 └── .github/             # CI/CD, dependabot

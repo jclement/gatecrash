@@ -3,9 +3,11 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,6 +85,14 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 		req.Host = c.targetAddr()
 	}
 
+	// WebSocket / upgrade requests must bypass http.Client because Go's
+	// transport strips hop-by-hop headers (Connection, Upgrade). Dial the
+	// backend directly and do raw bidirectional piping.
+	if isUpgradeRequest(req) {
+		c.handleUpgrade(ch, req, data)
+		return
+	}
+
 	// Forward to local target
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -132,6 +142,93 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 			"ms", elapsed.Milliseconds(),
 		)
 	}
+}
+
+// handleUpgrade dials the backend directly and pipes the raw connection
+// through the SSH channel. This preserves hop-by-hop headers (Connection,
+// Upgrade) that http.Client would strip.
+func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct {
+	RequestID    string
+	Method       string
+	URI          string
+	Host         string
+	RemoteAddr   string
+	TLS          bool
+	PreserveHost bool
+}) {
+	target := c.targetAddr()
+
+	var conn net.Conn
+	var err error
+
+	conn, err = net.DialTimeout("tcp", target, 10*time.Second)
+	if err != nil {
+		slog.Error("upgrade: failed to connect to target",
+			"target", target,
+			"error", err,
+		)
+		writeErrorResponse(ch, http.StatusBadGateway, "target unreachable")
+		return
+	}
+	defer conn.Close()
+
+	// Wrap with TLS if the target requires it
+	if c.cfg.TargetTLS != "" {
+		tlsConn := tls.Client(conn, &tls.Config{
+			InsecureSkipVerify: c.cfg.TargetTLS == "tls-insecure",
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			slog.Error("upgrade: TLS handshake failed",
+				"target", target,
+				"error", err,
+			)
+			writeErrorResponse(ch, http.StatusBadGateway, "TLS handshake failed")
+			return
+		}
+		conn = tlsConn
+	}
+
+	// Write raw HTTP request to backend (preserves Connection: Upgrade, etc.)
+	if err := req.Write(conn); err != nil {
+		slog.Error("upgrade: failed to write request to target",
+			"target", target,
+			"error", err,
+		)
+		writeErrorResponse(ch, http.StatusBadGateway, "target write failed")
+		return
+	}
+
+	slog.Info("upgrade",
+		"uri", data.URI,
+		"host", data.Host,
+		"target", target,
+		"from", data.RemoteAddr,
+	)
+
+	// Bidirectional pipe: backend response + frames flow through the SSH channel
+	done := make(chan struct{}, 2)
+	go func() {
+		io.Copy(conn, ch) // SSH channel → backend
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(ch, conn) // backend → SSH channel
+		if cw, ok := ch.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		}
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+// isUpgradeRequest checks if the request contains a Connection: Upgrade header.
+func isUpgradeRequest(r *http.Request) bool {
+	for _, v := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(v), "upgrade") {
+			return true
+		}
+	}
+	return false
 }
 
 func writeErrorResponse(w io.Writer, status int, msg string) {
