@@ -12,3 +12,63 @@
 }
 .status-dot.connected { background-color: #22c55e; }
 .status-dot.disconnected { background-color: #d1d5db; }
+
+/* Responsive table → card layout on small screens (below md / 768px) */
+@media (max-width: 767px) {
+    .responsive-table {
+        display: block;
+        width: 100%;
+    }
+    .responsive-table thead {
+        display: none;
+    }
+    .responsive-table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 0.5rem;
+    }
+    .responsive-table tbody tr {
+        display: block !important;
+        border: 1px solid #e5e7eb !important;
+        border-radius: 0.5rem;
+        background: white;
+        overflow: hidden;
+    }
+    .responsive-table tbody td {
+        display: flex !important;
+        align-items: flex-start;
+        padding: 0.375rem 0.75rem;
+        border-bottom: 1px solid #f3f4f6;
+        text-align: left !important;
+    }
+    .responsive-table tbody td:last-child {
+        border-bottom: none;
+    }
+    .responsive-table tbody td[data-label]:not([data-label=""])::before {
+        content: attr(data-label);
+        font-weight: 600;
+        font-size: 0.65rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        min-width: 5.5rem;
+        margin-right: 0.75rem;
+        padding-top: 0.15rem;
+        flex-shrink: 0;
+    }
+    /* Empty-state cells (colspan) centered */
+    .responsive-table tbody td:not([data-label]) {
+        justify-content: center;
+    }
+    /* Status shown as colored left border — hide the dot cell */
+    .responsive-table tbody td[data-label="Status"] {
+        display: none !important;
+    }
+    .responsive-table tbody tr.tunnel-connected {
+        border-left: 3px solid #22c55e !important;
+    }
+    .responsive-table tbody tr.tunnel-disconnected {
+        border-left: 3px solid #d1d5db !important;
+    }
+}
