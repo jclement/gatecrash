@@ -598,6 +598,14 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 		return fmt.Errorf("port %d conflicts with SSH port", req.ListenPort)
 	}
 
+	// Check port conflicts with HTTPS and HTTP ports
+	if req.Type == "tcp" && req.ListenPort == s.cfg.Server.HTTPSPort {
+		return fmt.Errorf("port %d conflicts with HTTPS port", req.ListenPort)
+	}
+	if req.Type == "tcp" && s.cfg.Server.HTTPPort > 0 && req.ListenPort == s.cfg.Server.HTTPPort {
+		return fmt.Errorf("port %d conflicts with HTTP port", req.ListenPort)
+	}
+
 	return nil
 }
 
@@ -1104,9 +1112,24 @@ func (s *Server) checkForUpdate(repo string) {
 func (s *Server) httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RLock()
 	httpsPort := s.cfg.Server.HTTPSPort
+	configuredHosts := s.cfg.AllHostnames()
 	s.cfgMu.RUnlock()
 
 	host := stripPort(r.Host)
+
+	// Reject requests for unconfigured hosts to prevent open redirect abuse.
+	configured := false
+	for _, h := range configuredHosts {
+		if strings.EqualFold(h, host) {
+			configured = true
+			break
+		}
+	}
+	if !configured {
+		http.NotFound(w, r)
+		return
+	}
+
 	if httpsPort != 443 {
 		host = fmt.Sprintf("%s:%d", host, httpsPort)
 	}

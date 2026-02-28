@@ -300,3 +300,107 @@ func TestVhostStripPortVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestHTTPToHTTPSRedirect(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			HTTPSPort: 443,
+			AdminHost: "admin.example.com",
+		},
+		Tunnel: []config.Tunnel{
+			{ID: "app", Type: "http", Hostnames: []string{"app.example.com"}},
+		},
+	}
+	srv := &Server{cfg: cfg, registry: NewRegistry()}
+
+	tests := []struct {
+		name     string
+		host     string
+		uri      string
+		wantCode int
+		wantLoc  string
+	}{
+		{
+			name:     "configured tunnel host",
+			host:     "app.example.com",
+			uri:      "/path?q=1",
+			wantCode: http.StatusMovedPermanently,
+			wantLoc:  "https://app.example.com/path?q=1",
+		},
+		{
+			name:     "configured admin host",
+			host:     "admin.example.com",
+			uri:      "/",
+			wantCode: http.StatusMovedPermanently,
+			wantLoc:  "https://admin.example.com/",
+		},
+		{
+			name:     "unconfigured host is rejected (open redirect prevented)",
+			host:     "evil.com",
+			uri:      "/",
+			wantCode: http.StatusNotFound,
+			wantLoc:  "",
+		},
+		{
+			name:     "unconfigured host with crafted URI is rejected",
+			host:     "attacker.example.org",
+			uri:      "//evil.com/phish",
+			wantCode: http.StatusNotFound,
+			wantLoc:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.uri, nil)
+			req.Host = tt.host
+			req.RequestURI = tt.uri
+			w := httptest.NewRecorder()
+			srv.httpToHTTPSRedirect(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Fatalf("got status %d, want %d", w.Code, tt.wantCode)
+			}
+			loc := w.Header().Get("Location")
+			if loc != tt.wantLoc {
+				t.Fatalf("got Location %q, want %q", loc, tt.wantLoc)
+			}
+		})
+	}
+}
+
+func TestAdminSecurityHeaders(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AdminHost: "admin.example.com",
+		},
+	}
+	srv := &Server{
+		cfg:      cfg,
+		registry: NewRegistry(),
+		adminMux: http.NewServeMux(),
+	}
+	srv.adminMux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("admin"))
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "admin.example.com"
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	headers := map[string]string{
+		"X-Frame-Options":           "DENY",
+		"X-Content-Type-Options":    "nosniff",
+		"Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+	}
+	for header, want := range headers {
+		if got := w.Header().Get(header); got != want {
+			t.Errorf("header %s = %q, want %q", header, got, want)
+		}
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); csp == "" {
+		t.Error("Content-Security-Policy header should be set")
+	}
+}
