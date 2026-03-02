@@ -46,8 +46,9 @@
                                 <button type="submit" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Remove</button>
                             </form>
                             {{else}}
-                            <button disabled title="Cannot remove last passkey"
-                                    class="text-xs bg-gray-100 text-gray-400 px-2 py-1 rounded cursor-not-allowed">Remove</button>
+                            <span data-tip="Cannot remove last passkey">
+                                <button disabled class="text-xs bg-gray-100 text-gray-400 px-2 py-1 rounded cursor-not-allowed pointer-events-none">Remove</button>
+                            </span>
                             {{end}}
                         </td>
                     </tr>

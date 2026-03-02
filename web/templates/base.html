@@ -80,6 +80,43 @@
         <a href="https://github.com/jclement/gatecrash" target="_blank" class="hover:text-gray-600">Gatecrash</a> v{{.Version}}
     </footer>
 
+    <div id="popover" class="popover"></div>
+    <script>
+    (function() {
+        var pop = document.getElementById('popover');
+        var cur = null;
+        document.addEventListener('click', function(e) {
+            var trigger = e.target.closest('[data-tip]');
+            if (pop.contains(e.target)) return;
+            if (trigger && trigger.dataset.tip) {
+                if (cur === trigger && pop.style.display !== 'none') {
+                    pop.style.display = 'none';
+                    cur = null;
+                    return;
+                }
+                cur = trigger;
+                pop.textContent = trigger.dataset.tip;
+                pop.style.display = 'block';
+                var rect = trigger.getBoundingClientRect();
+                var pr = pop.getBoundingClientRect();
+                var above = true;
+                var top = rect.top - pr.height - 8;
+                if (top < 8) { top = rect.bottom + 8; above = false; }
+                var left = rect.left + rect.width / 2 - pr.width / 2;
+                left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+                pop.style.top = top + 'px';
+                pop.style.left = left + 'px';
+                pop.className = 'popover ' + (above ? 'above' : 'below');
+                pop.style.setProperty('--arrow-left', (rect.left + rect.width / 2 - left) + 'px');
+            } else {
+                pop.style.display = 'none';
+                cur = null;
+            }
+        });
+        window.addEventListener('scroll', function() { pop.style.display = 'none'; cur = null; }, true);
+    })();
+    </script>
+
     {{if .Active}}
     <script>
     function updateBanner() {

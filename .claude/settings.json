@@ -48,7 +48,8 @@
       "Bash(mise install)",
       "Bash(mise run tailwind)",
       "Bash(npm init -y)",
-      "Bash(npm install -D tailwindcss @tailwindcss/cli)"
+      "Bash(npm install -D tailwindcss @tailwindcss/cli)",
+      "Bash(npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --minify)"
     ],
     "additionalDirectories": [
       "/private/tmp"

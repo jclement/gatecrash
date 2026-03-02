@@ -101,6 +101,45 @@ sudo mv /tmp/gatecrash "${INSTALL_DIR}/gatecrash"
 
 if [ "$UPGRADING" = "true" ]; then
     ok "Binary upgraded to v${LATEST}"
+    # Update systemd unit if it exists (picks up new hardening settings)
+    if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+        info "Updating systemd unit..."
+        # Detect config path from existing unit
+        EXISTING_CONFIG=$(grep -oP '(?<=--config )\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${CONFIG_DIR}/gatecrash.toml")
+        EXISTING_USER=$(grep -oP '(?<=^User=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
+        EXISTING_GROUP=$(grep -oP '(?<=^Group=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
+        EXISTING_CONFIG_DIR=$(dirname "$EXISTING_CONFIG")
+        sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<UNITEOF
+[Unit]
+Description=Gatecrash Tunnel Server
+After=network.target
+Documentation=https://github.com/${REPO}
+
+[Service]
+Type=simple
+User=${EXISTING_USER}
+Group=${EXISTING_GROUP}
+ExecStart=${INSTALL_DIR}/gatecrash server --config ${EXISTING_CONFIG}
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${EXISTING_CONFIG_DIR} ${INSTALL_DIR}/gatecrash
+PrivateTmp=true
+
+# Allow binding to privileged ports (80, 443)
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+        sudo systemctl daemon-reload
+    fi
     # Restart service if running
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         info "Restarting ${SERVICE_NAME} service..."

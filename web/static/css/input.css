@@ -19,6 +19,41 @@
 .status-dot.connected { background-color: #22c55e; }
 .status-dot.disconnected { background-color: #d1d5db; }
 
+/* Click/tap popovers (replaces title tooltips for mobile support) */
+[data-tip] {
+    cursor: pointer;
+}
+.popover {
+    position: fixed;
+    z-index: 100;
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    background: #1f2937;
+    color: #f9fafb;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    white-space: pre-line;
+    max-width: 300px;
+    word-break: break-word;
+    display: none;
+}
+.popover::after {
+    content: '';
+    position: absolute;
+    left: var(--arrow-left, 50%);
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+}
+.popover.above::after {
+    top: 100%;
+    border-top-color: #1f2937;
+}
+.popover.below::after {
+    bottom: 100%;
+    border-bottom-color: #1f2937;
+}
+
 /* Responsive tables → cards on mobile */
 @media (max-width: 767px) {
     .responsive-table thead {

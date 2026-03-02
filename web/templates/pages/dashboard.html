@@ -375,7 +375,7 @@ function dashboard() {
                             html = '<span class="text-xs">' + _escapeHTML(t.clients[0].addr) + '</span> <span class="text-xs text-gray-400">' + _escapeHTML(t.clients[0].uptime) + '</span>';
                         } else {
                             const tip = t.clients.map(c => c.addr + ' (' + c.uptime + ')').sort().join('\n');
-                            html = '<span class="text-xs cursor-default" title="' + _escapeHTML(tip) + '">' + t.client_count + ' clients</span>';
+                            html = '<span class="text-xs" data-tip="' + _escapeHTML(tip) + '">' + t.client_count + ' clients</span>';
                         }
                         const prevClient = prev._clientHTML;
                         if (prevClient !== html) clientEl.innerHTML = html;
@@ -540,12 +540,12 @@ function dashboard() {
             <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">passthrough</span>
         </div>{{end}}{{else}}{{range .HostCerts}}<div class="flex items-center gap-1.5">
             <code class="text-xs">{{.Hostname}}</code>
-            {{if .Valid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" title="Expires {{.Expiry}}">{{.Expiry}}</span>
-            {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" title="{{.Error}}">No TLS</span>{{end}}
+            {{if .Valid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" data-tip="Expires {{.Expiry}}">{{.Expiry}}</span>
+            {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" data-tip="{{.Error}}">No TLS</span>{{end}}
         </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
-    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs cursor-default" title="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs" data-tip="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests" data-label="Requests">{{.Requests}}</td>
     <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic" data-label="Traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>
@@ -573,8 +573,8 @@ function dashboard() {
     <td class="px-3 py-2" data-label="From">
         <div class="flex items-center gap-1.5">
             <code class="text-xs">{{.From}}</code>
-            {{if .CertValid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" title="Expires {{.CertExpiry}}">{{.CertExpiry}}</span>
-            {{else if .CertError}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" title="{{.CertError}}">No TLS</span>{{end}}
+            {{if .CertValid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" data-tip="Expires {{.CertExpiry}}">{{.CertExpiry}}</span>
+            {{else if .CertError}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" data-tip="{{.CertError}}">No TLS</span>{{end}}
         </div>
     </td>
     <td class="px-3 py-2" data-label="To"><code class="text-xs">{{.To}}</code></td>
