@@ -54,7 +54,7 @@ func TestValidateDownloadURL(t *testing.T) {
 }
 
 func TestSelfUpdateUntrustedURL(t *testing.T) {
-	err := SelfUpdate("https://evil.com/malicious")
+	err := SelfUpdate("https://evil.com/malicious", "")
 	if err == nil {
 		t.Fatal("expected error for untrusted URL, got nil")
 	}

@@ -1,6 +1,9 @@
 package update
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +45,7 @@ type CheckResult struct {
 	LatestVersion   string
 	UpdateAvailable bool
 	DownloadURL     string
+	ChecksumURL     string
 }
 
 // Check queries GitHub for the latest release and compares with current version.
@@ -73,12 +77,14 @@ func Check(repo, currentVersion string) (*CheckResult, error) {
 		UpdateAvailable: latestVersion != currentClean && currentClean != "dev",
 	}
 
-	// Find matching asset
+	// Find matching binary asset and checksums file
 	assetName := fmt.Sprintf("gatecrash_%s_%s", runtime.GOOS, runtime.GOARCH)
 	for _, a := range release.Assets {
 		if a.Name == assetName {
 			result.DownloadURL = a.BrowserDownloadURL
-			break
+		}
+		if strings.Contains(a.Name, "checksums") {
+			result.ChecksumURL = a.BrowserDownloadURL
 		}
 	}
 
@@ -103,8 +109,8 @@ func validateDownloadURL(rawURL string) error {
 	return fmt.Errorf("download URL host %q is not a trusted GitHub domain", host)
 }
 
-// SelfUpdate downloads the latest release and replaces the current binary.
-func SelfUpdate(downloadURL string) error {
+// SelfUpdate downloads the latest release, verifies its checksum, and replaces the current binary.
+func SelfUpdate(downloadURL, checksumURL string) error {
 	if IsDocker() {
 		return fmt.Errorf("self-update is not supported in Docker containers; update your image instead")
 	}
@@ -160,6 +166,20 @@ func SelfUpdate(downloadURL string) error {
 		return fmt.Errorf("setting permissions: %w", err)
 	}
 
+	// Verify checksum if available
+	if checksumURL != "" {
+		if err := validateDownloadURL(checksumURL); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("checksum URL validation failed: %w", err)
+		}
+		assetName := fmt.Sprintf("gatecrash_%s_%s", runtime.GOOS, runtime.GOARCH)
+		if err := verifyChecksum(tmpPath, checksumURL, assetName); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("checksum verification failed: %w", err)
+		}
+		slog.Info("checksum verified")
+	}
+
 	// Replace binary — try atomic rename first, fall back to copy if
 	// the temp dir is on a different filesystem (EXDEV).
 	if err := replaceBinary(tmpPath, execPath); err != nil {
@@ -168,6 +188,55 @@ func SelfUpdate(downloadURL string) error {
 	}
 
 	slog.Info("update complete", "path", execPath)
+	return nil
+}
+
+// verifyChecksum downloads the checksums file and verifies the downloaded binary matches.
+func verifyChecksum(filePath, checksumURL, assetName string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(checksumURL)
+	if err != nil {
+		return fmt.Errorf("downloading checksums: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checksums download returned %d", resp.StatusCode)
+	}
+
+	// Parse checksums file: each line is "hash  filename"
+	var expectedHash string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && fields[1] == assetName {
+			expectedHash = fields[0]
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading checksums: %w", err)
+	}
+	if expectedHash == "" {
+		return fmt.Errorf("no checksum found for %s", assetName)
+	}
+
+	// Hash the downloaded file
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("opening file for checksum: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hashing file: %w", err)
+	}
+	actualHash := hex.EncodeToString(h.Sum(nil))
+
+	if actualHash != expectedHash {
+		return fmt.Errorf("hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
 	return nil
 }
 

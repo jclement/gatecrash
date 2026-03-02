@@ -307,7 +307,7 @@ func runUpdate(args []string) {
 		}
 	}
 
-	if err := update.SelfUpdate(result.DownloadURL); err != nil {
+	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL); err != nil {
 		slog.Error("update failed", "error", err)
 		os.Exit(1)
 	}

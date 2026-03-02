@@ -1024,7 +1024,7 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := update.SelfUpdate(result.DownloadURL); err != nil {
+	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL); err != nil {
 		slog.Error("update failed", "error", err)
 		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
 		return
