@@ -5,16 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -138,9 +137,11 @@ func SelfUpdate(downloadURL, checksumURL string) error {
 		return fmt.Errorf("finding executable: %w", err)
 	}
 
-	// Write to temp file in OS temp directory to avoid permission issues
-	// when the binary's directory (e.g. /usr/local/bin) isn't writable.
-	f, err := os.CreateTemp("", "gatecrash-update-*")
+	// Write to temp file in the same directory as the binary so that the
+	// final os.Rename is an atomic same-filesystem operation. This also
+	// avoids ETXTBSY (can't overwrite a running binary on Linux) because
+	// rename swaps directory entries without opening the running inode.
+	f, err := os.CreateTemp(filepath.Dir(execPath), ".gatecrash-update-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
@@ -180,9 +181,10 @@ func SelfUpdate(downloadURL, checksumURL string) error {
 		slog.Info("checksum verified")
 	}
 
-	// Replace binary — try atomic rename first, fall back to copy if
-	// the temp dir is on a different filesystem (EXDEV).
-	if err := replaceBinary(tmpPath, execPath); err != nil {
+	// Atomic rename within the same directory/filesystem. This replaces the
+	// directory entry without modifying the running binary's inode, so it
+	// works even while the current process is executing from execPath.
+	if err := os.Rename(tmpPath, execPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("replacing binary: %w", err)
 	}
@@ -237,43 +239,6 @@ func verifyChecksum(filePath, checksumURL, assetName string) error {
 	if actualHash != expectedHash {
 		return fmt.Errorf("hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
-	return nil
-}
-
-// replaceBinary moves src to dst. If os.Rename fails due to a cross-device
-// link, it falls back to reading src and overwriting dst in place.
-func replaceBinary(src, dst string) error {
-	err := os.Rename(src, dst)
-	if err == nil {
-		return nil
-	}
-
-	// Check for cross-device link error
-	if !errors.Is(err, syscall.EXDEV) {
-		return err
-	}
-
-	// Fall back: copy src content into dst (overwrite)
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening temp file: %w", err)
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("opening destination: %w", err)
-	}
-
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return fmt.Errorf("copying binary: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("closing destination: %w", err)
-	}
-
-	os.Remove(src)
 	return nil
 }
 

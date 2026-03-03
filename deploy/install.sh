@@ -4,7 +4,7 @@
 set -e
 
 REPO="jclement/gatecrash"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="/opt/gatecrash/bin"
 CONFIG_DIR="/etc/gatecrash"
 SERVICE_USER="gatecrash"
 SERVICE_NAME="gatecrash"
@@ -97,16 +97,19 @@ if [ -f "${INSTALL_DIR}/gatecrash" ]; then
 fi
 
 info "Installing to ${INSTALL_DIR}/gatecrash"
+sudo mkdir -p "${INSTALL_DIR}"
 sudo mv /tmp/gatecrash "${INSTALL_DIR}/gatecrash"
 
 if [ "$UPGRADING" = "true" ]; then
+    # Ensure install dir is owned by the service user for self-update
+    EXISTING_USER=$(grep -oP '(?<=^User=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
+    sudo chown -R "${EXISTING_USER}:${EXISTING_USER}" "${INSTALL_DIR}"
     ok "Binary upgraded to v${LATEST}"
     # Update systemd unit if it exists (picks up new hardening settings)
     if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
         info "Updating systemd unit..."
         # Detect config path from existing unit
         EXISTING_CONFIG=$(grep -oP '(?<=--config )\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${CONFIG_DIR}/gatecrash.toml")
-        EXISTING_USER=$(grep -oP '(?<=^User=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
         EXISTING_GROUP=$(grep -oP '(?<=^Group=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
         EXISTING_CONFIG_DIR=$(dirname "$EXISTING_CONFIG")
         sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<UNITEOF
@@ -128,7 +131,7 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${EXISTING_CONFIG_DIR} ${INSTALL_DIR}/gatecrash
+ReadWritePaths=${EXISTING_CONFIG_DIR} ${INSTALL_DIR}
 PrivateTmp=true
 
 # Allow binding to privileged ports (80, 443)
@@ -164,6 +167,7 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     sudo useradd -r -s /usr/sbin/nologin "$SERVICE_USER"
 fi
 sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_DIR"
+sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 # ── Ask for admin hostname ─────────────────────────────────────────
 
@@ -210,7 +214,7 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${CONFIG_DIR} ${INSTALL_DIR}/gatecrash
+ReadWritePaths=${CONFIG_DIR} ${INSTALL_DIR}
 PrivateTmp=true
 
 # Allow binding to privileged ports (80, 443)
