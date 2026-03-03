@@ -127,6 +127,7 @@
             updating: false,
             init() {
                 this.checkUpdate();
+                setInterval(() => this.checkUpdate(), 5 * 60 * 1000);
             },
             async checkUpdate() {
                 try {
