@@ -80,7 +80,15 @@
             <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
                 Save this information now — the secret will not be shown again.
             </div>
-            <template x-for="field in [{label:'Token', key:'token'}, {label:'Client Command', key:'command'}, {label:'Docker Command', key:'docker'}]" :key="field.key">
+            <template x-for="field in [
+                {label:'Server', key:'server'},
+                {label:'Host Key', key:'host_key'},
+                {label:'Tunnel ID', key:'tunnel_id'},
+                {label:'Secret', key:'secret'},
+                {label:'Token', key:'token'},
+                {label:'Client Command', key:'command'},
+                {label:'Docker Command', key:'docker'}
+            ]" :key="field.key">
                 <div>
                     <label class="block text-xs font-medium text-gray-600 mb-1" x-text="field.label"></label>
                     <div class="flex gap-2">

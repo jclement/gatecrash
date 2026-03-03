@@ -1,7 +1,7 @@
 services:
   server:
     image: ghcr.io/jclement/gatecrash:latest
-    command: ["gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]
+    command: ["./gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]
     ports:
       - "80:80"
       - "443:443"
