@@ -110,11 +110,12 @@ func FormatUptime(since time.Time) string {
 
 // PageData is the template rendering context.
 type PageData struct {
-	Title   string
-	Active  string
-	Version string
-	Flash   *Flash
-	Data    any
+	Title             string
+	Active            string
+	Version           string
+	CheckIntervalMS   int64
+	Flash             *Flash
+	Data              any
 }
 
 // PasskeyView represents a passkey for display in templates.
@@ -133,20 +134,22 @@ type Flash struct {
 
 // Handlers holds the admin panel HTTP handlers.
 type Handlers struct {
-	version   string
-	tmplFuncs template.FuncMap
-	tmplFS    fs.FS
-	isDev     bool
-	baseHTML  string              // cached base template source
-	pages    map[string]*template.Template // pre-compiled: page name → base+page
+	version         string
+	checkIntervalMS int64
+	tmplFuncs       template.FuncMap
+	tmplFS          fs.FS
+	isDev           bool
+	baseHTML        string                       // cached base template source
+	pages           map[string]*template.Template // pre-compiled: page name → base+page
 }
 
 // NewHandlers creates admin panel handlers.
-func NewHandlers(version string, templateFS fs.FS) (*Handlers, error) {
+func NewHandlers(version string, checkInterval time.Duration, templateFS fs.FS) (*Handlers, error) {
 	h := &Handlers{
-		version: version,
-		tmplFS:  templateFS,
-		isDev:   version == "dev",
+		version:         version,
+		checkIntervalMS: checkInterval.Milliseconds(),
+		tmplFS:          templateFS,
+		isDev:           version == "dev",
 		tmplFuncs: template.FuncMap{
 			"version": func() string { return version },
 		},
@@ -205,6 +208,7 @@ func (h *Handlers) Render(w http.ResponseWriter, page string, data *PageData) {
 		data = &PageData{}
 	}
 	data.Version = h.version
+	data.CheckIntervalMS = h.checkIntervalMS
 
 	var tmpl *template.Template
 	var err error

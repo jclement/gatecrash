@@ -241,7 +241,7 @@ func (s *Server) initAdmin() error {
 		}
 	}
 
-	ah, err := admin.NewHandlers(s.version, tmplFS)
+	ah, err := admin.NewHandlers(s.version, s.cfg.CheckIntervalDuration(), tmplFS)
 	if err != nil {
 		return fmt.Errorf("admin handlers: %w", err)
 	}

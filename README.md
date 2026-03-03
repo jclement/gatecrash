@@ -227,22 +227,28 @@ docker run -d \
 
 ### Docker Compose Example
 
+Create a `.env` file with your tunnel credentials:
+
+```env
+GATECRASH_SERVER=tunnel.example.com:2222
+GATECRASH_TOKEN_ID=web-app
+GATECRASH_TOKEN_SECRET=YOUR_SECRET
+```
+
 ```yaml
 services:
-  app:
-    image: your-app:latest
-    ports:
-      - "8000:8000"
+  whoami:
+    image: traefik/whoami
 
   tunnel:
     image: ghcr.io/jclement/gatecrash:latest
     command: ["gatecrash", "client"]
     environment:
-      GATECRASH_SERVER: tunnel.example.com:2222
-      GATECRASH_TOKEN: web-app:YOUR_SECRET
-      GATECRASH_TARGET: app:8000
+      GATECRASH_SERVER: ${GATECRASH_SERVER}
+      GATECRASH_TOKEN: ${GATECRASH_TOKEN_ID}:${GATECRASH_TOKEN_SECRET}
+      GATECRASH_TARGET: whoami:80
     depends_on:
-      - app
+      - whoami
 ```
 
 ---
