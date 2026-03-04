@@ -81,16 +81,18 @@
                 Save this information now — the secret will not be shown again.
             </div>
             <template x-for="field in [
-                {label:'Server', key:'server'},
-                {label:'Host Key', key:'host_key'},
-                {label:'Tunnel ID', key:'tunnel_id'},
-                {label:'Secret', key:'secret'},
-                {label:'Token', key:'token'},
-                {label:'Client Command', key:'command'},
-                {label:'Docker Command', key:'docker'}
+                {label:'Server',         key:'server',    tip:'SSH address the client connects to'},
+                {label:'Host Key',       key:'host_key',  tip:'SSH host key fingerprint for verifying the server'},
+                {label:'Token ID',       key:'tunnel_id', tip:'Identifies which tunnel this client connects to'},
+                {label:'Token Secret',   key:'secret',    tip:'Authentication secret — treat like a password'},
+                {label:'Client Command', key:'command',   tip:'Run this to connect using the gatecrash binary'},
+                {label:'Docker Command', key:'docker',    tip:'Run this to connect using the Docker image'}
             ]" :key="field.key">
                 <div>
-                    <label class="block text-xs font-medium text-gray-600 mb-1" x-text="field.label"></label>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">
+                        <span x-text="field.label"></span>
+                        <span x-show="field.tip" :data-tip="field.tip" class="inline-block ml-1 w-3.5 h-3.5 text-[10px] leading-3.5 text-center rounded-full bg-gray-200 text-gray-500 align-middle">?</span>
+                    </label>
                     <div class="flex gap-2">
                         <input type="text" readonly :value="secret[field.key]"
                                :id="'secret-' + field.key"
@@ -461,8 +463,8 @@ function dashboard() {
             this.tunnelOpen = false;
             if (this.tunnelMode === 'create') {
                 const data = await resp.json();
-                if (data.token) {
-                    this.secret = { token: data.token, command: data.command, docker: data.docker };
+                if (data.secret) {
+                    this.secret = data;
                     this.secretOpen = true;
                 }
             }
@@ -486,7 +488,7 @@ function dashboard() {
                     const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', { method: 'POST' });
                     if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
                     const data = await resp.json();
-                    this.secret = { token: data.token, command: data.command, docker: data.docker };
+                    this.secret = data;
                     this.secretOpen = true;
                 });
         },

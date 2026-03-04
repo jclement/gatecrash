@@ -617,7 +617,6 @@ func (s *Server) secretResponse(tunnelID, plaintext string) map[string]string {
 		"host_key":  s.hostFingerprint,
 		"tunnel_id": tunnelID,
 		"secret":    plaintext,
-		"token":     tok,
 		"command":   fmt.Sprintf("gatecrash client --server %s --host-key %s --token %s --target 127.0.0.1:8000", sshAddr, s.hostFingerprint, tok),
 		"docker":    fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_HOST_KEY=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, s.hostFingerprint, tok),
 	}
