@@ -69,9 +69,9 @@
 </div>
 
 <!-- Secret Modal -->
-<div x-show="secretOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
-    <div class="absolute inset-0 bg-black/50" @click="secretOpen = false"></div>
-    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4" @click.stop>
+<div x-show="secretOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center" @click.self="secretOpen = false">
+    <div class="absolute inset-0 bg-black/50 -z-10"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
             <h3 class="text-base font-semibold">Tunnel Secret</h3>
             <button @click="secretOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
