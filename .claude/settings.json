@@ -50,7 +50,8 @@
       "Bash(npm init -y)",
       "Bash(npm install -D tailwindcss @tailwindcss/cli)",
       "Bash(npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --minify)",
-      "Bash(go test ./internal/update/)"
+      "Bash(go test ./internal/update/)",
+      "Bash(npx @tailwindcss/cli -i /Users/jsc/Developer/gatecrash/web/static/css/input.css -o /Users/jsc/Developer/gatecrash/web/static/css/app.css)"
     ],
     "additionalDirectories": [
       "/private/tmp"
