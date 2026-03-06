@@ -15,7 +15,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: jdx/mise-action@v3
         with: { experimental: true }
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
