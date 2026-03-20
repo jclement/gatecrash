@@ -21,6 +21,23 @@ archives:
     name_template: "gatecrash_{{ .Os }}_{{ .Arch }}"
     format: binary
 
+  - id: gatecrash-homebrew
+    builds: [gatecrash]
+    name_template: "gatecrash_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+brews:
+  - ids: [gatecrash-homebrew]
+    repository:
+      owner: jclement
+      name: homebrew-tap
+    homepage: https://github.com/jclement/gatecrash
+    description: Gatecrash - expose local services through a remote server
+    license: MIT
+    install: |
+      bin.install "gatecrash"
+
 dockers:
   - ids: [gatecrash]
     goos: linux
