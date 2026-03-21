@@ -105,6 +105,19 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 	// Browsers require h2 and http/1.1 for normal HTTPS to work.
 	tlsConfig.NextProtos = append(tlsConfig.NextProtos, "h2", "http/1.1")
 
+	// Security hardening: enforce TLS 1.2+ and modern cipher suites
+	tlsConfig.MinVersion = tls.VersionTLS12
+	tlsConfig.CipherSuites = []uint16{
+		tls.TLS_AES_128_GCM_SHA256,       // TLS 1.3
+		tls.TLS_AES_256_GCM_SHA384,       // TLS 1.3
+		tls.TLS_CHACHA20_POLY1305_SHA256, // TLS 1.3
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, // TLS 1.2
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,   // TLS 1.2
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, // TLS 1.2
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,   // TLS 1.2
+	}
+	tlsConfig.PreferServerCipherSuites = true
+
 	fallbackCert, err := generateSelfSignedCert([]string{"localhost"})
 	if err != nil {
 		return nil, fmt.Errorf("generating fallback cert: %w", err)
