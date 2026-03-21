@@ -17,7 +17,7 @@ func GenerateSecret() (string, string, error) {
 	}
 	plaintext := base64.RawURLEncoding.EncodeToString(b)
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plaintext), 12)
 	if err != nil {
 		return "", "", err
 	}
@@ -27,7 +27,7 @@ func GenerateSecret() (string, string, error) {
 
 // HashSecret creates a bcrypt hash from a plaintext secret.
 func HashSecret(plaintext string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plaintext), 12)
 	if err != nil {
 		return "", err
 	}
