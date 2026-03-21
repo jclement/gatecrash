@@ -96,15 +96,13 @@ func (c *Client) Run(ctx context.Context) error {
 func (c *Client) connect(ctx context.Context) error {
 	slog.Info("connecting", "server", c.cfg.ServerAddr)
 
-	hostKeyCallback := gossh.InsecureIgnoreHostKey()
-	if c.cfg.HostKey != "" {
-		cb, err := makeHostKeyCallback(c.cfg.HostKey)
-		if err != nil {
-			return fmt.Errorf("host key: %w", err)
-		}
-		hostKeyCallback = cb
-	} else {
-		slog.Warn("no host key fingerprint configured, accepting any server key")
+	if c.cfg.HostKey == "" {
+		return fmt.Errorf("SSH host key fingerprint is required (use --host-key flag)")
+	}
+
+	hostKeyCallback, err := makeHostKeyCallback(c.cfg.HostKey)
+	if err != nil {
+		return fmt.Errorf("host key: %w", err)
 	}
 
 	sshConfig := &gossh.ClientConfig{
