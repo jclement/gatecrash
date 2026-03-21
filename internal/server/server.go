@@ -282,15 +282,15 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuth(s.handleAPITunnels))
 	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAuth(s.handleAPITunnelsHTML))
 	s.adminMux.HandleFunc("GET /api/redirects/html", s.requireAuth(s.handleAPIRedirectsHTML))
-	s.adminMux.HandleFunc("POST /api/tunnels", s.requireAuth(s.handleCreateTunnel))
-	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireAuth(s.handleEditTunnel))
-	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireAuth(s.handleDeleteTunnel))
-	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireAuth(s.handleRegenerateSecret))
-	s.adminMux.HandleFunc("POST /api/redirects", s.requireAuth(s.handleCreateRedirect))
-	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireAuth(s.handleEditRedirect))
-	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireAuth(s.handleDeleteRedirect))
+	s.adminMux.HandleFunc("POST /api/tunnels", s.requireCSRF(s.handleCreateTunnel))
+	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireCSRF(s.handleEditTunnel))
+	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireCSRF(s.handleDeleteTunnel))
+	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireCSRF(s.handleRegenerateSecret))
+	s.adminMux.HandleFunc("POST /api/redirects", s.requireCSRF(s.handleCreateRedirect))
+	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireCSRF(s.handleEditRedirect))
+	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
 	s.adminMux.HandleFunc("GET /api/update", s.requireAuth(s.handleGetUpdate))
-	s.adminMux.HandleFunc("POST /api/update", s.requireAuth(s.handlePostUpdate))
+	s.adminMux.HandleFunc("POST /api/update", s.requireCSRF(s.handlePostUpdate))
 	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
 }
 
@@ -325,6 +325,19 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// requireCSRF wraps an authenticated JSON API handler with CSRF validation.
+// Expects X-CSRF-Token header to match the session-based CSRF token.
+func (s *Server) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
+	return s.requireAuthOrSetup(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-CSRF-Token")
+		if !s.sessionMgr.ValidCSRFToken(r, token) {
+			http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	})
 }
 
 // handleLogin renders the login page.
@@ -443,8 +456,9 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	redirects := s.buildRedirectViews()
 
 	s.adminH.Render(w, "pages/dashboard.html", &admin.PageData{
-		Title:  "Dashboard",
-		Active: "dashboard",
+		Title:     "Dashboard",
+		Active:    "dashboard",
+		CSRFToken: s.sessionMgr.CSRFToken(r),
 		Data: struct {
 			Tunnels   []admin.TunnelView
 			Redirects []RedirectView

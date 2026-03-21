@@ -114,6 +114,7 @@ type PageData struct {
 	Active            string
 	Version           string
 	CheckIntervalMS   int64
+	CSRFToken         string
 	Flash             *Flash
 	Data              any
 }
