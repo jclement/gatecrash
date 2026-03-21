@@ -243,7 +243,14 @@ func (h *Handlers) Render(w http.ResponseWriter, page string, data *PageData) {
 		http.Error(w, "Internal server error", 500)
 		return
 	}
+	// Security headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 	buf.WriteTo(w)
 }
 
