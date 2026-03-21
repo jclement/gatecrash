@@ -116,7 +116,8 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, // TLS 1.2
 		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,   // TLS 1.2
 	}
-	tlsConfig.PreferServerCipherSuites = true
+	// Note: PreferServerCipherSuites is deprecated and ignored in Go 1.18+
+	// Server preference is now automatic for TLS 1.2
 
 	fallbackCert, err := generateSelfSignedCert([]string{"localhost"})
 	if err != nil {
