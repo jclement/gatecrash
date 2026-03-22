@@ -32,29 +32,6 @@ func TestStripPort(t *testing.T) {
 	}
 }
 
-func TestIsIPAddress(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"192.168.1.1", true},
-		{"10.0.0.1", true},
-		{"::1", true},
-		{"example.com", false},
-		{"app.example.com", false},
-		{"localhost", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := isIPAddress(tt.input)
-			if result != tt.expected {
-				t.Fatalf("isIPAddress(%q) = %v, want %v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestVhostRedirect(t *testing.T) {
 	cfg := &config.Config{
 		Redirect: []config.Redirect{

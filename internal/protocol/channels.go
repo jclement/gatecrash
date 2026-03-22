@@ -45,7 +45,6 @@ type ControlMessage struct {
 // Control message types.
 const (
 	ControlHeartbeat       = "heartbeat"
-	ControlHeartbeatAck    = "heartbeat_ack"
 	ControlClientInfo      = "client_info"
 	ControlUpdateAvailable = "update_available"
 )

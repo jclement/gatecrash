@@ -104,12 +104,6 @@ func stripPort(host string) string {
 	return h
 }
 
-func isIPAddress(host string) bool {
-	host = strings.TrimPrefix(host, "[")
-	host = strings.TrimSuffix(host, "]")
-	return net.ParseIP(host) != nil
-}
-
 // serveAdmin applies security headers and delegates to the admin mux.
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")

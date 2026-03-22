@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,12 +11,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type sessionContextKey string
-
 const (
-	sessionCookieName             = "gatecrash_session"
-	sessionDuration               = 24 * time.Hour
-	ctxKeyAuthenticated sessionContextKey = "authenticated"
+	sessionCookieName = "gatecrash_session"
+	sessionDuration   = 24 * time.Hour
 )
 
 // SessionManager handles JWT-based sessions.
@@ -97,24 +93,6 @@ func (sm *SessionManager) ValidateSession(r *http.Request) bool {
 	}
 
 	return true
-}
-
-// RequireAuth is middleware that enforces authentication.
-func (sm *SessionManager) RequireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sm.ValidateSession(r) {
-			ctx := context.WithValue(r.Context(), ctxKeyAuthenticated, true)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-	})
-}
-
-// IsAuthenticated checks if the request context has been authenticated.
-func IsAuthenticated(r *http.Request) bool {
-	auth, _ := r.Context().Value(ctxKeyAuthenticated).(bool)
-	return auth
 }
 
 // CSRFToken generates a CSRF token derived from the session cookie.

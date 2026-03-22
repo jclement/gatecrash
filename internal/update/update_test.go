@@ -54,11 +54,65 @@ func TestValidateDownloadURL(t *testing.T) {
 }
 
 func TestSelfUpdateUntrustedURL(t *testing.T) {
+	if IsDocker() {
+		// In Docker, SelfUpdate returns early with a Docker-specific error
+		// before it reaches URL validation.
+		err := SelfUpdate("https://evil.com/malicious", "")
+		if err == nil {
+			t.Fatal("expected error in Docker, got nil")
+		}
+		if !strings.Contains(err.Error(), "Docker") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		return
+	}
+
 	err := SelfUpdate("https://evil.com/malicious", "")
 	if err == nil {
 		t.Fatal("expected error for untrusted URL, got nil")
 	}
 	if !strings.Contains(err.Error(), "URL validation failed") {
 		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestSelfUpdateInDocker(t *testing.T) {
+	if !IsDocker() {
+		t.Skip("not running in Docker")
+	}
+	err := SelfUpdate("https://github.com/jclement/gatecrash/releases/download/v1.0.0/gatecrash_linux_amd64", "")
+	if err == nil {
+		t.Fatal("expected error in Docker, got nil")
+	}
+	if !strings.Contains(err.Error(), "Docker") {
+		t.Fatalf("expected Docker error, got: %v", err)
+	}
+}
+
+func TestValidateDownloadURL_EmptyURL(t *testing.T) {
+	err := validateDownloadURL("")
+	if err == nil {
+		t.Fatal("expected error for empty URL")
+	}
+}
+
+func TestIsDocker(t *testing.T) {
+	// Just verify it doesn't panic and returns a bool
+	_ = IsDocker()
+}
+
+func TestCheckResult_Fields(t *testing.T) {
+	r := &CheckResult{
+		CurrentVersion:  "1.0.0",
+		LatestVersion:   "1.1.0",
+		UpdateAvailable: true,
+		DownloadURL:     "https://github.com/example/release",
+		ChecksumURL:     "https://github.com/example/checksums",
+	}
+	if r.CurrentVersion != "1.0.0" {
+		t.Fatal("unexpected current version")
+	}
+	if !r.UpdateAvailable {
+		t.Fatal("expected update available")
 	}
 }

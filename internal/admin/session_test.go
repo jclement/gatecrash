@@ -128,47 +128,6 @@ func TestSessionManager_CSRFToken_NoCookie(t *testing.T) {
 	}
 }
 
-func TestSessionManager_RequireAuth(t *testing.T) {
-	sm := NewSessionManager("test-secret")
-
-	var authenticated bool
-	handler := sm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authenticated = IsAuthenticated(r)
-		w.WriteHeader(200)
-	}))
-
-	// Without session — redirect
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/dashboard", nil)
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("expected redirect, got %d", w.Code)
-	}
-
-	// With valid session — pass through
-	wCreate := httptest.NewRecorder()
-	sm.CreateSession(wCreate)
-	cookie := wCreate.Result().Cookies()[0]
-
-	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest("GET", "/dashboard", nil)
-	req2.AddCookie(cookie)
-	handler.ServeHTTP(w2, req2)
-	if w2.Code != 200 {
-		t.Fatalf("expected 200, got %d", w2.Code)
-	}
-	if !authenticated {
-		t.Fatal("handler should see authenticated context")
-	}
-}
-
-func TestIsAuthenticated_NoContext(t *testing.T) {
-	req := httptest.NewRequest("GET", "/", nil)
-	if IsAuthenticated(req) {
-		t.Fatal("should not be authenticated without context")
-	}
-}
-
 func TestSessionManager_AlgorithmConfusion(t *testing.T) {
 	sm := NewSessionManager("test-secret")
 

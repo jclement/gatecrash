@@ -16,6 +16,7 @@ services:
   #   command: ["gatecrash", "client"]
   #   environment:
   #     GATECRASH_SERVER: server:2222
+  #     GATECRASH_HOST_KEY: "SHA256:your_host_key_fingerprint"
   #     GATECRASH_TOKEN: "web-app:YOUR_SECRET"
   #     GATECRASH_TARGET: webapp:3000
   #   depends_on: [webapp]

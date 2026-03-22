@@ -1,7 +1,10 @@
 package admin
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -106,5 +109,201 @@ func TestTunnelView_ClientSummary(t *testing.T) {
 	tv2 := TunnelView{}
 	if tv2.ClientSummary() != "" {
 		t.Fatalf("ClientSummary empty = %q", tv2.ClientSummary())
+	}
+}
+
+func TestNewHandlers_Production(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html":             {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
+		"pages/login.html":      {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html":      {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":   {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":  {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":       {Data: []byte(`{{define "content"}}help{{end}}`)},
+	}
+
+	h, err := NewHandlers("1.0.0", 6*time.Hour, tmplFS)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	if h.version != "1.0.0" {
+		t.Fatalf("version = %q", h.version)
+	}
+	if h.isDev {
+		t.Fatal("should not be dev mode for version 1.0.0")
+	}
+	// Production mode pre-compiles all pages
+	if len(h.pages) != 5 {
+		t.Fatalf("expected 5 pre-compiled pages, got %d", len(h.pages))
+	}
+}
+
+func TestNewHandlers_DevMode(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html": {Data: []byte(`{{define "base"}}{{template "content" .}}{{end}}`)},
+	}
+
+	h, err := NewHandlers("dev", time.Hour, tmplFS)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	if !h.isDev {
+		t.Fatal("should be dev mode")
+	}
+	if len(h.pages) != 0 {
+		t.Fatalf("expected 0 pre-compiled pages in dev, got %d", len(h.pages))
+	}
+}
+
+func TestRender(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html":        {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
+		"pages/login.html": {Data: []byte(`{{define "content"}}login-page{{end}}`)},
+		"pages/setup.html": {Data: []byte(`{{define "content"}}setup-page{{end}}`)},
+		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":      {Data: []byte(`{{define "content"}}help{{end}}`)},
+	}
+
+	h, err := NewHandlers("1.0.0", time.Hour, tmplFS)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.Render(w, "pages/login.html", &PageData{Title: "Login"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if body != "base:login-page" {
+		t.Fatalf("body = %q", body)
+	}
+
+	// Check security headers
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("missing X-Content-Type-Options header")
+	}
+	if w.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatal("missing X-Frame-Options header")
+	}
+	if w.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("missing HSTS header")
+	}
+	if w.Header().Get("Content-Security-Policy") == "" {
+		t.Fatal("missing CSP header")
+	}
+}
+
+func TestRender_NilData(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html":        {Data: []byte(`{{define "base"}}ok{{end}}`)},
+		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":      {Data: []byte(`{{define "content"}}help{{end}}`)},
+	}
+
+	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
+	w := httptest.NewRecorder()
+	h.Render(w, "pages/login.html", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with nil data, got %d", w.Code)
+	}
+}
+
+func TestRender_UnknownPage(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html":        {Data: []byte(`{{define "base"}}ok{{end}}`)},
+		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":      {Data: []byte(`{{define "content"}}help{{end}}`)},
+	}
+
+	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
+	w := httptest.NewRecorder()
+	h.Render(w, "pages/nonexistent.html", nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for unknown page, got %d", w.Code)
+	}
+}
+
+func TestRenderPartial(t *testing.T) {
+	tmplFS := fstest.MapFS{
+		"base.html":        {Data: []byte(`{{define "base"}}base{{end}}`)},
+		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}{{define "partial"}}partial-content{{end}}`)},
+		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":      {Data: []byte(`{{define "content"}}help{{end}}`)},
+	}
+
+	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
+	w := httptest.NewRecorder()
+	h.RenderPartial(w, "pages/login.html", "partial", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if w.Body.String() != "partial-content" {
+		t.Fatalf("body = %q", w.Body.String())
+	}
+}
+
+func TestPageData_Fields(t *testing.T) {
+	pd := &PageData{
+		Title:           "Dashboard",
+		Active:          "dashboard",
+		Version:         "1.0.0",
+		CheckIntervalMS: 6000,
+		CSRFToken:       "abc123",
+		Flash:           &Flash{Type: "success", Message: "Done"},
+	}
+	if pd.Title != "Dashboard" {
+		t.Fatalf("Title = %q", pd.Title)
+	}
+	if pd.Flash.Type != "success" {
+		t.Fatalf("Flash.Type = %q", pd.Flash.Type)
+	}
+}
+
+func TestPasskeyView(t *testing.T) {
+	pv := PasskeyView{
+		Name:       "My Passkey",
+		CreatedAt:  "Jan 1, 2026",
+		LastUsedAt: "Mar 15, 2026",
+		IDB64:      "dGVzdA",
+	}
+	if pv.Name != "My Passkey" {
+		t.Fatalf("Name = %q", pv.Name)
+	}
+	if pv.IDB64 != "dGVzdA" {
+		t.Fatalf("IDB64 = %q", pv.IDB64)
+	}
+}
+
+func TestHostCert(t *testing.T) {
+	hc := HostCert{
+		Hostname: "example.com",
+		Valid:    true,
+		Expiry:   "May 15, 2026",
+	}
+	if !hc.Valid {
+		t.Fatal("expected valid cert")
+	}
+	if hc.Error != "" {
+		t.Fatalf("unexpected error: %q", hc.Error)
+	}
+
+	hc2 := HostCert{
+		Hostname: "bad.com",
+		Valid:    false,
+		Error:    "not provisioned",
+	}
+	if hc2.Valid {
+		t.Fatal("expected invalid cert")
 	}
 }

@@ -78,6 +78,7 @@ Download pre-built binaries for Linux, macOS, and Windows from [GitHub Releases]
    ```bash
    gatecrash client \
      --server tunnel.example.com:2222 \
+     --host-key "SHA256:..." \
      --token "web-app:YOUR_SECRET" \
      --target 127.0.0.1:8000
    ```
@@ -189,14 +190,14 @@ Example configuration:
 id = "backend-api"
 type = "http"
 hostnames = ["api.example.com"]
-secret_hash = "$2a$10$..."
+secret_hash = "$2a$12$..."
 preserve_host = true      # Backend needs original Host header
 
 [[tunnel]]
 id = "tls-backend"
 type = "http"
 hostnames = ["secure.example.com"]
-secret_hash = "$2a$10$..."
+secret_hash = "$2a$12$..."
 tls_passthrough = true    # Backend has its own TLS certificate
 ```
 
@@ -239,7 +240,7 @@ gatecrash help                  Show help
 | `--server` | `GATECRASH_SERVER` | **Yes** | | Server SSH address (`host:port`) |
 | `--token` | `GATECRASH_TOKEN` | **Yes** | | Tunnel token (`tunnel_id:secret`) |
 | `--target` | `GATECRASH_TARGET` | **Yes** | | Target service address (`[scheme://]host:port`) |
-| `--host-key` | `GATECRASH_HOST_KEY` | No | | Server SSH fingerprint (`SHA256:...`) for verification |
+| `--host-key` | `GATECRASH_HOST_KEY` | **Yes** | | Server SSH fingerprint (`SHA256:...`) for verification |
 | `--count` | `GATECRASH_COUNT` | No | `1` | Number of parallel tunnel connections (1-10) for redundancy |
 | `--debug` | | No | `false` | Enable debug logging |
 
@@ -281,6 +282,7 @@ docker run -d \
 ```bash
 docker run -d \
   -e GATECRASH_SERVER=tunnel.example.com:2222 \
+  -e GATECRASH_HOST_KEY=SHA256:your_host_key_fingerprint \
   -e GATECRASH_TOKEN=web-app:YOUR_SECRET \
   -e GATECRASH_TARGET=app:8000 \
   --network=app-network \
@@ -294,6 +296,7 @@ Create a `.env` file with your tunnel credentials:
 
 ```env
 GATECRASH_SERVER=tunnel.example.com:2222
+GATECRASH_HOST_KEY=SHA256:your_host_key_fingerprint
 GATECRASH_TOKEN_ID=web-app
 GATECRASH_TOKEN_SECRET=YOUR_SECRET
 ```
@@ -308,6 +311,7 @@ services:
     command: ["gatecrash", "client"]
     environment:
       GATECRASH_SERVER: ${GATECRASH_SERVER}
+      GATECRASH_HOST_KEY: ${GATECRASH_HOST_KEY}
       GATECRASH_TOKEN: ${GATECRASH_TOKEN_ID}:${GATECRASH_TOKEN_SECRET}
       GATECRASH_TARGET: whoami:80
     depends_on:
