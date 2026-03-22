@@ -1,0 +1,747 @@
+{{define "content"}}
+<div x-data="dashboard()" x-cloak>
+
+<!-- Bandwidth Graph -->
+<div class="bg-white rounded-lg border border-gray-200 mb-4 overflow-hidden">
+    <div class="px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-gray-600">Bandwidth</h2>
+        <div class="flex items-center gap-4 text-xs text-gray-500 font-mono">
+            <div class="flex items-center gap-1.5">
+                <span class="inline-block w-3 h-0.5 rounded" style="background: #3b82f6"></span>
+                <span>In: <span x-text="bwInRate">0 B/s</span></span>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <span class="inline-block w-3 h-0.5 rounded" style="background: #f97316"></span>
+                <span>Out: <span x-text="bwOutRate">0 B/s</span></span>
+            </div>
+        </div>
+    </div>
+    <div style="height: 80px;">
+        <canvas id="bw-canvas" style="width: 100%; height: 100%;"></canvas>
+    </div>
+</div>
+
+<!-- Tunnels Section -->
+<div class="bg-white rounded-lg border border-gray-200 mb-4">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+        <h2 class="text-base font-bold">Tunnels</h2>
+        <div class="flex items-center gap-2">
+            <div class="relative">
+                <select x-model="refreshInterval" @change="_setRefreshInterval(Number($event.target.value))"
+                        class="text-xs bg-gray-50 border border-gray-200 text-gray-500 rounded pl-6 pr-2 py-1.5 appearance-none cursor-pointer hover:border-gray-300 focus:outline-none focus:border-blue-400">
+                    <option value="1000">1s</option>
+                    <option value="2000">2s</option>
+                    <option value="5000">5s</option>
+                    <option value="10000">10s</option>
+                    <option value="30000">30s</option>
+                    <option value="0">Off</option>
+                </select>
+                <svg class="absolute left-1.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+            </div>
+            <button @click="openCreateTunnel()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Tunnel</button>
+        </div>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm responsive-table">
+            <thead>
+                <tr class="border-b border-gray-200 bg-gray-50">
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Tunnel</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Type</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Routes</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Client</th>
+                    <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Requests</th>
+                    <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Traffic</th>
+                    <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Active</th>
+                    <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tunnel-table-body" class="divide-y divide-gray-100">
+                {{template "tunnel-rows" .Data.Tunnels}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Redirects Section -->
+<div class="bg-white rounded-lg border border-gray-200">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+        <h2 class="text-base font-bold">Redirects</h2>
+        <button @click="openCreateRedirect()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Redirect</button>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm responsive-table">
+            <thead>
+                <tr class="border-b border-gray-200 bg-gray-50">
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">From</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">To</th>
+                    <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Preserve Path</th>
+                    <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="redirect-table-body" class="divide-y divide-gray-100">
+                {{template "redirect-rows" .Data.Redirects}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Secret Modal -->
+<div x-show="secretOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center" @click.self="secretOpen = false">
+    <div class="absolute inset-0 bg-black/50 -z-10"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 class="text-base font-semibold">Tunnel Secret</h3>
+            <button @click="secretOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+        </div>
+        <div class="px-5 py-4 space-y-3">
+            <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
+                Save this information now — the secret will not be shown again.
+            </div>
+            <template x-for="field in [
+                {label:'Server',         key:'server',    tip:'SSH address the client connects to'},
+                {label:'Host Key',       key:'host_key',  tip:'SSH host key fingerprint for verifying the server'},
+                {label:'Token ID',       key:'tunnel_id', tip:'Identifies which tunnel this client connects to'},
+                {label:'Token Secret',   key:'secret',    tip:'Authentication secret — treat like a password'},
+                {label:'Client Command', key:'command',   tip:'Run this to connect using the gatecrash binary'},
+                {label:'Docker Command', key:'docker',    tip:'Run this to connect using the Docker image'}
+            ]" :key="field.key">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">
+                        <span x-text="field.label"></span>
+                        <span x-show="field.tip" :data-tip="field.tip" class="inline-block ml-1 w-3.5 h-3.5 text-[10px] leading-3.5 text-center rounded-full bg-gray-200 text-gray-500 align-middle">?</span>
+                    </label>
+                    <div class="flex gap-2">
+                        <input type="text" readonly :value="secret[field.key]"
+                               :id="'secret-' + field.key"
+                               class="flex-1 font-mono text-xs bg-gray-50 border border-gray-300 rounded px-2 py-1.5 text-gray-700">
+                        <button @click="copyField('secret-' + field.key, $el)"
+                                class="text-xs px-2 py-1.5 border border-gray-300 rounded hover:bg-gray-50 transition-colors whitespace-nowrap">Copy</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-end">
+            <button @click="secretOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Done</button>
+        </div>
+    </div>
+</div>
+
+<!-- Tunnel Create/Edit Modal -->
+<div x-show="tunnelOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/50" @click="tunnelOpen = false"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4" @click.stop>
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 class="text-base font-semibold" x-text="tunnelMode === 'create' ? 'Add Tunnel' : 'Edit Tunnel'"></h3>
+            <button @click="tunnelOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+        </div>
+        <div class="px-5 py-4 space-y-3">
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Tunnel ID</label>
+                <input type="text" x-model="tunnel.id" :disabled="tunnelMode === 'edit'" placeholder="my-app"
+                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                <p class="text-xs text-gray-400 mt-0.5">Lowercase letters, numbers, and hyphens only.</p>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Type</label>
+                <select x-model="tunnel.type" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+                    <option value="http">HTTP</option>
+                    <option value="tcp">TCP</option>
+                </select>
+            </div>
+            <div x-show="tunnel.type === 'http'">
+                <label class="block text-xs font-medium text-gray-600 mb-1">Hostnames</label>
+                <input type="text" x-model="tunnel.hostnames" placeholder="app.example.com, www.example.com"
+                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                <p class="text-xs text-gray-400 mt-0.5">Comma-separated list of hostnames to route to this tunnel.</p>
+            </div>
+            <div x-show="tunnel.type === 'tcp'">
+                <label class="block text-xs font-medium text-gray-600 mb-1">Listen Port</label>
+                <input type="number" x-model="tunnel.listenPort" min="1" max="65535" placeholder="9000"
+                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            </div>
+            <div x-show="tunnel.type === 'http'">
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" x-model="tunnel.preserveHost" class="rounded">
+                    <span>Preserve original Host header</span>
+                </label>
+            </div>
+            <div x-show="tunnel.type === 'http'">
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
+                    <span>TLS Passthrough</span>
+                </label>
+                <p class="text-xs text-gray-400 mt-0.5 ml-6">Forward raw TLS to client (no certificate needed).</p>
+            </div>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+            <button @click="tunnelOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+            <button @click="saveTunnel()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors" x-text="tunnelMode === 'create' ? 'Create' : 'Save'"></button>
+        </div>
+    </div>
+</div>
+
+<!-- Redirect Create/Edit Modal -->
+<div x-show="redirectOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/50" @click="redirectOpen = false"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4" @click.stop>
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 class="text-base font-semibold" x-text="redirectMode === 'create' ? 'Add Redirect' : 'Edit Redirect'"></h3>
+            <button @click="redirectOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+        </div>
+        <div class="px-5 py-4 space-y-3">
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">From Hostname</label>
+                <input type="text" x-model="redirect.from" :disabled="redirectMode === 'edit'" placeholder="www.example.com"
+                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">To URL</label>
+                <input type="text" x-model="redirect.to" placeholder="https://example.com"
+                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            </div>
+            <div>
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" x-model="redirect.preservePath" class="rounded">
+                    <span>Preserve path</span>
+                </label>
+            </div>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+            <button @click="redirectOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+            <button @click="saveRedirect()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors" x-text="redirectMode === 'create' ? 'Create' : 'Save'"></button>
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div x-show="confirmOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/50" @click="confirmOpen = false"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4" @click.stop>
+        <div class="px-5 py-4 border-b border-gray-200">
+            <h3 class="text-base font-semibold" x-text="confirmTitle"></h3>
+        </div>
+        <div class="px-5 py-4">
+            <p class="text-sm text-gray-600" x-text="confirmMessage"></p>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+            <button @click="confirmOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+            <button @click="confirmAction?.()" :class="confirmBtnClass" x-text="confirmBtnLabel"
+                    class="px-3 py-1.5 text-sm rounded text-white transition-colors"></button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div class="fixed top-4 right-4 z-[60] flex flex-col gap-2">
+    <template x-for="toast in toasts" :key="toast.id">
+        <div x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 translate-x-4"
+             x-transition:enter-end="opacity-100 translate-x-0"
+             x-transition:leave="transition ease-in duration-150"
+             x-transition:leave-start="opacity-100 translate-x-0"
+             x-transition:leave-end="opacity-0 translate-x-4"
+             :class="toast.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'"
+             class="min-w-[300px] max-w-[500px] border rounded-lg px-4 py-3 text-sm shadow-lg flex items-start gap-2">
+            <span class="flex-1" x-text="toast.message"></span>
+            <button @click="toasts = toasts.filter(t => t.id !== toast.id)" class="text-lg leading-none opacity-50 hover:opacity-100">&times;</button>
+        </div>
+    </template>
+</div>
+
+</div>
+
+<script>
+function _formatBytes(b) {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
+}
+
+function _escapeHTML(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+function dashboard() {
+    const getCSRFToken = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const csrfHeaders = () => ({ 'X-CSRF-Token': getCSRFToken(), 'Content-Type': 'application/json' });
+
+    return {
+        // Confirm modal state
+        confirmOpen: false,
+        confirmTitle: '',
+        confirmMessage: '',
+        confirmBtnLabel: 'Confirm',
+        confirmBtnClass: 'bg-red-600 hover:bg-red-700',
+        confirmAction: null,
+
+        // Toast notifications
+        toasts: [],
+        toastId: 0,
+
+        // Secret modal
+        secretOpen: false,
+        secret: { token: '', command: '', docker: '' },
+
+        // Tunnel modal
+        tunnelOpen: false,
+        tunnelMode: 'create',
+        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false },
+
+        // Redirect modal
+        redirectOpen: false,
+        redirectMode: 'create',
+        redirect: { from: '', to: '', preservePath: true, originalFrom: '' },
+
+        // SSE + stats polling
+        _sse: null,
+        _pollTimer: null,
+        _statsCache: {},
+        refreshInterval: parseInt(localStorage.getItem('dashboardRefreshInterval') ?? '5000', 10),
+
+        // Bandwidth graph state
+        bwLastBytes: null, // {in, out, time}
+        bwInRate: '0 B/s',
+        bwOutRate: '0 B/s',
+        _bwChart: null,
+        _bwInSeries: null,
+        _bwOutSeries: null,
+
+        init() {
+            this._connectSSE();
+            this._startPollTimer();
+            this._initBandwidthGraph();
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    this._stopPollTimer();
+                } else {
+                    this._refreshStats();
+                    this._startPollTimer();
+                }
+            });
+        },
+
+        destroy() {
+            if (this._sse) { this._sse.close(); this._sse = null; }
+            this._stopPollTimer();
+        },
+
+        _startPollTimer() {
+            this._stopPollTimer();
+            if (this.refreshInterval > 0) {
+                this._pollTimer = setInterval(() => this._refreshStats(), this.refreshInterval);
+            }
+        },
+
+        _stopPollTimer() {
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+        },
+
+        _setRefreshInterval(ms) {
+            this.refreshInterval = ms;
+            localStorage.setItem('dashboardRefreshInterval', ms);
+            this._startPollTimer();
+        },
+
+        _connectSSE() {
+            if (this._sse) this._sse.close();
+            const es = new EventSource('/api/events');
+            es.addEventListener('config-reload', () => {
+                this._refreshTunnels();
+                this._refreshRedirects();
+            });
+            es.addEventListener('tunnel-connect', () => this._refreshTunnels());
+            es.addEventListener('tunnel-disconnect', () => this._refreshTunnels());
+            es.addEventListener('update-available', () => {
+                const banner = document.querySelector('[x-data="updateBanner()"]');
+                if (banner && banner.__x) banner.__x.$data.checkUpdate();
+            });
+            es.onerror = () => {
+                es.close();
+                setTimeout(() => this._connectSSE(), 3000);
+            };
+            this._sse = es;
+        },
+
+        async _refreshTunnels() {
+            try {
+                const resp = await fetch('/api/tunnels/html');
+                if (resp.ok) {
+                    document.getElementById('tunnel-table-body').innerHTML = await resp.text();
+                    this._statsCache = {};
+                }
+            } catch (_) {}
+        },
+
+        async _refreshRedirects() {
+            try {
+                const resp = await fetch('/api/redirects/html');
+                if (resp.ok) document.getElementById('redirect-table-body').innerHTML = await resp.text();
+            } catch (_) {}
+        },
+
+        async _refreshStats() {
+            try {
+                const resp = await fetch('/api/tunnels');
+                if (!resp.ok) return;
+                const tunnels = await resp.json();
+
+                // Calculate aggregate bandwidth
+                let totalIn = 0, totalOut = 0;
+                for (const t of tunnels) {
+                    totalIn += t.bytes_in;
+                    totalOut += t.bytes_out;
+                }
+                this._updateBandwidth(totalIn, totalOut);
+
+                for (const t of tunnels) {
+                    const row = document.querySelector('tr[data-tunnel-id="' + t.id + '"]');
+                    if (!row) continue;
+                    const prev = this._statsCache[t.id] || {};
+
+                    if (prev.requests !== t.requests) {
+                        const el = row.querySelector('[data-field="requests"]');
+                        if (el) el.textContent = t.requests;
+                    }
+                    if (prev.bytes_in !== t.bytes_in || prev.bytes_out !== t.bytes_out) {
+                        const el = row.querySelector('[data-field="traffic"]');
+                        if (el) el.textContent = _formatBytes(t.bytes_in) + ' in / ' + _formatBytes(t.bytes_out) + ' out';
+                    }
+                    if (prev.active_conns !== t.active_conns) {
+                        const el = row.querySelector('[data-field="active"]');
+                        if (el) el.textContent = t.active_conns;
+                    }
+
+                    const clientEl = row.querySelector('[data-field="client"]');
+                    if (clientEl) {
+                        let html;
+                        if (!t.connected) {
+                            html = '<span class="text-xs text-gray-400">-</span>';
+                        } else if (t.client_count === 1) {
+                            html = '<span class="text-xs">' + _escapeHTML(t.clients[0].addr) + '</span> <span class="text-xs text-gray-400">' + _escapeHTML(t.clients[0].uptime) + '</span>';
+                        } else {
+                            const tip = t.clients.map(c => c.addr + ' (' + c.uptime + ')').sort().join('\n');
+                            html = '<span class="text-xs" data-tip="' + _escapeHTML(tip) + '">' + t.client_count + ' clients</span>';
+                        }
+                        const prevClient = prev._clientHTML;
+                        if (prevClient !== html) clientEl.innerHTML = html;
+                        t._clientHTML = html;
+                    }
+
+                    this._statsCache[t.id] = t;
+                }
+            } catch (_) {}
+        },
+
+        showToast(message, type) {
+            type = type || 'error';
+            const id = ++this.toastId;
+            this.toasts.push({ id, message, type });
+            setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 5000);
+        },
+
+        showConfirm(title, message, btnLabel, btnClass, action) {
+            this.confirmTitle = title;
+            this.confirmMessage = message;
+            this.confirmBtnLabel = btnLabel;
+            this.confirmBtnClass = btnClass;
+            this.confirmAction = () => { this.confirmOpen = false; action(); };
+            this.confirmOpen = true;
+        },
+
+        copyField(id, btn) {
+            const el = document.getElementById(id);
+            navigator.clipboard.writeText(el.value);
+            const orig = btn.textContent;
+            btn.textContent = 'Copied!';
+            btn.classList.replace('border-gray-300', 'border-green-400');
+            btn.classList.add('text-green-700', 'bg-green-50');
+            setTimeout(() => {
+                btn.textContent = orig;
+                btn.classList.replace('border-green-400', 'border-gray-300');
+                btn.classList.remove('text-green-700', 'bg-green-50');
+            }, 2000);
+        },
+
+        // Tunnel CRUD
+        openCreateTunnel() {
+            this.tunnelMode = 'create';
+            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false };
+            this.tunnelOpen = true;
+        },
+
+        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough) {
+            this.tunnelMode = 'edit';
+            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough };
+            this.tunnelOpen = true;
+        },
+
+        async saveTunnel() {
+            const body = { id: this.tunnel.id, type: this.tunnel.type };
+            if (this.tunnel.type === 'http') {
+                body.hostnames = this.tunnel.hostnames.split(',').map(h => h.trim()).filter(h => h);
+                body.preserve_host = this.tunnel.preserveHost;
+                body.tls_passthrough = this.tunnel.tlsPassthrough;
+            } else {
+                body.listen_port = parseInt(this.tunnel.listenPort, 10) || 0;
+            }
+
+            const url = this.tunnelMode === 'create' ? '/api/tunnels' : '/api/tunnels/' + this.tunnel.id;
+            const method = this.tunnelMode === 'create' ? 'POST' : 'PUT';
+
+            const resp = await fetch(url, {
+                method,
+                headers: csrfHeaders(),
+                body: JSON.stringify(body),
+            });
+            if (!resp.ok) { this.showToast('Error: ' + await resp.text()); return; }
+
+            this.tunnelOpen = false;
+            if (this.tunnelMode === 'create') {
+                const data = await resp.json();
+                if (data.secret) {
+                    this.secret = data;
+                    this.secretOpen = true;
+                }
+            }
+        },
+
+        deleteTunnel(id) {
+            this.showConfirm('Delete Tunnel',
+                'Delete tunnel "' + id + '"? Connected clients will be disconnected.',
+                'Delete', 'bg-red-600 hover:bg-red-700',
+                async () => {
+                    const resp = await fetch('/api/tunnels/' + id, { method: 'DELETE', headers: csrfHeaders() });
+                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); }
+                });
+        },
+
+        regenerateSecret(tunnelId) {
+            this.showConfirm('Regenerate Secret',
+                'Generate a new secret for tunnel "' + tunnelId + '"? The old secret will stop working.',
+                'Regenerate', 'bg-amber-500 hover:bg-amber-600',
+                async () => {
+                    const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', { method: 'POST', headers: csrfHeaders() });
+                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
+                    const data = await resp.json();
+                    this.secret = data;
+                    this.secretOpen = true;
+                });
+        },
+
+        // Redirect CRUD
+        openCreateRedirect() {
+            this.redirectMode = 'create';
+            this.redirect = { from: '', to: '', preservePath: true, originalFrom: '' };
+            this.redirectOpen = true;
+        },
+
+        openEditRedirect(from, to, preservePath) {
+            this.redirectMode = 'edit';
+            this.redirect = { from, to, preservePath: !!preservePath, originalFrom: from };
+            this.redirectOpen = true;
+        },
+
+        async saveRedirect() {
+            const body = { from: this.redirect.from, to: this.redirect.to, preserve_path: this.redirect.preservePath };
+            const url = this.redirectMode === 'create' ? '/api/redirects' : '/api/redirects/' + encodeURIComponent(this.redirect.originalFrom);
+            const method = this.redirectMode === 'create' ? 'POST' : 'PUT';
+
+            const resp = await fetch(url, {
+                method,
+                headers: csrfHeaders(),
+                body: JSON.stringify(body),
+            });
+            if (!resp.ok) { this.showToast('Error: ' + await resp.text()); return; }
+            this.redirectOpen = false;
+        },
+
+        deleteRedirect(from) {
+            this.showConfirm('Delete Redirect',
+                'Delete redirect from "' + from + '"?',
+                'Delete', 'bg-red-600 hover:bg-red-700',
+                async () => {
+                    const resp = await fetch('/api/redirects/' + encodeURIComponent(from), { method: 'DELETE', headers: csrfHeaders() });
+                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); }
+                });
+        },
+
+        // Bandwidth graph
+        _initBandwidthGraph() {
+            this._bwInSeries = new TimeSeries();
+            this._bwOutSeries = new TimeSeries();
+
+            const chart = new SmoothieChart({
+                responsive: true,
+                millisPerPixel: 100,
+                interpolation: 'bezier',
+                grid: {
+                    fillStyle: '#ffffff',
+                    strokeStyle: '#f0f0f0',
+                    sharpLines: true,
+                    borderVisible: false,
+                    verticalSections: 3,
+                },
+                labels: {
+                    fillStyle: '#9ca3af',
+                    fontSize: 10,
+                    fontFamily: 'Roboto, ui-monospace, monospace',
+                    precision: 0,
+                },
+                yLabelWidth: 55,
+                tooltip: false,
+                maxValueScale: 1.15,
+                minValue: 0,
+            });
+
+            const self = this;
+            chart.options.yIntermediateFormatter = function(val) {
+                return self._formatRate(val);
+            };
+
+            chart.addTimeSeries(this._bwInSeries, {
+                strokeStyle: '#3b82f6',
+                lineWidth: 1.5,
+                fillStyle: 'rgba(59, 130, 246, 0.08)',
+            });
+            chart.addTimeSeries(this._bwOutSeries, {
+                strokeStyle: '#f97316',
+                lineWidth: 1.5,
+                fillStyle: 'rgba(249, 115, 22, 0.08)',
+            });
+
+            chart.streamTo(document.getElementById('bw-canvas'), 1000);
+            this._bwChart = chart;
+
+            // Load history so the graph isn't empty on page load
+            this._loadBandwidthHistory();
+        },
+
+        async _loadBandwidthHistory() {
+            try {
+                const resp = await fetch('/api/bandwidth');
+                if (!resp.ok) return;
+                const samples = await resp.json();
+                if (!samples || !samples.length) return;
+                for (const s of samples) {
+                    this._bwInSeries.append(s.t, s.in);
+                    this._bwOutSeries.append(s.t, s.out);
+                }
+                // Update legend with latest values
+                const last = samples[samples.length - 1];
+                this.bwInRate = this._formatRate(last.in);
+                this.bwOutRate = this._formatRate(last.out);
+            } catch (_) {}
+        },
+
+        _updateBandwidth(totalIn, totalOut) {
+            const now = Date.now();
+
+            if (this.bwLastBytes !== null) {
+                const dt = (now - this.bwLastBytes.time) / 1000;
+                if (dt > 0 && dt < 60) {
+                    const rateIn = Math.max(0, (totalIn - this.bwLastBytes.in) / dt);
+                    const rateOut = Math.max(0, (totalOut - this.bwLastBytes.out) / dt);
+
+                    if (this._bwInSeries) {
+                        this._bwInSeries.append(now, rateIn);
+                        this._bwOutSeries.append(now, rateOut);
+                    }
+
+                    this.bwInRate = this._formatRate(rateIn);
+                    this.bwOutRate = this._formatRate(rateOut);
+                }
+            }
+
+            this.bwLastBytes = { in: totalIn, out: totalOut, time: now };
+        },
+
+        _formatRate(bytesPerSec) {
+            const k = 1024;
+            if (bytesPerSec >= k * k * k) return (bytesPerSec / (k * k * k)).toFixed(1) + ' GB/s';
+            if (bytesPerSec >= k * k) return (bytesPerSec / (k * k)).toFixed(1) + ' MB/s';
+            if (bytesPerSec >= k) return (bytesPerSec / k).toFixed(1) + ' KB/s';
+            return Math.round(bytesPerSec) + ' B/s';
+        },
+    };
+}
+</script>
+{{end}}
+
+{{define "tunnel-rows"}}
+{{if .}}
+{{range .}}
+<tr class="hover:bg-gray-50" data-tunnel-id="{{.ID}}">
+    <td class="px-3 py-2" data-label="Status"><span class="status-dot {{if .Connected}}connected{{else}}disconnected{{end}}"></span></td>
+    <td class="px-3 py-2 font-semibold" data-label="Tunnel">{{.ID}}</td>
+    <td class="px-3 py-2" data-label="Type">
+        {{if eq .Type "http"}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">http</span>
+        {{else}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">tcp</span>{{end}}
+    </td>
+    <td class="px-3 py-2" data-label="Routes">
+        {{if eq .Type "http"}}{{if .TLSPassthrough}}{{range .Hostnames}}<div class="flex items-center gap-1.5">
+            <code class="text-xs">{{.}}</code>
+            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">passthrough</span>
+        </div>{{end}}{{else}}{{range .HostCerts}}<div class="flex items-center gap-1.5">
+            <code class="text-xs">{{.Hostname}}</code>
+            {{if .Valid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" data-tip="Expires {{.Expiry}}">{{.Expiry}}</span>
+            {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" data-tip="{{.Error}}">No TLS</span>{{end}}
+        </div>{{end}}{{end}}
+        {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
+    </td>
+    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs" data-tip="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests" data-label="Requests">{{.Requests}}</td>
+    <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic" data-label="Traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
+    <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>
+    <td class="px-3 py-2 text-right card-actions">
+        <div class="flex items-center justify-end gap-1">
+            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}})"
+                    class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
+            <button @click="regenerateSecret('{{.ID}}')"
+                    class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">New Secret</button>
+            <button @click="deleteTunnel('{{.ID}}')"
+                    class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Delete</button>
+        </div>
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr class="empty-row"><td colspan="9" class="px-3 py-6 text-center text-gray-400">No tunnels configured. Click "Add Tunnel" to create one.</td></tr>
+{{end}}
+{{end}}
+
+{{define "redirect-rows"}}
+{{if .}}
+{{range .}}
+<tr class="hover:bg-gray-50">
+    <td class="px-3 py-2" data-label="From">
+        <div class="flex items-center gap-1.5">
+            <code class="text-xs">{{.From}}</code>
+            {{if .CertValid}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700" data-tip="Expires {{.CertExpiry}}">{{.CertExpiry}}</span>
+            {{else if .CertError}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700" data-tip="{{.CertError}}">No TLS</span>{{end}}
+        </div>
+    </td>
+    <td class="px-3 py-2" data-label="To"><code class="text-xs">{{.To}}</code></td>
+    <td class="px-3 py-2" data-label="Path">
+        {{if .PreservePath}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">Yes</span>
+        {{else}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">No</span>{{end}}
+    </td>
+    <td class="px-3 py-2 text-right card-actions">
+        <div class="flex items-center justify-end gap-1">
+            <button @click="openEditRedirect('{{.From}}', '{{.To}}', {{.PreservePath}})"
+                    class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
+            <button @click="deleteRedirect('{{.From}}')"
+                    class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Delete</button>
+        </div>
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr class="empty-row"><td colspan="4" class="px-3 py-6 text-center text-gray-400">No redirects configured. Click "Add Redirect" to create one.</td></tr>
+{{end}}
+{{end}}

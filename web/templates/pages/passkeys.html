@@ -1,0 +1,86 @@
+{{define "content"}}
+<div x-data="{
+    confirmOpen: false,
+    confirmForm: null,
+    askDelete(form) {
+        this.confirmForm = form;
+        this.confirmOpen = true;
+    },
+    doDelete() {
+        this.confirmOpen = false;
+        if (this.confirmForm) this.confirmForm.submit();
+    }
+}">
+    <div class="max-w-3xl mx-auto">
+        <div class="flex justify-between items-center mb-3">
+            <h1 class="text-lg font-bold">Passkeys</h1>
+            <button id="register-btn" onclick="registerPasskey()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+                Add Passkey
+            </button>
+        </div>
+        <p id="status" class="text-xs mb-3 text-gray-500"></p>
+
+        <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <table class="w-full text-sm responsive-table">
+                <thead>
+                    <tr class="border-b border-gray-200 bg-gray-50">
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Created</th>
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Last Used</th>
+                        <th class="px-3 py-2"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {{range .Data.Passkeys}}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 font-medium" data-label="Name">{{.Name}}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500" data-label="Created">{{.CreatedAt}}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500" data-label="Last Used">{{.LastUsedAt}}</td>
+                        <td class="px-3 py-2 text-right card-actions">
+                            {{if $.Data.CanDelete}}
+                            <form method="POST" action="/passkeys/delete" class="inline"
+                                  @submit.prevent="askDelete($el)">
+                                <input type="hidden" name="id" value="{{.IDB64}}">
+                                <input type="hidden" name="csrf_token" value="{{$.Data.CSRFToken}}">
+                                <button type="submit" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Remove</button>
+                            </form>
+                            {{else}}
+                            <span data-tip="Cannot remove last passkey">
+                                <button disabled class="text-xs bg-gray-100 text-gray-400 px-2 py-1 rounded cursor-not-allowed pointer-events-none">Remove</button>
+                            </span>
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{else}}
+                    <tr class="empty-row">
+                        <td colspan="4" class="px-3 py-6 text-center text-gray-400">No passkeys registered.</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div x-show="confirmOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/50" @click="confirmOpen = false"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4" @click.stop>
+            <div class="px-5 py-4 border-b border-gray-200">
+                <h3 class="text-base font-semibold">Remove Passkey</h3>
+            </div>
+            <div class="px-5 py-4">
+                <p class="text-sm text-gray-600">Are you sure you want to remove this passkey? You won't be able to use it to log in anymore.</p>
+            </div>
+            <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+                <button @click="confirmOpen = false"
+                        class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+                <button @click="doDelete()"
+                        class="px-3 py-1.5 text-sm rounded bg-red-600 text-white hover:bg-red-700 transition-colors">Remove</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/webauthn.js"></script>
+{{end}}

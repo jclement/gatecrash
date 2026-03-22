@@ -1,0 +1,114 @@
+[tools]
+go = "latest"
+goreleaser = "latest"
+"go:github.com/air-verse/air" = "latest"
+node = "lts"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "go mod tidy && npm install"
+
+[tasks.tailwind]
+description = "Build Tailwind CSS"
+run = "npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --minify"
+
+[tasks."tailwind:watch"]
+description = "Watch and rebuild Tailwind CSS"
+run = "npx @tailwindcss/cli -i web/static/css/input.css -o web/static/css/app.css --watch"
+
+[tasks.dev]
+description = "Run server with hot-reload"
+run = "air"
+
+[tasks.server]
+description = "Build and run the server"
+run = """
+#!/bin/bash
+set -e
+go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Starting server..."
+./bin/gatecrash server --config gatecrash.toml --debug "$@"
+"""
+
+[tasks.client]
+description = "Build and run the client"
+run = """
+#!/bin/bash
+set -e
+go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Starting client..."
+./bin/gatecrash client "$@"
+"""
+
+[tasks.test]
+description = "Run tests"
+run = "go test -v -race -cover ./..."
+
+[tasks.build]
+description = "Build binary"
+depends = ["setup", "tailwind"]
+run = """
+#!/bin/bash
+set -e
+CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+echo "Built: bin/gatecrash"
+"""
+
+[tasks.lint]
+description = "Run linters"
+run = "go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@latest ./..."
+
+[tasks.fmt]
+description = "Format code"
+run = "go fmt ./..."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf bin/ dist/ tmp/ data/*.db"
+
+[tasks.release-snapshot]
+description = "Test release build locally"
+run = "goreleaser release --snapshot --clean"
+
+[tasks.release]
+description = "Tag a new release and push to trigger CI"
+run = """
+#!/bin/bash
+set -e
+
+# Get latest tag
+LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+echo "Current version: $LATEST"
+
+# Parse semver
+VERSION="${LATEST#v}"
+IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+PATCH_BUMP="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+MINOR_BUMP="v${MAJOR}.$((MINOR + 1)).0"
+MAJOR_BUMP="v$((MAJOR + 1)).0.0"
+
+echo ""
+echo "  1) Patch  $PATCH_BUMP"
+echo "  2) Minor  $MINOR_BUMP"
+echo "  3) Major  $MAJOR_BUMP"
+echo ""
+read -rp "Pick [1/2/3]: " CHOICE
+
+case "$CHOICE" in
+  1) TAG="$PATCH_BUMP" ;;
+  2) TAG="$MINOR_BUMP" ;;
+  3) TAG="$MAJOR_BUMP" ;;
+  *) echo "Invalid choice"; exit 1 ;;
+esac
+
+read -rp "Tag $TAG and push? [y/N] " CONFIRM
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+  echo "Cancelled."
+  exit 0
+fi
+
+git tag -a "$TAG" -m "Release $TAG"
+git push origin "$TAG"
+echo "Pushed $TAG — CI will build the release."
+"""

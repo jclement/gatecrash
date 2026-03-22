@@ -1,0 +1,26 @@
+# Build
+bin/
+tmp/
+dist/
+node_modules/
+
+# Data
+data/
+*.db
+certs/
+
+# Config (generated)
+gatecrash.toml
+passkeys.json
+host_key
+host_key.pub
+
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
