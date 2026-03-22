@@ -430,6 +430,10 @@ func (s *Server) handleDeletePasskey(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout clears the session and redirects to login.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.sessionMgr.ValidCSRFToken(r, r.FormValue("csrf_token")) {
+		http.Error(w, "invalid CSRF token", http.StatusForbidden)
+		return
+	}
 	s.sessionMgr.ClearSession(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

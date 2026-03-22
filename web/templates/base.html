@@ -34,6 +34,7 @@
                 </div>
                 <span class="text-xs bg-gray-700 px-2 py-0.5 rounded">v{{.Version}}</span>
                 <form method="POST" action="/logout">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
                     <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Logout</button>
                 </form>
             </div>
@@ -60,6 +61,7 @@
                 </div>
                 <span class="text-xs bg-gray-700 px-2 py-0.5 rounded">v{{.Version}}</span>
                 <form method="POST" action="/logout" class="ml-auto">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
                     <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Logout</button>
                 </form>
             </div>
@@ -145,7 +147,8 @@
                 if (!confirm('Update to v' + this.latest + '? The server will restart.')) return;
                 this.updating = true;
                 try {
-                    const resp = await fetch('/api/update', { method: 'POST' });
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    const resp = await fetch('/api/update', { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } });
                     if (!resp.ok) {
                         alert('Update failed: ' + await resp.text());
                         this.updating = false;
