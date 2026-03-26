@@ -287,7 +287,7 @@ docker run -d \
   -e GATECRASH_TARGET=app:8000 \
   --network=app-network \
   ghcr.io/jclement/gatecrash:latest \
-  gatecrash client
+  ./gatecrash client
 ```
 
 ### Docker Compose Example
@@ -308,7 +308,7 @@ services:
 
   tunnel:
     image: ghcr.io/jclement/gatecrash:latest
-    command: ["gatecrash", "client"]
+    command: ["./gatecrash", "client"]
     environment:
       GATECRASH_SERVER: ${GATECRASH_SERVER}
       GATECRASH_HOST_KEY: ${GATECRASH_HOST_KEY}
