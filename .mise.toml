@@ -25,9 +25,9 @@ description = "Build and run the server"
 run = """
 #!/bin/bash
 set -e
-go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
+go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash-server ./cmd/gatecrash-server
 echo "Starting server..."
-./bin/gatecrash server --config gatecrash.toml --debug "$@"
+./bin/gatecrash-server --config gatecrash.toml --debug "$@"
 """
 
 [tasks.client]
@@ -37,7 +37,7 @@ run = """
 set -e
 go build -ldflags="-X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
 echo "Starting client..."
-./bin/gatecrash client "$@"
+./bin/gatecrash "$@"
 """
 
 [tasks.test]
@@ -45,13 +45,14 @@ description = "Run tests"
 run = "go test -v -race -cover ./..."
 
 [tasks.build]
-description = "Build binary"
+description = "Build binaries"
 depends = ["setup", "tailwind"]
 run = """
 #!/bin/bash
 set -e
+CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=dev" -o ./bin/gatecrash-server ./cmd/gatecrash-server
 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=dev" -o ./bin/gatecrash ./cmd/gatecrash
-echo "Built: bin/gatecrash"
+echo "Built: bin/gatecrash-server, bin/gatecrash"
 """
 
 [tasks.lint]

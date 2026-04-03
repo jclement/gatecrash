@@ -1,0 +1,91 @@
+{{define "content"}}
+<div x-data="auditLogPage()" x-cloak class="max-w-4xl mx-auto px-4 py-6">
+    <h1 class="text-lg font-semibold mb-6">Audit Log</h1>
+
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div x-show="entries.length === 0 && !loading" class="text-sm text-gray-500 py-8 text-center">
+            No audit log entries.
+        </div>
+
+        <table x-show="entries.length > 0" class="w-full text-sm responsive-table">
+            <thead>
+                <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
+                    <th class="px-4 py-2 font-medium">Time</th>
+                    <th class="px-4 py-2 font-medium">Actor</th>
+                    <th class="px-4 py-2 font-medium">Action</th>
+                    <th class="px-4 py-2 font-medium">Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="entry in entries" :key="entry.timestamp + entry.action">
+                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                        <td class="px-4 py-2 text-gray-500 whitespace-nowrap" data-label="Time"
+                            x-text="formatTime(entry.timestamp)"></td>
+                        <td class="px-4 py-2 font-medium" data-label="Actor" x-text="entry.actor"></td>
+                        <td class="px-4 py-2" data-label="Action">
+                            <span class="inline-block px-2 py-0.5 rounded text-xs font-medium"
+                                  :class="actionClass(entry.action)" x-text="entry.action"></span>
+                        </td>
+                        <td class="px-4 py-2 text-gray-600" data-label="Detail" x-text="entry.detail"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+
+        <div x-show="hasMore" class="px-4 py-3 border-t border-gray-200 text-center">
+            <button @click="loadMore()" class="text-sm text-blue-600 hover:text-blue-700"
+                    :disabled="loading" x-text="loading ? 'Loading...' : 'Load More'"></button>
+        </div>
+    </div>
+</div>
+
+<script>
+function auditLogPage() {
+    return {
+        entries: [],
+        total: 0,
+        offset: 0,
+        loading: false,
+        hasMore: false,
+
+        init() {
+            this.loadEntries();
+        },
+
+        async loadEntries() {
+            this.loading = true;
+            try {
+                const resp = await fetch('/api/auditlog?offset=' + this.offset + '&limit=50');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                this.entries = this.entries.concat(data.entries || []);
+                this.total = data.total;
+                this.hasMore = this.entries.length < this.total;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        loadMore() {
+            this.offset = this.entries.length;
+            this.loadEntries();
+        },
+
+        formatTime(ts) {
+            const d = new Date(ts);
+            return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+                   d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        },
+
+        actionClass(action) {
+            if (action.includes('create')) return 'bg-green-100 text-green-800';
+            if (action.includes('delete')) return 'bg-red-100 text-red-800';
+            if (action.includes('edit') || action.includes('update')) return 'bg-blue-100 text-blue-800';
+            if (action.includes('login')) return 'bg-purple-100 text-purple-800';
+            if (action.includes('regenerate')) return 'bg-amber-100 text-amber-800';
+            return 'bg-gray-100 text-gray-800';
+        },
+    };
+}
+</script>
+{{end}}

@@ -7,7 +7,7 @@ REPO="jclement/gatecrash"
 INSTALL_DIR="/opt/gatecrash/bin"
 CONFIG_DIR="/etc/gatecrash"
 SERVICE_USER="gatecrash"
-SERVICE_NAME="gatecrash"
+SERVICE_NAME="gatecrash-server"
 
 # ── Colors ──────────────────────────────────────────────────────────
 
@@ -53,8 +53,8 @@ printf "\n"
 # ── Check for existing install ──────────────────────────────────────
 
 CURRENT_VERSION=""
-if command -v gatecrash >/dev/null 2>&1; then
-    CURRENT_VERSION=$(gatecrash version 2>/dev/null | sed 's/gatecrash //' || true)
+if command -v gatecrash-server >/dev/null 2>&1; then
+    CURRENT_VERSION=$(gatecrash-server version 2>/dev/null | sed 's/gatecrash-server //' || true)
     if [ -n "$CURRENT_VERSION" ]; then
         info "Existing installation found: ${CURRENT_VERSION}"
     fi
@@ -83,22 +83,22 @@ dim "Platform: ${OS}/${ARCH}"
 
 # ── Download binary ─────────────────────────────────────────────────
 
-URL="https://github.com/${REPO}/releases/download/v${LATEST}/gatecrash_${OS}_${ARCH}"
+URL="https://github.com/${REPO}/releases/download/v${LATEST}/gatecrash-server_${OS}_${ARCH}"
 info "Downloading binary..."
 dim "${URL}"
-curl -fsSL -o /tmp/gatecrash "$URL"
-chmod +x /tmp/gatecrash
+curl -fsSL -o /tmp/gatecrash-server "$URL"
+chmod +x /tmp/gatecrash-server
 
 # ── Install binary ──────────────────────────────────────────────────
 
 UPGRADING=false
-if [ -f "${INSTALL_DIR}/gatecrash" ]; then
+if [ -f "${INSTALL_DIR}/gatecrash-server" ]; then
     UPGRADING=true
 fi
 
-info "Installing to ${INSTALL_DIR}/gatecrash"
+info "Installing to ${INSTALL_DIR}/gatecrash-server"
 sudo mkdir -p "${INSTALL_DIR}"
-sudo mv /tmp/gatecrash "${INSTALL_DIR}/gatecrash"
+sudo mv /tmp/gatecrash-server "${INSTALL_DIR}/gatecrash-server"
 
 if [ "$UPGRADING" = "true" ]; then
     # Ensure install dir is owned by the service user for self-update
@@ -122,7 +122,7 @@ Documentation=https://github.com/${REPO}
 Type=simple
 User=${EXISTING_USER}
 Group=${EXISTING_GROUP}
-ExecStart=${INSTALL_DIR}/gatecrash server --config ${EXISTING_CONFIG}
+ExecStart=${INSTALL_DIR}/gatecrash-server --config ${EXISTING_CONFIG}
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
@@ -191,7 +191,7 @@ if [ -n "$ADMIN_HOST" ]; then
 fi
 
 info "Generating config file..."
-sudo -u "$SERVICE_USER" "${INSTALL_DIR}/gatecrash" make-config ${MAKE_CONFIG_ARGS}
+sudo -u "$SERVICE_USER" "${INSTALL_DIR}/gatecrash-server" make-config ${MAKE_CONFIG_ARGS}
 
 # Create systemd service
 info "Creating systemd service"
@@ -205,7 +205,7 @@ Documentation=https://github.com/${REPO}
 Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
-ExecStart=${INSTALL_DIR}/gatecrash server --config ${CONFIG_DIR}/gatecrash.toml
+ExecStart=${INSTALL_DIR}/gatecrash-server --config ${CONFIG_DIR}/gatecrash.toml
 Restart=always
 RestartSec=5
 LimitNOFILE=65536

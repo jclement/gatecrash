@@ -41,14 +41,14 @@
         </p>
         <div class="space-y-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Binary</p>
-            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">gatecrash client --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
+            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">gatecrash --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
         </div>
         <div class="space-y-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Docker</p>
-            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">docker run --rm --network host ghcr.io/jclement/gatecrash client --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
+            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">docker run --rm --network host ghcr.io/jclement/gatecrash --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; --target localhost:8080</pre>
         </div>
         <p class="text-sm text-gray-600">
-            Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel secret and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
+            Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel token and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
         </p>
         <div class="space-y-2 mt-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Target Schemes</p>
@@ -107,6 +107,38 @@
         <p class="text-sm text-gray-600">
             Redirects let you send traffic from one hostname to another URL without a tunnel. Useful for directing <code class="bg-gray-100 px-1 rounded text-xs">www.example.com</code> to <code class="bg-gray-100 px-1 rounded text-xs">https://example.com</code>, or forwarding a domain to an external service. TLS certificates are provisioned automatically for redirect hostnames too.
         </p>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">OIDC Authentication</h2>
+        <p class="text-sm text-gray-600">
+            By default, Gatecrash uses passkey authentication (single admin user). When OIDC is enabled in <code class="bg-gray-100 px-1 rounded text-xs">gatecrash.toml</code>, it replaces passkeys entirely &mdash; all admin and tunnel authentication goes through your OIDC provider.
+        </p>
+
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Admin Access</p>
+            <p class="text-sm text-gray-600">
+                With OIDC enabled, admin login redirects to your OIDC provider. You can optionally restrict admin access by setting <code class="bg-gray-100 px-1 rounded text-xs">admin_claim_name</code> and <code class="bg-gray-100 px-1 rounded text-xs">admin_claim_value</code> in the config (e.g. <code class="bg-gray-100 px-1 rounded text-xs">role = admin</code>). When empty, any authenticated OIDC user is an admin.
+            </p>
+        </div>
+
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Protecting Tunnels</p>
+            <p class="text-sm text-gray-600">
+                HTTP tunnels can require authentication via the <strong>Require Authentication</strong> checkbox. In passkey mode, this requires the admin session. In OIDC mode, users are redirected to your OIDC provider. You can optionally filter by a claim (e.g. <code class="bg-gray-100 px-1 rounded text-xs">department = engineering</code>). After authentication, a user identity header (default: <code class="bg-gray-100 px-1 rounded text-xs">x-Gatecrash-User</code>) is injected into proxied requests.
+            </p>
+        </div>
+
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Callback URLs</p>
+            <p class="text-sm text-gray-600">
+                Register these callback URLs with your OIDC provider:
+            </p>
+            <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+                <li>Admin login: <code class="bg-gray-100 px-1 rounded text-xs">https://{{.Data.AdminHost}}/oidc/callback</code></li>
+                <li>Tunnel auth: <code class="bg-gray-100 px-1 rounded text-xs">https://&lt;tunnel-hostname&gt;/.gatecrash/oidc/callback</code> (one per protected hostname)</li>
+            </ul>
+        </div>
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">

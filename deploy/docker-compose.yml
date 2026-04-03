@@ -1,30 +1,58 @@
+# Gatecrash Server
+#
+# Start the server:
+#   docker compose up -d server
+#
+# OIDC and tunnel configuration is managed via gatecrash.toml
+# inside the config volume, or through the admin panel UI.
+#
+# After first start, configure your admin hostname in the config
+# and restart to enable the admin panel.
+
 services:
   server:
-    image: ghcr.io/jclement/gatecrash:latest
-    command: ["./gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]
+    image: ghcr.io/jclement/gatecrash-server:latest
     ports:
       - "80:80"
       - "443:443"
-      - "${SSH_PORT:-2222}:${SSH_PORT:-2222}"
+      # The SSH port is randomly assigned on first run.
+      # Check ssh_port in gatecrash.toml and set SSH_PORT here to match.
+      - "${SSH_PORT}:${SSH_PORT}"
     volumes:
       - config:/etc/gatecrash
     restart: unless-stopped
 
-  # Example: client sidecar for a web app
-  # client:
-  #   image: ghcr.io/jclement/gatecrash:latest
-  #   command: ["gatecrash", "client"]
-  #   environment:
-  #     GATECRASH_SERVER: server:2222
-  #     GATECRASH_HOST_KEY: "SHA256:your_host_key_fingerprint"
-  #     GATECRASH_TOKEN: "web-app:YOUR_SECRET"
-  #     GATECRASH_TARGET: webapp:3000
-  #   depends_on: [webapp]
-  #   restart: unless-stopped
-  #
-  # webapp:
-  #   image: your-webapp:latest
-  #   expose: [3000]
-
 volumes:
   config:
+
+# ─── Client Example ────────────────────────────────────────────────
+#
+# To connect a service through a Gatecrash tunnel, deploy the client
+# alongside your app. Create a separate docker-compose.yml:
+#
+#   services:
+#     whoami:
+#       image: traefik/whoami
+#       expose:
+#         - "80"
+#
+#     tunnel:
+#       image: ghcr.io/jclement/gatecrash:latest
+#       environment:
+#         GATECRASH_SERVER: tunnel.example.com:51234  # match ssh_port in gatecrash.toml
+#         GATECRASH_HOST_KEY: "SHA256:your_host_key_fingerprint"
+#         GATECRASH_TOKEN: "web-app:YOUR_SECRET"
+#         GATECRASH_TARGET: whoami:80
+#       depends_on:
+#         - whoami
+#       restart: unless-stopped
+#
+# The tunnel token and host key are shown when you create a tunnel
+# in the admin panel or via gatecrash-server make-config.
+#
+# Client environment variables:
+#   GATECRASH_SERVER     Server SSH address (host:port)
+#   GATECRASH_TOKEN      Tunnel token (tunnel_id:secret)
+#   GATECRASH_TARGET     Target service address (host:port)
+#   GATECRASH_HOST_KEY   Server SSH host key fingerprint (SHA256:...)
+#   GATECRASH_COUNT      Number of parallel connections (default: 1)

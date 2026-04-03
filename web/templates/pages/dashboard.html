@@ -103,8 +103,7 @@
             <template x-for="field in [
                 {label:'Server',         key:'server',    tip:'SSH address the client connects to'},
                 {label:'Host Key',       key:'host_key',  tip:'SSH host key fingerprint for verifying the server'},
-                {label:'Token ID',       key:'tunnel_id', tip:'Identifies which tunnel this client connects to'},
-                {label:'Token Secret',   key:'secret',    tip:'Authentication secret — treat like a password'},
+                {label:'Tunnel Token',   key:'token',     tip:'Authentication token — pass this to --token on the client'},
                 {label:'Client Command', key:'command',   tip:'Run this to connect using the gatecrash binary'},
                 {label:'Docker Command', key:'docker',    tip:'Run this to connect using the Docker image'}
             ]" :key="field.key">
@@ -132,12 +131,12 @@
 <!-- Tunnel Create/Edit Modal -->
 <div x-show="tunnelOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
     <div class="absolute inset-0 bg-black/50" @click="tunnelOpen = false"></div>
-    <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4" @click.stop>
-        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+    <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] flex flex-col" @click.stop>
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
             <h3 class="text-base font-semibold" x-text="tunnelMode === 'create' ? 'Add Tunnel' : 'Edit Tunnel'"></h3>
             <button @click="tunnelOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
         </div>
-        <div class="px-5 py-4 space-y-3">
+        <div class="px-5 py-4 space-y-3 overflow-y-auto">
             <div>
                 <label class="block text-xs font-medium text-gray-600 mb-1">Tunnel ID</label>
                 <input type="text" x-model="tunnel.id" :disabled="tunnelMode === 'edit'" placeholder="my-app"
@@ -175,8 +174,39 @@
                 </label>
                 <p class="text-xs text-gray-400 mt-0.5 ml-6">Forward raw TLS to client (no certificate needed).</p>
             </div>
+            <template x-if="tunnel.type === 'http'">
+                <div class="border-t border-gray-200 pt-3 mt-1 space-y-3">
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" x-model="tunnel.requireAuth" class="rounded">
+                        <span>Require Authentication</span>
+                    </label>
+                    <div x-show="tunnel.requireAuth && oidcConfigured" class="space-y-2 ml-6">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Claim Filter <span class="font-normal text-gray-400">(optional)</span></label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <input type="text" x-model="tunnel.authClaimName" placeholder="claim (e.g. role)"
+                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                                <input type="text" x-model="tunnel.authClaimValue" placeholder="value (e.g. admin)"
+                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">User Header</label>
+                                <input type="text" x-model="tunnel.authHeader" placeholder="x-Gatecrash-User"
+                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Header Claim</label>
+                                <input type="text" x-model="tunnel.authHeaderClaim" placeholder="email"
+                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
         </div>
-        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
             <button @click="tunnelOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
             <button @click="saveTunnel()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors" x-text="tunnelMode === 'create' ? 'Create' : 'Save'"></button>
         </div>
@@ -291,7 +321,8 @@ function dashboard() {
         // Tunnel modal
         tunnelOpen: false,
         tunnelMode: 'create',
-        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false },
+        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, requireAuth: false, authClaimName: '', authClaimValue: '', authHeader: '', authHeaderClaim: '' },
+        oidcConfigured: {{if .OIDCConfigured}}true{{else}}false{{end}},
 
         // Redirect modal
         redirectOpen: false,
@@ -471,13 +502,13 @@ function dashboard() {
         // Tunnel CRUD
         openCreateTunnel() {
             this.tunnelMode = 'create';
-            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false };
+            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, requireAuth: false, authClaimName: '', authClaimValue: '', authHeader: '', authHeaderClaim: '' };
             this.tunnelOpen = true;
         },
 
-        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough) {
+        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough, requireAuth, authClaimName, authClaimValue, authHeader, authHeaderClaim) {
             this.tunnelMode = 'edit';
-            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough };
+            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough, requireAuth: !!requireAuth, authClaimName: authClaimName || '', authClaimValue: authClaimValue || '', authHeader: authHeader || '', authHeaderClaim: authHeaderClaim || '' };
             this.tunnelOpen = true;
         },
 
@@ -487,6 +518,11 @@ function dashboard() {
                 body.hostnames = this.tunnel.hostnames.split(',').map(h => h.trim()).filter(h => h);
                 body.preserve_host = this.tunnel.preserveHost;
                 body.tls_passthrough = this.tunnel.tlsPassthrough;
+                body.require_auth = this.tunnel.requireAuth;
+                body.auth_claim_name = this.tunnel.authClaimName;
+                body.auth_claim_value = this.tunnel.authClaimValue;
+                body.auth_header = this.tunnel.authHeader;
+                body.auth_header_claim = this.tunnel.authHeaderClaim;
             } else {
                 body.listen_port = parseInt(this.tunnel.listenPort, 10) || 0;
             }
@@ -700,7 +736,7 @@ function dashboard() {
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>
     <td class="px-3 py-2 text-right card-actions">
         <div class="flex items-center justify-end gap-1">
-            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}})"
+            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}}, {{.RequireAuth}}, '{{.AuthClaimName}}', '{{.AuthClaimValue}}', '{{.AuthHeader}}', '{{.AuthHeaderClaim}}')"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
             <button @click="regenerateSecret('{{.ID}}')"
                     class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">New Secret</button>

@@ -12,7 +12,7 @@ func TestSessionManager_CreateAndValidate(t *testing.T) {
 	sm := NewSessionManager("test-secret-key-for-jwt")
 
 	w := httptest.NewRecorder()
-	if err := sm.CreateSession(w); err != nil {
+	if err := sm.CreateSession(w, "Admin (passkey)"); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestSessionManager_InvalidSession(t *testing.T) {
 	// Wrong secret
 	sm2 := NewSessionManager("different-secret")
 	w := httptest.NewRecorder()
-	sm.CreateSession(w)
+	sm.CreateSession(w, "Admin (passkey)")
 	cookie := w.Result().Cookies()[0]
 
 	req3 := httptest.NewRequest("GET", "/", nil)
@@ -89,7 +89,7 @@ func TestSessionManager_CSRFToken(t *testing.T) {
 	sm := NewSessionManager("test-secret")
 
 	w := httptest.NewRecorder()
-	sm.CreateSession(w)
+	sm.CreateSession(w, "Admin (passkey)")
 	cookie := w.Result().Cookies()[0]
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -133,7 +133,7 @@ func TestSessionManager_AlgorithmConfusion(t *testing.T) {
 
 	// Create a valid session to get a proper cookie value first.
 	w := httptest.NewRecorder()
-	if err := sm.CreateSession(w); err != nil {
+	if err := sm.CreateSession(w, "Admin (passkey)"); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 

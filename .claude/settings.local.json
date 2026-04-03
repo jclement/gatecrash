@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"func.*newSSHServer\\\\|SSHServer\\\\|gliderlabs/ssh\" /workspace/internal/server/*.go)",
+      "Bash(wc:*)"
+    ]
+  }
+}

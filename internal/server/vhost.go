@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/jclement/gatecrash/internal/admin"
 )
 
 // ServeHTTP routes requests based on Host header.
@@ -41,6 +43,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 2.5 Handle OIDC callbacks on tunnel hostnames
+	if strings.HasPrefix(r.URL.Path, "/.gatecrash/oidc/callback") {
+		s.handleTunnelOIDCCallback(w, r, host)
+		return
+	}
+
 	// 3. Look up tunnel by hostname
 	tunnel := s.registry.FindByHostname(host)
 	if tunnel == nil {
@@ -58,6 +66,44 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("The tunnel <strong>%s</strong> is currently offline. The service may be restarting.", html.EscapeString(tunnel.ID)),
 		)
 		return
+	}
+
+	// 4. Check tunnel auth requirement
+	if tunnel.RequireAuth {
+		if s.oidcProvider != nil && s.tunnelAuth != nil {
+			// OIDC mode: require OIDC authentication
+			claims, ok := s.tunnelAuth.ValidateSession(r, host)
+			if !ok {
+				s.initiateTunnelAuth(w, r, host)
+				return
+			}
+
+			// Evaluate optional claim filter
+			if !admin.MatchesClaim(claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
+				s.serveErrorPage(w, r, http.StatusForbidden,
+					"Access Denied",
+					fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)),
+				)
+				return
+			}
+
+			// Inject user identity header
+			headerName := tunnel.AuthHeader
+			if headerName == "" {
+				headerName = "x-Gatecrash-User"
+			}
+			headerValue := claims.GetClaimValue(tunnel.AuthHeaderClaim)
+			if headerValue == "" {
+				headerValue = claims.Email
+			}
+			r.Header.Set(headerName, headerValue)
+		} else {
+			// Passkey mode: require admin session
+			if !s.sessionMgr.ValidateSession(r) {
+				http.Redirect(w, r, "https://"+s.cfg.Server.AdminHost+"/login", http.StatusFound)
+				return
+			}
+		}
 	}
 
 	s.proxyHTTP(w, r, tunnel)
@@ -102,6 +148,86 @@ func stripPort(host string) string {
 		return host
 	}
 	return h
+}
+
+// initiateTunnelAuth redirects the user to the OIDC provider for tunnel authentication.
+func (s *Server) initiateTunnelAuth(w http.ResponseWriter, r *http.Request, hostname string) {
+	s.cfgMu.RLock()
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
+	callbackURL := fmt.Sprintf("https://%s/.gatecrash/oidc/callback", hostname)
+	if httpsPort != 443 {
+		callbackURL = fmt.Sprintf("https://%s:%d/.gatecrash/oidc/callback", hostname, httpsPort)
+	}
+
+	returnURL := r.URL.RequestURI()
+	authURL, _, err := s.oidcProvider.AuthURLForCallback("tunnel", returnURL, hostname, callbackURL)
+	if err != nil {
+		slog.Error("failed to generate tunnel OIDC auth URL", "error", err, "hostname", hostname)
+		s.serveErrorPage(w, r, http.StatusInternalServerError,
+			"Authentication Error",
+			"Failed to initiate authentication.")
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// handleTunnelOIDCCallback handles the OIDC callback on a tunnel hostname.
+func (s *Server) handleTunnelOIDCCallback(w http.ResponseWriter, r *http.Request, hostname string) {
+	if s.oidcProvider == nil || s.tunnelAuth == nil {
+		http.Error(w, "OIDC is not configured", http.StatusBadRequest)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		http.Error(w, "missing code or state", http.StatusBadRequest)
+		return
+	}
+
+	s.cfgMu.RLock()
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
+	callbackURL := fmt.Sprintf("https://%s/.gatecrash/oidc/callback", hostname)
+	if httpsPort != 443 {
+		callbackURL = fmt.Sprintf("https://%s:%d/.gatecrash/oidc/callback", hostname, httpsPort)
+	}
+
+	claims, st, err := s.oidcProvider.Exchange(r.Context(), state, code, callbackURL)
+	if err != nil {
+		slog.Error("tunnel OIDC callback failed", "error", err, "hostname", hostname)
+		s.serveErrorPage(w, r, http.StatusForbidden,
+			"Authentication Failed",
+			"OIDC authentication failed: "+err.Error())
+		return
+	}
+
+	// Evaluate optional claim filter
+	tunnel := s.registry.FindByHostname(hostname)
+	if tunnel != nil && !admin.MatchesClaim(claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
+		s.serveErrorPage(w, r, http.StatusForbidden,
+			"Access Denied",
+			fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(hostname)))
+		return
+	}
+
+	// Create tunnel auth session
+	if err := s.tunnelAuth.CreateSession(w, claims, hostname); err != nil {
+		slog.Error("failed to create tunnel auth session", "error", err)
+		http.Error(w, "session creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Redirect to the original URL
+	returnURL := "/"
+	if st != nil && st.ReturnURL != "" {
+		returnURL = st.ReturnURL
+	}
+	http.Redirect(w, r, returnURL, http.StatusFound)
 }
 
 // serveAdmin applies security headers and delegates to the admin mux.

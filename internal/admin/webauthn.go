@@ -182,7 +182,7 @@ func (h *WebAuthnHandler) HandleRegisterFinish(w http.ResponseWriter, r *http.Re
 	}
 
 	// Create session
-	if err := h.session.CreateSession(w); err != nil {
+	if err := h.session.CreateSession(w, "Admin (passkey)"); err != nil {
 		slog.Error("failed to create session", "error", err)
 	}
 
@@ -232,7 +232,7 @@ func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Reque
 	h.store.UpdateSignCount(credential.ID, credential.Authenticator.SignCount)
 
 	// Create session
-	if err := h.session.CreateSession(w); err != nil {
+	if err := h.session.CreateSession(w, "Admin (passkey)"); err != nil {
 		slog.Error("failed to create session", "error", err)
 	}
 

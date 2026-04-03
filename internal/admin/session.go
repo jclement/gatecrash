@@ -26,12 +26,22 @@ func NewSessionManager(secret string) *SessionManager {
 	return &SessionManager{secret: []byte(secret)}
 }
 
+// sessionClaims extends RegisteredClaims with an actor identity for audit logging.
+type sessionClaims struct {
+	jwt.RegisteredClaims
+	Actor string `json:"actor,omitempty"`
+}
+
 // CreateSession sets a session cookie on the response.
-func (sm *SessionManager) CreateSession(w http.ResponseWriter) error {
-	claims := jwt.RegisteredClaims{
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionDuration)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		Issuer:    "gatecrash",
+// The actor string identifies who is logging in (e.g. "Admin (passkey)" or "Name <email>").
+func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) error {
+	claims := sessionClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionDuration)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "gatecrash",
+		},
+		Actor: actor,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -68,31 +78,47 @@ func (sm *SessionManager) ClearSession(w http.ResponseWriter) {
 
 // ValidateSession checks if the request has a valid session.
 func (sm *SessionManager) ValidateSession(r *http.Request) bool {
+	_, ok := sm.parseSession(r)
+	return ok
+}
+
+// GetActor returns the actor identity from the session JWT.
+// Returns "Admin (passkey)" as default for sessions without an actor field.
+func (sm *SessionManager) GetActor(r *http.Request) string {
+	claims, ok := sm.parseSession(r)
+	if !ok || claims.Actor == "" {
+		return "Admin (passkey)"
+	}
+	return claims.Actor
+}
+
+// parseSession extracts and validates session claims from the request cookie.
+func (sm *SessionManager) parseSession(r *http.Request) (*sessionClaims, bool) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return false
+		return nil, false
 	}
 
-	token, err := jwt.ParseWithClaims(cookie.Value, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(cookie.Value, &sessionClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return sm.secret, nil
 	})
 	if err != nil {
-		return false
+		return nil, false
 	}
 
-	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	claims, ok := token.Claims.(*sessionClaims)
 	if !ok || !token.Valid {
-		return false
+		return nil, false
 	}
 
 	if claims.Issuer != "gatecrash" {
-		return false
+		return nil, false
 	}
 
-	return true
+	return claims, true
 }
 
 // CSRFToken generates a CSRF token derived from the session cookie.

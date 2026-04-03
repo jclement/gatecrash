@@ -34,7 +34,7 @@ func HashSecret(plaintext string) (string, error) {
 	return string(hash), nil
 }
 
-// Validate checks a token (format: tunnel_id:secret) against stored hashes.
+// Validate checks a tunnel token (format: tunnel_id:secret) against stored hashes.
 // lookupHash should return the bcrypt hash for the given tunnel ID, or "" if not found.
 func Validate(tok string, lookupHash func(id string) string) (tunnelID string, valid bool) {
 	parts := strings.SplitN(tok, ":", 2)
@@ -55,7 +55,7 @@ func Validate(tok string, lookupHash func(id string) string) (tunnelID string, v
 	return id, true
 }
 
-// FormatToken combines a tunnel ID and plaintext secret into a token string.
+// FormatToken combines a tunnel ID and plaintext secret into a tunnel token string.
 func FormatToken(tunnelID, secret string) string {
 	return tunnelID + ":" + secret
 }

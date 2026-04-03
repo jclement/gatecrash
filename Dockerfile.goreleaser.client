@@ -1,0 +1,4 @@
+FROM scratch
+COPY --from=alpine:3.23 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY gatecrash /gatecrash
+ENTRYPOINT ["/gatecrash"]

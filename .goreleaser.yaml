@@ -6,6 +6,15 @@ before:
     - go mod tidy
 
 builds:
+  - id: gatecrash-server
+    main: ./cmd/gatecrash-server
+    binary: gatecrash-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
   - id: gatecrash
     main: ./cmd/gatecrash
     binary: gatecrash
@@ -16,10 +25,21 @@ builds:
       - -s -w -X main.Version={{.Version}}
 
 archives:
+  - id: gatecrash-server
+    builds: [gatecrash-server]
+    name_template: "gatecrash-server_{{ .Os }}_{{ .Arch }}"
+    format: binary
+
   - id: gatecrash
     builds: [gatecrash]
     name_template: "gatecrash_{{ .Os }}_{{ .Arch }}"
     format: binary
+
+  - id: gatecrash-server-homebrew
+    builds: [gatecrash-server]
+    name_template: "gatecrash-server_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
 
   - id: gatecrash-homebrew
     builds: [gatecrash]
@@ -28,22 +48,57 @@ archives:
       - tar.gz
 
 brews:
-  - ids: [gatecrash-homebrew]
+  - ids: [gatecrash-server-homebrew]
+    name: gatecrash-server
     repository:
       owner: jclement
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/jclement/gatecrash
-    description: Gatecrash - expose local services through a remote server
+    description: Gatecrash tunnel server with admin panel and automatic TLS
+    license: MIT
+    install: |
+      bin.install "gatecrash-server"
+
+  - ids: [gatecrash-homebrew]
+    name: gatecrash
+    repository:
+      owner: jclement
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/jclement/gatecrash
+    description: Gatecrash tunnel client
     license: MIT
     install: |
       bin.install "gatecrash"
 
 dockers:
-  - ids: [gatecrash]
+  # Server images
+  - ids: [gatecrash-server]
     goos: linux
     goarch: amd64
     dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates: ["--platform=linux/amd64"]
+    image_templates:
+      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-amd64"
+      - "ghcr.io/jclement/gatecrash-server:latest-amd64"
+
+  - ids: [gatecrash-server]
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates: ["--platform=linux/arm64"]
+    image_templates:
+      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-arm64"
+      - "ghcr.io/jclement/gatecrash-server:latest-arm64"
+
+  # Client images
+  - ids: [gatecrash]
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser.client
     use: buildx
     build_flag_templates: ["--platform=linux/amd64"]
     image_templates:
@@ -53,7 +108,7 @@ dockers:
   - ids: [gatecrash]
     goos: linux
     goarch: arm64
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: Dockerfile.goreleaser.client
     use: buildx
     build_flag_templates: ["--platform=linux/arm64"]
     image_templates:
@@ -61,6 +116,17 @@ dockers:
       - "ghcr.io/jclement/gatecrash:latest-arm64"
 
 docker_manifests:
+  # Server manifests
+  - name_template: "ghcr.io/jclement/gatecrash-server:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-amd64"
+      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/jclement/gatecrash-server:latest"
+    image_templates:
+      - "ghcr.io/jclement/gatecrash-server:latest-amd64"
+      - "ghcr.io/jclement/gatecrash-server:latest-arm64"
+
+  # Client manifests
   - name_template: "ghcr.io/jclement/gatecrash:{{ .Version }}"
     image_templates:
       - "ghcr.io/jclement/gatecrash:{{ .Version }}-amd64"
@@ -80,11 +146,17 @@ release:
   footer: |
     ## Docker
 
+    **Server:**
+    ```bash
+    docker pull ghcr.io/jclement/gatecrash-server:{{ .Version }}
+    ```
+
+    **Client:**
     ```bash
     docker pull ghcr.io/jclement/gatecrash:{{ .Version }}
     ```
 
-    ## Quick Install (Linux)
+    ## Quick Install (Linux Server)
     ```bash
     curl -fsSL https://raw.githubusercontent.com/jclement/gatecrash/main/deploy/install.sh | sh
     ```

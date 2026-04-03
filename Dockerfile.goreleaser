@@ -4,8 +4,8 @@ RUN apk add --no-cache ca-certificates tzdata && \
     mkdir -p /etc/gatecrash/certs && \
     chown -R gatecrash:gatecrash /etc/gatecrash
 WORKDIR /app
-COPY gatecrash .
+COPY gatecrash-server .
 EXPOSE 443 80
 VOLUME ["/etc/gatecrash"]
 USER gatecrash
-CMD ["./gatecrash", "server", "--config", "/etc/gatecrash/gatecrash.toml"]
+CMD ["./gatecrash-server", "--config", "/etc/gatecrash/gatecrash.toml"]

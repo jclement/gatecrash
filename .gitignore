@@ -24,3 +24,6 @@ host_key.pub
 # OS
 .DS_Store
 Thumbs.db
+gatecrash
+.gitignore
+gatecrash-server

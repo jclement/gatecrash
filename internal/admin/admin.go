@@ -28,21 +28,26 @@ type ClientView struct {
 
 // TunnelView is the template data for a single tunnel row.
 type TunnelView struct {
-	ID             string
-	Type           string
-	Hostnames      []string
-	ListenPort     int
-	PreserveHost   bool
-	TLSPassthrough bool
-	Connected      bool
-	ClientCount    int
-	Clients        []ClientView
-	Requests       int64
-	BytesIn        int64
-	BytesOut       int64
-	ActiveConns    int32
-	Token          string
-	HostCerts      []HostCert
+	ID              string
+	Type            string
+	Hostnames       []string
+	ListenPort      int
+	PreserveHost    bool
+	TLSPassthrough  bool
+	RequireAuth     bool
+	AuthClaimName   string
+	AuthClaimValue  string
+	AuthHeader      string
+	AuthHeaderClaim string
+	Connected       bool
+	ClientCount     int
+	Clients         []ClientView
+	Requests        int64
+	BytesIn         int64
+	BytesOut        int64
+	ActiveConns     int32
+	Token           string
+	HostCerts       []HostCert
 }
 
 // HostnamesCSV returns hostnames as a comma-separated string.
@@ -117,6 +122,8 @@ type PageData struct {
 	CSRFToken         string
 	Flash             *Flash
 	Data              any
+	OIDCConfigured    bool
+	OIDCProviderName  string
 }
 
 // PasskeyView represents a passkey for display in templates.
@@ -172,6 +179,7 @@ func NewHandlers(version string, checkInterval time.Duration, templateFS fs.FS) 
 			"pages/passkeys.html",
 			"pages/dashboard.html",
 			"pages/help.html",
+			"pages/auditlog.html",
 		} {
 			tmpl, err := h.compilePage(page)
 			if err != nil {

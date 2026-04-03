@@ -60,6 +60,9 @@ type Server struct {
 	sessionMgr   *admin.SessionManager
 	webauthn     *admin.WebAuthnHandler
 	adminH       *admin.Handlers
+	auditLog     *admin.AuditLog
+	oidcProvider *admin.OIDCProvider
+	tunnelAuth   *admin.TunnelAuthSession
 }
 
 // New creates a new server instance.
@@ -80,12 +83,17 @@ func (s *Server) Run(ctx context.Context) error {
 	// Build tunnel registry from config
 	for _, tc := range s.cfg.Tunnel {
 		t := &TunnelState{
-			ID:             tc.ID,
-			Type:           tc.Type,
-			Hostnames:      tc.Hostnames,
-			ListenPort:     tc.ListenPort,
-			PreserveHost:   tc.PreserveHost,
-			TLSPassthrough: tc.TLSPassthrough,
+			ID:              tc.ID,
+			Type:            tc.Type,
+			Hostnames:       tc.Hostnames,
+			ListenPort:      tc.ListenPort,
+			PreserveHost:    tc.PreserveHost,
+			TLSPassthrough:  tc.TLSPassthrough,
+			RequireAuth:     tc.RequireAuth,
+			AuthClaimName:   tc.AuthClaimName,
+			AuthClaimValue:  tc.AuthClaimValue,
+			AuthHeader:      tc.AuthHeader,
+			AuthHeaderClaim: tc.AuthHeaderClaim,
 		}
 		s.registry.Register(t)
 
@@ -218,6 +226,31 @@ func (s *Server) initAdmin() error {
 	// Session manager
 	s.sessionMgr = admin.NewSessionManager(s.cfg.Server.Secret)
 
+	// Audit log
+	auditLog, err := admin.NewAuditLog(filepath.Join(dataDir, "audit.json"))
+	if err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	}
+	s.auditLog = auditLog
+
+	// Tunnel auth session manager (uses same secret as admin sessions)
+	s.tunnelAuth = admin.NewTunnelAuthSession(s.cfg.Server.Secret)
+
+	// OIDC provider (initialized if configured)
+	if s.cfg.OIDC.IsConfigured() {
+		callbackURL := "https://" + s.cfg.Server.AdminHost + "/oidc/callback"
+		if s.cfg.Server.HTTPSPort != 443 {
+			callbackURL = fmt.Sprintf("https://%s:%d/oidc/callback", s.cfg.Server.AdminHost, s.cfg.Server.HTTPSPort)
+		}
+		oidcProvider, err := admin.NewOIDCProvider(&s.cfg.OIDC, callbackURL)
+		if err != nil {
+			slog.Error("OIDC provider initialization failed (continuing without OIDC)", "error", err)
+		} else {
+			s.oidcProvider = oidcProvider
+			slog.Info("OIDC provider initialized", "provider", s.cfg.OIDC.ProviderName)
+		}
+	}
+
 	// WebAuthn - determine rpID and origin from admin_host
 	rpID := s.cfg.Server.AdminHost
 	rpOrigin := "https://" + s.cfg.Server.AdminHost
@@ -278,6 +311,9 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /auth/login/begin", s.webauthn.HandleLoginBegin)
 	s.adminMux.HandleFunc("POST /auth/login/finish", s.webauthn.HandleLoginFinish)
 
+	// OIDC endpoints — public (OAuth2 flow)
+	s.adminMux.HandleFunc("GET /oidc/login", s.handleOIDCLogin)
+	s.adminMux.HandleFunc("GET /oidc/callback", s.handleOIDCCallback)
 	// Logout
 	s.adminMux.HandleFunc("POST /logout", s.handleLogout)
 
@@ -297,6 +333,10 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /api/redirects", s.requireCSRF(s.handleCreateRedirect))
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireCSRF(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
+	// Audit log
+	s.adminMux.HandleFunc("GET /auditlog", s.requireAuth(s.handleAuditLogPage))
+	s.adminMux.HandleFunc("GET /api/auditlog", s.requireAuth(s.handleAPIAuditLog))
+
 	s.adminMux.HandleFunc("GET /api/update", s.requireAuth(s.handleGetUpdate))
 	s.adminMux.HandleFunc("POST /api/update", s.requireCSRF(s.handlePostUpdate))
 	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
@@ -319,13 +359,20 @@ func (s *Server) requireAuthOrSetup(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // requireAuth wraps a handler with authentication checks.
-// If no passkeys are registered, redirects to setup.
+// If no passkeys are registered and OIDC admin login is not available, redirects to setup.
 // If not authenticated, redirects to login.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.webauthn.NeedsSetup() {
-			http.Redirect(w, r, "/setup", http.StatusSeeOther)
-			return
+			// Skip setup redirect if OIDC admin login is available
+			s.cfgMu.RLock()
+			oidcAdminAvailable := s.cfg.OIDC.IsConfigured()
+			s.cfgMu.RUnlock()
+
+			if !oidcAdminAvailable {
+				http.Redirect(w, r, "/setup", http.StatusSeeOther)
+				return
+			}
 		}
 		if !s.sessionMgr.ValidateSession(r) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -351,15 +398,29 @@ func (s *Server) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
 // handleLogin renders the login page.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.webauthn.NeedsSetup() {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
-		return
+		// Only redirect to setup if OIDC admin login is not available
+		s.cfgMu.RLock()
+		oidcAdminAvailable := s.cfg.OIDC.IsConfigured()
+		s.cfgMu.RUnlock()
+
+		if !oidcAdminAvailable {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return
+		}
 	}
 	if s.sessionMgr.ValidateSession(r) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	s.cfgMu.RLock()
+	oidcEnabled := s.cfg.OIDC.IsConfigured()
+	oidcName := s.cfg.OIDC.ProviderName
+	s.cfgMu.RUnlock()
+
 	s.adminH.Render(w, "pages/login.html", &admin.PageData{
-		Title: "Login",
+		Title:            "Login",
+		OIDCConfigured:   oidcEnabled,
+		OIDCProviderName: oidcName,
 	})
 }
 
@@ -449,16 +510,23 @@ type RedirectView struct {
 }
 
 func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
-	sshAddr := fmt.Sprintf("%s:%d", s.cfg.Server.AdminHost, s.cfg.Server.SSHPort)
+	s.cfgMu.RLock()
+	adminHost := s.cfg.Server.AdminHost
+	sshAddr := fmt.Sprintf("%s:%d", adminHost, s.cfg.Server.SSHPort)
+	oidcConfigured := s.cfg.OIDC.IsConfigured()
+	s.cfgMu.RUnlock()
 	s.adminH.Render(w, "pages/help.html", &admin.PageData{
-		Title:  "Help",
-		Active: "help",
+		Title:          "Help",
+		Active:         "help",
+		OIDCConfigured: oidcConfigured,
 		Data: struct {
 			SSHAddr     string
 			Fingerprint string
+			AdminHost   string
 		}{
 			SSHAddr:     sshAddr,
 			Fingerprint: s.hostFingerprint,
+			AdminHost:   adminHost,
 		},
 	})
 }
@@ -467,10 +535,15 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.buildTunnelViews()
 	redirects := s.buildRedirectViews()
 
+	s.cfgMu.RLock()
+	oidcConfigured := s.cfg.OIDC.IsConfigured()
+	s.cfgMu.RUnlock()
+
 	s.adminH.Render(w, "pages/dashboard.html", &admin.PageData{
-		Title:     "Dashboard",
-		Active:    "dashboard",
-		CSRFToken: s.sessionMgr.CSRFToken(r),
+		Title:          "Dashboard",
+		Active:         "dashboard",
+		CSRFToken:      s.sessionMgr.CSRFToken(r),
+		OIDCConfigured: oidcConfigured,
 		Data: struct {
 			Tunnels   []admin.TunnelView
 			Redirects []RedirectView
@@ -507,20 +580,25 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			hostCerts = append(hostCerts, hc)
 		}
 		views[i] = admin.TunnelView{
-			ID:             t.ID,
-			Type:           t.Type,
-			Hostnames:      t.Hostnames,
-			ListenPort:     t.ListenPort,
-			PreserveHost:   t.PreserveHost,
-			TLSPassthrough: t.TLSPassthrough,
-			Connected:      t.IsConnected(),
-			ClientCount:    t.ClientCount(),
-			Clients:        buildClientViews(t),
-			Requests:       t.Metrics.RequestCount.Load(),
-			BytesIn:        t.Metrics.BytesIn.Load(),
-			BytesOut:       t.Metrics.BytesOut.Load(),
-			ActiveConns:    int32(t.Metrics.ActiveConns.Load()),
-			HostCerts:      hostCerts,
+			ID:              t.ID,
+			Type:            t.Type,
+			Hostnames:       t.Hostnames,
+			ListenPort:      t.ListenPort,
+			PreserveHost:    t.PreserveHost,
+			TLSPassthrough:  t.TLSPassthrough,
+			RequireAuth:     t.RequireAuth,
+			AuthClaimName:   t.AuthClaimName,
+			AuthClaimValue:  t.AuthClaimValue,
+			AuthHeader:      t.AuthHeader,
+			AuthHeaderClaim: t.AuthHeaderClaim,
+			Connected:       t.IsConnected(),
+			ClientCount:     t.ClientCount(),
+			Clients:         buildClientViews(t),
+			Requests:        t.Metrics.RequestCount.Load(),
+			BytesIn:         t.Metrics.BytesIn.Load(),
+			BytesOut:        t.Metrics.BytesOut.Load(),
+			ActiveConns:     int32(t.Metrics.ActiveConns.Load()),
+			HostCerts:       hostCerts,
 		}
 	}
 	return views
@@ -566,12 +644,17 @@ func (s *Server) buildRedirectViews() []RedirectView {
 var tunnelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 type tunnelRequest struct {
-	ID             string   `json:"id"`
-	Type           string   `json:"type"`
-	Hostnames      []string `json:"hostnames"`
-	ListenPort     int      `json:"listen_port"`
-	PreserveHost   bool     `json:"preserve_host"`
-	TLSPassthrough bool     `json:"tls_passthrough"`
+	ID              string   `json:"id"`
+	Type            string   `json:"type"`
+	Hostnames       []string `json:"hostnames"`
+	ListenPort      int      `json:"listen_port"`
+	PreserveHost    bool     `json:"preserve_host"`
+	TLSPassthrough  bool     `json:"tls_passthrough"`
+	RequireAuth     bool     `json:"require_auth"`
+	AuthClaimName   string   `json:"auth_claim_name"`
+	AuthClaimValue  string   `json:"auth_claim_value"`
+	AuthHeader      string   `json:"auth_header"`
+	AuthHeaderClaim string   `json:"auth_header_claim"`
 }
 
 func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
@@ -639,12 +722,11 @@ func (s *Server) secretResponse(tunnelID, plaintext string) map[string]string {
 	tok := token.FormatToken(tunnelID, plaintext)
 	sshAddr := fmt.Sprintf("%s:%d", s.cfg.Server.AdminHost, s.cfg.Server.SSHPort)
 	return map[string]string{
-		"server":    sshAddr,
-		"host_key":  s.hostFingerprint,
-		"tunnel_id": tunnelID,
-		"secret":    plaintext,
-		"command":   fmt.Sprintf("gatecrash client --server %s --host-key %s --token %s --target 127.0.0.1:8000", sshAddr, s.hostFingerprint, tok),
-		"docker":    fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_HOST_KEY=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest gatecrash client", sshAddr, s.hostFingerprint, tok),
+		"server":  sshAddr,
+		"host_key": s.hostFingerprint,
+		"token":   tok,
+		"command": fmt.Sprintf("gatecrash --server %s --host-key %s --token %s --target 127.0.0.1:8000", sshAddr, s.hostFingerprint, tok),
+		"docker":  fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_HOST_KEY=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest", sshAddr, s.hostFingerprint, tok),
 	}
 }
 
@@ -671,13 +753,18 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cfg.Tunnel = append(s.cfg.Tunnel, config.Tunnel{
-		ID:             req.ID,
-		Type:           req.Type,
-		Hostnames:      req.Hostnames,
-		ListenPort:     req.ListenPort,
-		SecretHash:     hash,
-		PreserveHost:   req.PreserveHost,
-		TLSPassthrough: req.TLSPassthrough,
+		ID:              req.ID,
+		Type:            req.Type,
+		Hostnames:       req.Hostnames,
+		ListenPort:      req.ListenPort,
+		SecretHash:      hash,
+		PreserveHost:    req.PreserveHost,
+		TLSPassthrough:  req.TLSPassthrough,
+		RequireAuth:     req.RequireAuth,
+		AuthClaimName:   req.AuthClaimName,
+		AuthClaimValue:  req.AuthClaimValue,
+		AuthHeader:      req.AuthHeader,
+		AuthHeaderClaim: req.AuthHeaderClaim,
 	})
 	if err := s.cfg.Save(s.configPath); err != nil {
 		slog.Error("failed to save config", "error", err)
@@ -686,6 +773,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel created", "id", req.ID, "type", req.Type)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.create", fmt.Sprintf("Created %s tunnel %q", req.Type, req.ID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.secretResponse(req.ID, plaintext))
 }
@@ -720,6 +808,11 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tunnel[i].ListenPort = req.ListenPort
 			s.cfg.Tunnel[i].PreserveHost = req.PreserveHost
 			s.cfg.Tunnel[i].TLSPassthrough = req.TLSPassthrough
+			s.cfg.Tunnel[i].RequireAuth = req.RequireAuth
+			s.cfg.Tunnel[i].AuthClaimName = req.AuthClaimName
+			s.cfg.Tunnel[i].AuthClaimValue = req.AuthClaimValue
+			s.cfg.Tunnel[i].AuthHeader = req.AuthHeader
+			s.cfg.Tunnel[i].AuthHeaderClaim = req.AuthHeaderClaim
 			found = true
 			break
 		}
@@ -736,6 +829,7 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel updated", "id", tunnelID)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.edit", fmt.Sprintf("Updated tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -770,6 +864,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel deleted", "id", tunnelID)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.delete", fmt.Sprintf("Deleted tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -844,6 +939,7 @@ func (s *Server) handleCreateRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect created", "from", req.From, "to", req.To)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.create", fmt.Sprintf("Created redirect %q -> %q", req.From, req.To))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -891,6 +987,7 @@ func (s *Server) handleEditRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect updated", "from", fromHost)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.edit", fmt.Sprintf("Updated redirect %q", fromHost))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -925,6 +1022,7 @@ func (s *Server) handleDeleteRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect deleted", "from", fromHost)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.delete", fmt.Sprintf("Deleted redirect %q", fromHost))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -961,6 +1059,7 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 	}
 
 	slog.Info("regenerated tunnel secret", "tunnel", tunnelID)
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.regenerate", fmt.Sprintf("Regenerated secret for tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.secretResponse(tunnelID, plaintext))
 }
@@ -1097,28 +1196,43 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
 	tunnels := make([]struct {
-		ID             string
-		Type           string
-		Hostnames      []string
-		ListenPort     int
-		PreserveHost   bool
-		TLSPassthrough bool
+		ID              string
+		Type            string
+		Hostnames       []string
+		ListenPort      int
+		PreserveHost    bool
+		TLSPassthrough  bool
+		RequireAuth     bool
+		AuthClaimName   string
+		AuthClaimValue  string
+		AuthHeader      string
+		AuthHeaderClaim string
 	}, len(newCfg.Tunnel))
 	for i, tc := range newCfg.Tunnel {
 		tunnels[i] = struct {
-			ID             string
-			Type           string
-			Hostnames      []string
-			ListenPort     int
-			PreserveHost   bool
-			TLSPassthrough bool
+			ID              string
+			Type            string
+			Hostnames       []string
+			ListenPort      int
+			PreserveHost    bool
+			TLSPassthrough  bool
+			RequireAuth     bool
+			AuthClaimName   string
+			AuthClaimValue  string
+			AuthHeader      string
+			AuthHeaderClaim string
 		}{
-			ID:             tc.ID,
-			Type:           tc.Type,
-			Hostnames:      tc.Hostnames,
-			ListenPort:     tc.ListenPort,
-			PreserveHost:   tc.PreserveHost,
-			TLSPassthrough: tc.TLSPassthrough,
+			ID:              tc.ID,
+			Type:            tc.Type,
+			Hostnames:       tc.Hostnames,
+			ListenPort:      tc.ListenPort,
+			PreserveHost:    tc.PreserveHost,
+			TLSPassthrough:  tc.TLSPassthrough,
+			RequireAuth:     tc.RequireAuth,
+			AuthClaimName:   tc.AuthClaimName,
+			AuthClaimValue:  tc.AuthClaimValue,
+			AuthHeader:      tc.AuthHeader,
+			AuthHeaderClaim: tc.AuthHeaderClaim,
 		}
 	}
 	s.registry.Reload(tunnels)
@@ -1160,6 +1274,117 @@ func (s *Server) checkForUpdate(repo string) {
 		slog.Info("update available", "current", result.CurrentVersion, "latest", result.LatestVersion)
 		s.sse.Broadcast("update-available", result.LatestVersion)
 	}
+}
+
+// --- OIDC Handlers ---
+
+func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
+	if s.oidcProvider == nil {
+		http.Error(w, "OIDC is not configured", http.StatusBadRequest)
+		return
+	}
+
+	authURL, _, err := s.oidcProvider.AuthURL("admin", "/", "")
+	if err != nil {
+		slog.Error("failed to generate OIDC auth URL", "error", err)
+		http.Error(w, "failed to initiate OIDC login", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if s.oidcProvider == nil {
+		http.Error(w, "OIDC is not configured", http.StatusBadRequest)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		http.Error(w, "missing code or state", http.StatusBadRequest)
+		return
+	}
+
+	claims, st, err := s.oidcProvider.Exchange(r.Context(), state, code, "")
+	if err != nil {
+		slog.Error("OIDC callback failed", "error", err)
+		s.serveErrorPage(w, r, http.StatusForbidden, "Authentication Failed", "OIDC authentication failed: "+err.Error())
+		return
+	}
+
+	if st.Purpose() != "admin" {
+		http.Error(w, "invalid callback purpose", http.StatusBadRequest)
+		return
+	}
+
+	// Evaluate admin claim filter
+	s.cfgMu.RLock()
+	adminClaimName := s.cfg.OIDC.AdminClaimName
+	adminClaimValue := s.cfg.OIDC.AdminClaimValue
+	s.cfgMu.RUnlock()
+
+	if !admin.MatchesClaim(claims.Raw, adminClaimName, adminClaimValue) {
+		s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
+			"You do not have admin access.")
+		return
+	}
+
+	actor := claims.ActorString()
+	if err := s.sessionMgr.CreateSession(w, actor); err != nil {
+		slog.Error("failed to create OIDC session", "error", err)
+		http.Error(w, "session creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	s.auditLog.Log(actor, "admin.login.oidc", "Logged in via OIDC")
+	slog.Info("OIDC admin login", "actor", actor)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// --- Audit Log Handlers ---
+
+func (s *Server) handleAuditLogPage(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.RLock()
+	oidcConfigured := s.cfg.OIDC.IsConfigured()
+	s.cfgMu.RUnlock()
+
+	s.adminH.Render(w, "pages/auditlog.html", &admin.PageData{
+		Title:          "Audit Log",
+		Active:         "auditlog",
+		OIDCConfigured: oidcConfigured,
+	})
+}
+
+func (s *Server) handleAPIAuditLog(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	offset := 0
+
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &limit); err != nil || n != 1 || limit < 1 {
+			limit = 50
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &offset); err != nil || n != 1 || offset < 0 {
+			offset = 0
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	entries := s.auditLog.Entries(limit, offset)
+	total := s.auditLog.Count()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"entries": entries,
+		"total":   total,
+		"offset":  offset,
+		"limit":   limit,
+	})
 }
 
 func (s *Server) httpToHTTPSRedirect(w http.ResponseWriter, r *http.Request) {

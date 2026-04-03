@@ -27,12 +27,17 @@ type clientConn struct {
 
 // TunnelState holds the runtime state for a configured tunnel.
 type TunnelState struct {
-	ID             string
-	Type           string // "http" or "tcp"
-	Hostnames      []string
-	ListenPort     int
-	PreserveHost   bool
-	TLSPassthrough bool
+	ID              string
+	Type            string // "http" or "tcp"
+	Hostnames       []string
+	ListenPort      int
+	PreserveHost    bool
+	TLSPassthrough  bool
+	RequireAuth     bool
+	AuthClaimName   string
+	AuthClaimValue  string
+	AuthHeader      string
+	AuthHeaderClaim string
 
 	mu      sync.RWMutex
 	clients map[ssh.Conn]clientConn
@@ -172,12 +177,17 @@ func (r *Registry) AllTunnels() []*TunnelState {
 // Existing tunnels keep their connection state and metrics.
 // New tunnels are added, removed tunnels are dropped (connections will be closed by SSH).
 func (r *Registry) Reload(tunnels []struct {
-	ID             string
-	Type           string
-	Hostnames      []string
-	ListenPort     int
-	PreserveHost   bool
-	TLSPassthrough bool
+	ID              string
+	Type            string
+	Hostnames       []string
+	ListenPort      int
+	PreserveHost    bool
+	TLSPassthrough  bool
+	RequireAuth     bool
+	AuthClaimName   string
+	AuthClaimValue  string
+	AuthHeader      string
+	AuthHeaderClaim string
 }) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -197,15 +207,25 @@ func (r *Registry) Reload(tunnels []struct {
 			t.ListenPort = tc.ListenPort
 			t.PreserveHost = tc.PreserveHost
 			t.TLSPassthrough = tc.TLSPassthrough
+			t.RequireAuth = tc.RequireAuth
+			t.AuthClaimName = tc.AuthClaimName
+			t.AuthClaimValue = tc.AuthClaimValue
+			t.AuthHeader = tc.AuthHeader
+			t.AuthHeaderClaim = tc.AuthHeaderClaim
 		} else {
 			// New tunnel
 			t = &TunnelState{
-				ID:             tc.ID,
-				Type:           tc.Type,
-				Hostnames:      tc.Hostnames,
-				ListenPort:     tc.ListenPort,
-				PreserveHost:   tc.PreserveHost,
-				TLSPassthrough: tc.TLSPassthrough,
+				ID:              tc.ID,
+				Type:            tc.Type,
+				Hostnames:       tc.Hostnames,
+				ListenPort:      tc.ListenPort,
+				PreserveHost:    tc.PreserveHost,
+				TLSPassthrough:  tc.TLSPassthrough,
+				RequireAuth:     tc.RequireAuth,
+				AuthClaimName:   tc.AuthClaimName,
+				AuthClaimValue:  tc.AuthClaimValue,
+				AuthHeader:      tc.AuthHeader,
+				AuthHeaderClaim: tc.AuthHeaderClaim,
 			}
 		}
 		newByID[tc.ID] = t

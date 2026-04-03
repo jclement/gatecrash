@@ -18,6 +18,7 @@ type Config struct {
 	Server   ServerConfig `toml:"server"`
 	TLS      TLSConfig    `toml:"tls"`
 	Update   UpdateConfig `toml:"update"`
+	OIDC     OIDCConfig   `toml:"oidc"`
 	Tunnel   []Tunnel     `toml:"tunnel"`
 	Redirect []Redirect   `toml:"redirect"`
 }
@@ -43,14 +44,41 @@ type UpdateConfig struct {
 	GitHubRepo    string `toml:"github_repo"`
 }
 
+// OIDCConfig holds OIDC provider settings.
+// When enabled, OIDC replaces passkey authentication entirely.
+type OIDCConfig struct {
+	Enabled         bool   `toml:"enabled"`
+	ProviderName    string `toml:"provider_name"`
+	ClientID        string `toml:"client_id"`
+	ClientSecret    string `toml:"client_secret"`
+	AuthURL         string `toml:"auth_url"`
+	TokenURL        string `toml:"token_url"`
+	CertURL         string `toml:"cert_url"`
+	UsePKCE         bool   `toml:"use_pkce"`
+	NameClaim       string `toml:"name_claim"`
+	EmailClaim      string `toml:"email_claim"`
+	AdminClaimName  string `toml:"admin_claim_name"`
+	AdminClaimValue string `toml:"admin_claim_value"`
+}
+
+// IsConfigured returns true if the OIDC provider has the minimum required fields set.
+func (o *OIDCConfig) IsConfigured() bool {
+	return o.Enabled && o.ClientID != "" && o.AuthURL != "" && o.TokenURL != "" && o.CertURL != ""
+}
+
 type Tunnel struct {
-	ID             string   `toml:"id"`
-	Type           string   `toml:"type"`
-	Hostnames      []string `toml:"hostnames,omitempty"`
-	ListenPort     int      `toml:"listen_port,omitempty"`
-	SecretHash     string   `toml:"secret_hash,omitempty"`
-	PreserveHost   bool     `toml:"preserve_host,omitempty"`
-	TLSPassthrough bool     `toml:"tls_passthrough,omitempty"`
+	ID              string   `toml:"id"`
+	Type            string   `toml:"type"`
+	Hostnames       []string `toml:"hostnames,omitempty"`
+	ListenPort      int      `toml:"listen_port,omitempty"`
+	SecretHash      string   `toml:"secret_hash,omitempty"`
+	PreserveHost    bool     `toml:"preserve_host,omitempty"`
+	TLSPassthrough  bool     `toml:"tls_passthrough,omitempty"`
+	RequireAuth     bool     `toml:"require_auth,omitempty"`
+	AuthClaimName   string   `toml:"auth_claim_name,omitempty"`
+	AuthClaimValue  string   `toml:"auth_claim_value,omitempty"`
+	AuthHeader      string   `toml:"auth_header,omitempty"`
+	AuthHeaderClaim string   `toml:"auth_header_claim,omitempty"`
 }
 
 type Redirect struct {
@@ -253,20 +281,86 @@ func (c *Config) Save(path string) error {
 	fmt.Fprintf(&b, "check_interval = %q\n", c.Update.CheckInterval)
 	fmt.Fprintf(&b, "github_repo = %q\n\n", c.Update.GitHubRepo)
 
+	// [oidc]
+	b.WriteString("# ─── OIDC Authentication ────────────────────────────────────────────\n")
+	b.WriteString("#\n")
+	b.WriteString("# Configure an OpenID Connect provider for admin login and tunnel protection.\n")
+	b.WriteString("# When enabled, you can define claim-matching rules and use them to gate\n")
+	b.WriteString("# admin access or protect HTTP tunnels.\n")
+	b.WriteString("#\n")
+	b.WriteString("[oidc]\n")
+	fmt.Fprintf(&b, "enabled = %v\n", c.OIDC.Enabled)
+	if c.OIDC.ProviderName != "" {
+		fmt.Fprintf(&b, "provider_name = %q\n", c.OIDC.ProviderName)
+	} else {
+		b.WriteString("# provider_name = \"My Identity Provider\"\n")
+	}
+	if c.OIDC.ClientID != "" {
+		fmt.Fprintf(&b, "client_id = %q\n", c.OIDC.ClientID)
+	} else {
+		b.WriteString("# client_id = \"\"\n")
+	}
+	if c.OIDC.ClientSecret != "" {
+		fmt.Fprintf(&b, "client_secret = %q\n", c.OIDC.ClientSecret)
+	} else {
+		b.WriteString("# client_secret = \"\"\n")
+	}
+	if c.OIDC.AuthURL != "" {
+		fmt.Fprintf(&b, "auth_url = %q\n", c.OIDC.AuthURL)
+	} else {
+		b.WriteString("# auth_url = \"\"\n")
+	}
+	if c.OIDC.TokenURL != "" {
+		fmt.Fprintf(&b, "token_url = %q\n", c.OIDC.TokenURL)
+	} else {
+		b.WriteString("# token_url = \"\"\n")
+	}
+	if c.OIDC.CertURL != "" {
+		fmt.Fprintf(&b, "cert_url = %q\n", c.OIDC.CertURL)
+	} else {
+		b.WriteString("# cert_url = \"\"\n")
+	}
+	if c.OIDC.UsePKCE {
+		b.WriteString("use_pkce = true\n")
+	} else {
+		b.WriteString("# use_pkce = false\n")
+	}
+	nameClaim := c.OIDC.NameClaim
+	if nameClaim == "" {
+		nameClaim = "name"
+	}
+	fmt.Fprintf(&b, "name_claim = %q\n", nameClaim)
+	emailClaim := c.OIDC.EmailClaim
+	if emailClaim == "" {
+		emailClaim = "email"
+	}
+	fmt.Fprintf(&b, "email_claim = %q\n", emailClaim)
+	b.WriteString("\n")
+	b.WriteString("# Optional: restrict admin access to users matching a specific claim.\n")
+	b.WriteString("# When set, only OIDC users whose claim matches get admin access.\n")
+	b.WriteString("# When empty, any authenticated OIDC user is an admin.\n")
+	if c.OIDC.AdminClaimName != "" {
+		fmt.Fprintf(&b, "admin_claim_name = %q\n", c.OIDC.AdminClaimName)
+		fmt.Fprintf(&b, "admin_claim_value = %q\n", c.OIDC.AdminClaimValue)
+	} else {
+		b.WriteString("# admin_claim_name = \"role\"\n")
+		b.WriteString("# admin_claim_value = \"admin\"\n")
+	}
+	b.WriteString("\n")
+
 	// Tunnel documentation
 	b.WriteString("# ─── Tunnels ────────────────────────────────────────────────────────\n")
 	b.WriteString("#\n")
-	b.WriteString("# Each tunnel needs a unique ID and a bcrypt secret_hash for authentication.\n")
-	b.WriteString("# The client connects with a token in the format: tunnel_id:plaintext_secret\n")
+	b.WriteString("# Each tunnel needs a unique ID and a secret_hash for authentication.\n")
+	b.WriteString("# The secret_hash is the bcrypt hash of the secret portion of the tunnel token.\n")
+	b.WriteString("# The client connects with a tunnel token in the format: tunnel_id:secret\n")
 	b.WriteString("#\n")
-	b.WriteString("# Generate a bcrypt hash:\n")
+	b.WriteString("# Use the admin panel to create tunnels and generate tokens automatically,\n")
+	b.WriteString("# or generate a bcrypt hash manually:\n")
 	b.WriteString("#   htpasswd -nbBC 10 \"\" \"your-secret\" | cut -d: -f2\n")
-	b.WriteString("#   python3 -c \"import bcrypt; print(bcrypt.hashpw(b'your-secret', bcrypt.gensalt()).decode())\"\n")
-	b.WriteString("#\n")
-	b.WriteString("# Or use the admin panel to generate secrets with one click.\n")
 	b.WriteString("#\n")
 	b.WriteString("# Example:\n")
-	b.WriteString("#   gatecrash client --server host:port --token \"myapp:your-secret\" --target 127.0.0.1:8000\n")
+	b.WriteString("#   gatecrash --server host:port --token \"myapp:your-secret\" --target 127.0.0.1:8000\n")
 
 	if len(c.Tunnel) == 0 {
 		b.WriteString("#\n")
@@ -274,8 +368,20 @@ func (c *Config) Save(path string) error {
 		b.WriteString("# id = \"example\"\n")
 		b.WriteString("# type = \"http\"                    # \"http\" or \"tcp\"\n")
 		b.WriteString("# hostnames = [\"app.example.com\"]   # for HTTP tunnels\n")
-		b.WriteString("# secret_hash = \"$2a$10$...\"        # bcrypt hash\n")
+		b.WriteString("# secret_hash = \"$2a$10$...\"        # bcrypt hash of the token secret\n")
 		b.WriteString("# # preserve_host = false           # pass original Host header to backend\n")
+		b.WriteString("#\n")
+		b.WriteString("# # OIDC-protected tunnel (requires [oidc] to be configured):\n")
+		b.WriteString("# [[tunnel]]\n")
+		b.WriteString("# id = \"internal-app\"\n")
+		b.WriteString("# type = \"http\"\n")
+		b.WriteString("# hostnames = [\"internal.example.com\"]\n")
+		b.WriteString("# secret_hash = \"$2a$10$...\"\n")
+		b.WriteString("# require_auth = true               # require authentication to access\n")
+		b.WriteString("# auth_claim_name = \"department\"     # optional: restrict by OIDC claim\n")
+		b.WriteString("# auth_claim_value = \"engineering\"   # claim value that must match\n")
+		b.WriteString("# auth_header = \"x-Gatecrash-User\"   # header injected into proxied requests\n")
+		b.WriteString("# auth_header_claim = \"email\"        # claim value to put in the header\n")
 		b.WriteString("#\n")
 		b.WriteString("# [[tunnel]]\n")
 		b.WriteString("# id = \"example-tcp\"\n")
@@ -303,6 +409,19 @@ func (c *Config) Save(path string) error {
 			}
 			if t.TLSPassthrough {
 				b.WriteString("tls_passthrough = true\n")
+			}
+			if t.RequireAuth {
+				b.WriteString("require_auth = true\n")
+				if t.AuthClaimName != "" {
+					fmt.Fprintf(&b, "auth_claim_name = %q\n", t.AuthClaimName)
+					fmt.Fprintf(&b, "auth_claim_value = %q\n", t.AuthClaimValue)
+				}
+				if t.AuthHeader != "" {
+					fmt.Fprintf(&b, "auth_header = %q\n", t.AuthHeader)
+				}
+				if t.AuthHeaderClaim != "" {
+					fmt.Fprintf(&b, "auth_header_claim = %q\n", t.AuthHeaderClaim)
+				}
 			}
 			b.WriteString("\n")
 		}

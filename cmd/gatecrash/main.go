@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,50 +17,45 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jclement/gatecrash/internal/client"
-	"github.com/jclement/gatecrash/internal/config"
-	"github.com/jclement/gatecrash/internal/server"
 	"github.com/jclement/gatecrash/internal/update"
 )
 
 var Version = "dev"
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+	// Check for subcommands first
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "update":
+			runUpdate(os.Args[2:])
+			return
+		case "version":
+			fmt.Printf("gatecrash %s\n", Version)
+			return
+		case "help", "--help", "-h":
+			printUsage()
+			return
+		}
 	}
 
-	cmd := os.Args[1]
-	switch cmd {
-	case "server":
-		runServer(os.Args[2:])
-	case "client":
-		runClient(os.Args[2:])
-	case "make-config":
-		runMakeConfig(os.Args[2:])
-	case "update":
-		runUpdate(os.Args[2:])
-	case "version":
-		fmt.Printf("gatecrash %s\n", Version)
-	case "help", "--help", "-h":
-		printUsage()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
-		printUsage()
-		os.Exit(1)
-	}
+	// Default: run client
+	runClient(os.Args[1:])
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, "gatecrash %s — self-hosted tunnel server\n\n", Version)
+	fmt.Fprintf(os.Stderr, "gatecrash %s — tunnel client\n\n", Version)
 	fmt.Fprintf(os.Stderr, "Usage:\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash server      [flags]   Start the tunnel server\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash client      [flags]   Connect a tunnel client\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash make-config [flags]   Generate a config file\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash update      [flags]   Self-update to latest release\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash version               Print version\n")
-	fmt.Fprintf(os.Stderr, "  gatecrash help                  Show this help\n")
-	fmt.Fprintf(os.Stderr, "\nRun 'gatecrash <command> --help' for command-specific flags.\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash [flags]    Connect a tunnel to the server\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash update     Self-update to latest release\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash version    Print version\n")
+	fmt.Fprintf(os.Stderr, "  gatecrash help       Show this help\n")
+	fmt.Fprintf(os.Stderr, "\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "  --server HOST:PORT   Server SSH address (or GATECRASH_SERVER)\n")
+	fmt.Fprintf(os.Stderr, "  --token TOKEN        Tunnel token (or GATECRASH_TOKEN)\n")
+	fmt.Fprintf(os.Stderr, "  --target ADDR        Target service address (or GATECRASH_TARGET)\n")
+	fmt.Fprintf(os.Stderr, "  --host-key KEY       Server SSH host key fingerprint (or GATECRASH_HOST_KEY)\n")
+	fmt.Fprintf(os.Stderr, "  --count N            Number of tunnel connections (or GATECRASH_COUNT)\n")
+	fmt.Fprintf(os.Stderr, "  --debug              Enable debug logging\n")
 }
 
 func setupLogging(debug bool) {
@@ -101,83 +95,8 @@ func envOrDefaultInt(key string, def int) int {
 	return def
 }
 
-func runServer(args []string) {
-	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	configPath := fs.String("config", envOrDefault("GATECRASH_CONFIG", "/etc/gatecrash/gatecrash.toml"), "path to config file")
-	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
-	fs.Parse(args)
-
-	setupLogging(*debug)
-	slog.Info("gatecrash server starting", "version", Version)
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
-	}
-
-	// Check for updates in background
-	if cfg.Update.Enabled {
-		go update.LogIfUpdateAvailable(cfg.Update.GitHubRepo, Version)
-	}
-
-	srv := server.New(cfg, *configPath, Version)
-	if err := srv.Run(context.Background()); err != nil {
-		slog.Error("server error", "error", err)
-		os.Exit(1)
-	}
-}
-
-func runMakeConfig(args []string) {
-	fs := flag.NewFlagSet("make-config", flag.ExitOnError)
-	output := fs.String("output", "/etc/gatecrash/gatecrash.toml", "output config file path")
-	adminHost := fs.String("admin-host", "", "admin panel hostname (enables web admin)")
-	acmeEmail := fs.String("acme-email", "", "ACME/Let's Encrypt email for certificate notices")
-	force := fs.Bool("force", false, "overwrite existing config file")
-	fs.Parse(args)
-
-	// Check if file already exists
-	if !*force {
-		if _, err := os.Stat(*output); err == nil {
-			fmt.Fprintf(os.Stderr, "Config file already exists: %s\nUse --force to overwrite.\n", *output)
-			os.Exit(1)
-		}
-	}
-
-	cfg, err := config.GenerateNew()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to generate config: %v\n", err)
-		os.Exit(1)
-	}
-
-	if *adminHost != "" {
-		cfg.Server.AdminHost = *adminHost
-	}
-	if *acmeEmail != "" {
-		cfg.TLS.ACMEEmail = *acmeEmail
-	}
-
-	// Resolve cert_dir relative to output path
-	if !filepath.IsAbs(cfg.TLS.CertDir) {
-		cfg.TLS.CertDir = filepath.Join(filepath.Dir(*output), cfg.TLS.CertDir)
-	}
-
-	if err := cfg.Save(*output); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Config written to %s\n", *output)
-	fmt.Printf("  SSH port: %d\n", cfg.Server.SSHPort)
-	if cfg.Server.AdminHost != "" {
-		fmt.Printf("  Admin:    https://%s\n", cfg.Server.AdminHost)
-	} else {
-		fmt.Printf("  Admin:    disabled (set --admin-host to enable)\n")
-	}
-}
-
 func runClient(args []string) {
-	fs := flag.NewFlagSet("client", flag.ExitOnError)
+	fs := flag.NewFlagSet("gatecrash", flag.ExitOnError)
 	serverAddr := fs.String("server", envOrDefault("GATECRASH_SERVER", ""), "server SSH address (host:port)")
 	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
 	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
@@ -189,16 +108,7 @@ func runClient(args []string) {
 	setupLogging(*debug)
 
 	if *serverAddr == "" || *token == "" || *target == "" {
-		fmt.Fprintf(os.Stderr, "gatecrash client %s\n\n", Version)
-		fmt.Fprintf(os.Stderr, "Usage: gatecrash client --server HOST:PORT --token TOKEN --target [SCHEME://]HOST:PORT\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
-		fs.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
-		fmt.Fprintf(os.Stderr, "  GATECRASH_SERVER    Server SSH address\n")
-		fmt.Fprintf(os.Stderr, "  GATECRASH_TOKEN     Tunnel token\n")
-		fmt.Fprintf(os.Stderr, "  GATECRASH_TARGET    Target service address\n")
-		fmt.Fprintf(os.Stderr, "  GATECRASH_HOST_KEY  Server SSH host key fingerprint\n")
-		fmt.Fprintf(os.Stderr, "  GATECRASH_COUNT     Number of tunnel connections\n")
+		printUsage()
 		os.Exit(1)
 	}
 
@@ -207,7 +117,6 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
-	// Parse target [scheme://]host:port
 	targetHost, targetPort, targetTLS, err := parseTarget(*target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid target address %q: %v\n", *target, err)
@@ -316,7 +225,6 @@ func runUpdate(args []string) {
 }
 
 func parseTarget(addr string) (host string, port int, tlsMode string, err error) {
-	// Strip scheme prefix
 	switch {
 	case strings.HasPrefix(addr, "https+insecure://"):
 		addr = strings.TrimPrefix(addr, "https+insecure://")
@@ -328,7 +236,6 @@ func parseTarget(addr string) (host string, port int, tlsMode string, err error)
 		addr = strings.TrimPrefix(addr, "http://")
 	}
 
-	// Parse host:port
 	for i := len(addr) - 1; i >= 0; i-- {
 		if addr[i] == ':' {
 			host = addr[:i]
