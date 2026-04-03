@@ -23,6 +23,7 @@ type TunnelMetrics struct {
 type clientConn struct {
 	addr        string
 	connectedAt time.Time
+	version     string
 }
 
 // TunnelState holds the runtime state for a configured tunnel.
@@ -100,6 +101,7 @@ func (t *TunnelState) ClientCount() int {
 type ClientInfo struct {
 	Addr        string
 	ConnectedAt time.Time
+	Version     string
 }
 
 // ClientInfos returns details for all connected clients.
@@ -108,9 +110,19 @@ func (t *TunnelState) ClientInfos() []ClientInfo {
 	defer t.mu.RUnlock()
 	infos := make([]ClientInfo, 0, len(t.clients))
 	for _, c := range t.clients {
-		infos = append(infos, ClientInfo{Addr: c.addr, ConnectedAt: c.connectedAt})
+		infos = append(infos, ClientInfo{Addr: c.addr, ConnectedAt: c.connectedAt, Version: c.version})
 	}
 	return infos
+}
+
+// SetClientVersion updates the version for a connected client.
+func (t *TunnelState) SetClientVersion(conn ssh.Conn, version string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.clients[conn]; ok {
+		c.version = version
+		t.clients[conn] = c
+	}
 }
 
 // Registry holds all configured tunnels and provides lookups.

@@ -22,8 +22,9 @@ type HostCert struct {
 
 // ClientView holds display info for a single connected client.
 type ClientView struct {
-	Addr   string
-	Uptime string // human-readable, e.g. "2h 15m"
+	Addr    string
+	Uptime  string // human-readable, e.g. "2h 15m"
+	Version string
 }
 
 // TunnelView is the template data for a single tunnel row.
@@ -48,20 +49,38 @@ type TunnelView struct {
 	ActiveConns     int32
 	Token           string
 	HostCerts       []HostCert
+	ServerVersion   string
 }
 
 // HostnamesCSV returns hostnames as a comma-separated string.
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
 
-// ClientSummary returns a tooltip-friendly summary of all clients with uptime.
+// ClientSummary returns a tooltip-friendly summary of all clients with uptime and version.
 // The output is sorted by address for a stable, deterministic tooltip.
 func (t TunnelView) ClientSummary() string {
 	lines := make([]string, len(t.Clients))
 	for i, c := range t.Clients {
-		lines[i] = c.Addr + " (" + c.Uptime + ")"
+		line := c.Addr + " (" + c.Uptime + ")"
+		if c.Version != "" {
+			line += " v" + c.Version
+		}
+		lines[i] = line
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// IsClientOutdated returns true if any connected client has a version different from the server.
+func (t TunnelView) IsClientOutdated() bool {
+	if t.ServerVersion == "" || t.ServerVersion == "dev" {
+		return false
+	}
+	for _, c := range t.Clients {
+		if c.Version != "" && c.Version != t.ServerVersion {
+			return true
+		}
+	}
+	return false
 }
 
 // BytesInFmt formats bytes in as a human-readable string.

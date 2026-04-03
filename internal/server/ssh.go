@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -114,7 +115,20 @@ func (s *Server) handleControlChannel(srv *ssh.Server, conn *gossh.ServerConn, n
 		if err != nil {
 			return // Connection closed
 		}
-		_ = n
+
+		var msg protocol.ControlMessage
+		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+			continue
+		}
+
+		switch msg.Type {
+		case protocol.ControlClientInfo:
+			var info protocol.ClientInfo
+			if err := json.Unmarshal(msg.Data, &info); err == nil {
+				tunnel.SetClientVersion(conn, info.Version)
+				slog.Debug("client info", "tunnel", tunnelID, "version", info.Version, "os", info.OS, "arch", info.Arch, "hostname", info.Hostname)
+			}
+		}
 	}
 }
 

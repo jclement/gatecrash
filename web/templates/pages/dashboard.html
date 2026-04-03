@@ -131,56 +131,54 @@
 <!-- Tunnel Create/Edit Modal -->
 <div x-show="tunnelOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
     <div class="absolute inset-0 bg-black/50" @click="tunnelOpen = false"></div>
-    <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] flex flex-col" @click.stop>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] flex flex-col" @click.stop>
         <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
             <h3 class="text-base font-semibold" x-text="tunnelMode === 'create' ? 'Add Tunnel' : 'Edit Tunnel'"></h3>
             <button @click="tunnelOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
         </div>
         <div class="px-5 py-4 space-y-3 overflow-y-auto">
-            <div>
-                <label class="block text-xs font-medium text-gray-600 mb-1">Tunnel ID</label>
-                <input type="text" x-model="tunnel.id" :disabled="tunnelMode === 'edit'" placeholder="my-app"
-                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
-                <p class="text-xs text-gray-400 mt-0.5">Lowercase letters, numbers, and hyphens only.</p>
-            </div>
-            <div>
-                <label class="block text-xs font-medium text-gray-600 mb-1">Type</label>
-                <select x-model="tunnel.type" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
-                    <option value="http">HTTP</option>
-                    <option value="tcp">TCP</option>
-                </select>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Tunnel ID</label>
+                    <input type="text" x-model="tunnel.id" :disabled="tunnelMode === 'edit'" placeholder="my-app"
+                           class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Type</label>
+                    <select x-model="tunnel.type" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+                        <option value="http">HTTP</option>
+                        <option value="tcp">TCP</option>
+                    </select>
+                </div>
             </div>
             <div x-show="tunnel.type === 'http'">
                 <label class="block text-xs font-medium text-gray-600 mb-1">Hostnames</label>
                 <input type="text" x-model="tunnel.hostnames" placeholder="app.example.com, www.example.com"
                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-                <p class="text-xs text-gray-400 mt-0.5">Comma-separated list of hostnames to route to this tunnel.</p>
+                <p class="text-xs text-gray-400 mt-0.5">Comma-separated list of hostnames.</p>
             </div>
             <div x-show="tunnel.type === 'tcp'">
                 <label class="block text-xs font-medium text-gray-600 mb-1">Listen Port</label>
                 <input type="number" x-model="tunnel.listenPort" min="1" max="65535" placeholder="9000"
                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
             </div>
-            <div x-show="tunnel.type === 'http'">
+            <div x-show="tunnel.type === 'http'" class="flex items-center gap-6">
                 <label class="flex items-center gap-2 text-sm">
                     <input type="checkbox" x-model="tunnel.preserveHost" class="rounded">
-                    <span>Preserve original Host header</span>
+                    <span>Preserve Host</span>
                 </label>
-            </div>
-            <div x-show="tunnel.type === 'http'">
                 <label class="flex items-center gap-2 text-sm">
                     <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
                     <span>TLS Passthrough</span>
                 </label>
-                <p class="text-xs text-gray-400 mt-0.5 ml-6">Forward raw TLS to client (no certificate needed).</p>
             </div>
             <template x-if="tunnel.type === 'http'">
-                <div class="border-t border-gray-200 pt-3 mt-1 space-y-3">
+                <div class="border-t border-gray-200 pt-3 mt-1 space-y-2">
                     <label class="flex items-center gap-2 text-sm">
                         <input type="checkbox" x-model="tunnel.requireAuth" class="rounded">
                         <span>Require Authentication</span>
                     </label>
-                    <div x-show="tunnel.requireAuth && oidcConfigured" class="space-y-2 ml-6">
+                    <div x-show="tunnel.requireAuth && oidcConfigured" class="space-y-2 pl-6">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 mb-1">Claim Filter <span class="font-normal text-gray-400">(optional)</span></label>
                             <div class="grid grid-cols-2 gap-2">
@@ -190,15 +188,12 @@
                                        class="border border-gray-300 rounded px-2 py-1.5 text-sm">
                             </div>
                         </div>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 mb-1">User Header</label>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">User Header</label>
+                            <div class="grid grid-cols-2 gap-2">
                                 <input type="text" x-model="tunnel.authHeader" placeholder="x-Gatecrash-User"
                                        class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 mb-1">Header Claim</label>
-                                <input type="text" x-model="tunnel.authHeaderClaim" placeholder="email"
+                                <input type="text" x-model="tunnel.authHeaderClaim" placeholder="email (claim for value)"
                                        class="border border-gray-300 rounded px-2 py-1.5 text-sm">
                             </div>
                         </div>
@@ -730,7 +725,7 @@ function dashboard() {
         </div>{{end}}{{end}}
         {{else}}<code class="text-xs">:{{.ListenPort}}</code>{{end}}
     </td>
-    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{else}}<span class="text-xs" data-tip="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
+    <td class="px-3 py-2" data-field="client" data-label="Client">{{if .Connected}}{{if eq .ClientCount 1}}<span class="text-xs">{{(index .Clients 0).Addr}}</span> <span class="text-xs text-gray-400">{{(index .Clients 0).Uptime}}</span>{{if (index .Clients 0).Version}} <span class="text-xs {{if .IsClientOutdated}}text-amber-600 font-medium{{else}}text-gray-400{{end}}">v{{(index .Clients 0).Version}}</span>{{end}}{{else}}<span class="text-xs" data-tip="{{.ClientSummary}}">{{.ClientCount}} clients</span>{{end}}{{else}}<span class="text-xs text-gray-400">-</span>{{end}}</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="requests" data-label="Requests">{{.Requests}}</td>
     <td class="px-3 py-2 text-right text-xs text-gray-500" data-field="traffic" data-label="Traffic">{{.BytesInFmt}} in / {{.BytesOutFmt}} out</td>
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>

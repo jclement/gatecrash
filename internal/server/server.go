@@ -599,6 +599,7 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			BytesOut:        t.Metrics.BytesOut.Load(),
 			ActiveConns:     int32(t.Metrics.ActiveConns.Load()),
 			HostCerts:       hostCerts,
+			ServerVersion:   strings.TrimPrefix(s.version, "v"),
 		}
 	}
 	return views
@@ -609,8 +610,9 @@ func buildClientViews(t *TunnelState) []admin.ClientView {
 	views := make([]admin.ClientView, len(infos))
 	for i, info := range infos {
 		views[i] = admin.ClientView{
-			Addr:   info.Addr,
-			Uptime: admin.FormatUptime(info.ConnectedAt),
+			Addr:    info.Addr,
+			Uptime:  admin.FormatUptime(info.ConnectedAt),
+			Version: info.Version,
 		}
 	}
 	return views
@@ -1072,8 +1074,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 	tunnels := s.registry.AllTunnels()
 	type clientJSON struct {
-		Addr   string `json:"addr"`
-		Uptime string `json:"uptime"`
+		Addr    string `json:"addr"`
+		Uptime  string `json:"uptime"`
+		Version string `json:"version,omitempty"`
 	}
 	type tunnelJSON struct {
 		ID          string       `json:"id"`
@@ -1091,8 +1094,9 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 		var clients []clientJSON
 		for _, info := range t.ClientInfos() {
 			clients = append(clients, clientJSON{
-				Addr:   info.Addr,
-				Uptime: admin.FormatUptime(info.ConnectedAt),
+				Addr:    info.Addr,
+				Uptime:  admin.FormatUptime(info.ConnectedAt),
+				Version: info.Version,
 			})
 		}
 		result[i] = tunnelJSON{
