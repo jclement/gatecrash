@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -78,16 +80,25 @@ func (h *WebAuthnHandler) cleanupLoop() {
 	}
 }
 
-func (h *WebAuthnHandler) storeChallenge(key string, sd *webauthn.SessionData) {
+func (h *WebAuthnHandler) storeChallenge(sd *webauthn.SessionData) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	key := base64.RawURLEncoding.EncodeToString(b)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.challenges[key] = &sessionData{
 		session: sd,
 		expires: time.Now().Add(5 * time.Minute),
 	}
+	return key
 }
 
 func (h *WebAuthnHandler) getChallenge(key string) *webauthn.SessionData {
+	if key == "" {
+		return nil
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sd, ok := h.challenges[key]
@@ -135,15 +146,23 @@ func (h *WebAuthnHandler) HandleRegisterBegin(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.storeChallenge("register", session)
+	key := h.storeChallenge(session)
+	if key == "" {
+		http.Error(w, "failed to store challenge", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(options)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"publicKey":    options.Response,
+		"challenge_id": key,
+	})
 }
 
 // HandleRegisterFinish completes passkey registration.
 func (h *WebAuthnHandler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
-	session := h.getChallenge("register")
+	challengeID := r.URL.Query().Get("challenge_id")
+	session := h.getChallenge(challengeID)
 	if session == nil {
 		http.Error(w, "no pending registration", http.StatusBadRequest)
 		return
@@ -206,15 +225,23 @@ func (h *WebAuthnHandler) HandleLoginBegin(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.storeChallenge("login", session)
+	key := h.storeChallenge(session)
+	if key == "" {
+		http.Error(w, "failed to store challenge", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(options)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"publicKey":    options.Response,
+		"challenge_id": key,
+	})
 }
 
 // HandleLoginFinish completes passkey authentication.
 func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
-	session := h.getChallenge("login")
+	challengeID := r.URL.Query().Get("challenge_id")
+	session := h.getChallenge(challengeID)
 	if session == nil {
 		http.Error(w, "no pending login", http.StatusBadRequest)
 		return

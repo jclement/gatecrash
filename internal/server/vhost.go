@@ -68,6 +68,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip the trusted identity header to prevent spoofing from external clients
+	r.Header.Del("x-Gatecrash-User")
+
 	// 4. Check tunnel auth requirement
 	if tunnel.RequireAuth {
 		if s.oidcProvider != nil && s.tunnelAuth != nil {
@@ -142,6 +145,11 @@ func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status i
 </html>`, status, status, title, message)
 }
 
+// isSafeReturnURL validates that a return URL is a relative path (not an open redirect).
+func isSafeReturnURL(u string) bool {
+	return len(u) > 0 && u[0] == '/' && (len(u) == 1 || u[1] != '/')
+}
+
 func stripPort(host string) string {
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -202,7 +210,7 @@ func (s *Server) handleTunnelOIDCCallback(w http.ResponseWriter, r *http.Request
 		slog.Error("tunnel OIDC callback failed", "error", err, "hostname", hostname)
 		s.serveErrorPage(w, r, http.StatusForbidden,
 			"Authentication Failed",
-			"OIDC authentication failed: "+err.Error())
+			"OIDC authentication failed. Please try again.")
 		return
 	}
 
@@ -222,9 +230,9 @@ func (s *Server) handleTunnelOIDCCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Redirect to the original URL
+	// Redirect to the original URL (validated to prevent open redirect)
 	returnURL := "/"
-	if st != nil && st.ReturnURL != "" {
+	if st != nil && st.ReturnURL != "" && isSafeReturnURL(st.ReturnURL) {
 		returnURL = st.ReturnURL
 	}
 	http.Redirect(w, r, returnURL, http.StatusFound)

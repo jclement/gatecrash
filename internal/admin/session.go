@@ -11,6 +11,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// DeriveKey derives a purpose-specific key from a master secret using HMAC-SHA256.
+func DeriveKey(master, purpose string) []byte {
+	mac := hmac.New(sha256.New, []byte(master))
+	mac.Write([]byte(purpose))
+	return mac.Sum(nil)
+}
+
 const (
 	sessionCookieName = "gatecrash_session"
 	sessionDuration   = 24 * time.Hour
@@ -21,9 +28,9 @@ type SessionManager struct {
 	secret []byte
 }
 
-// NewSessionManager creates a new session manager.
+// NewSessionManager creates a new session manager with a purpose-derived key.
 func NewSessionManager(secret string) *SessionManager {
-	return &SessionManager{secret: []byte(secret)}
+	return &SessionManager{secret: DeriveKey(secret, "admin-session")}
 }
 
 // sessionClaims extends RegisteredClaims with an actor identity for audit logging.

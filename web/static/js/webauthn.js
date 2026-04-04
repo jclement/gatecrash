@@ -31,7 +31,9 @@ async function registerPasskey() {
     try {
         const optResp = await fetch(apiURL('auth/register/begin'), { method: 'POST' });
         if (!optResp.ok) throw new Error('Failed to get registration options');
-        const options = await optResp.json();
+        const data = await optResp.json();
+        const challengeID = data.challenge_id;
+        const options = { publicKey: data.publicKey };
 
         options.publicKey.challenge = base64urlToBuffer(options.publicKey.challenge);
         options.publicKey.user.id = base64urlToBuffer(options.publicKey.user.id);
@@ -54,7 +56,7 @@ async function registerPasskey() {
             }
         });
 
-        const finResp = await fetch(apiURL('auth/register/finish'), {
+        const finResp = await fetch(apiURL('auth/register/finish') + '?challenge_id=' + encodeURIComponent(challengeID), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: body
@@ -83,7 +85,9 @@ async function authenticatePasskey() {
     try {
         const optResp = await fetch(apiURL('auth/login/begin'), { method: 'POST' });
         if (!optResp.ok) throw new Error('Failed to get authentication options');
-        const options = await optResp.json();
+        const data = await optResp.json();
+        const challengeID = data.challenge_id;
+        const options = { publicKey: data.publicKey };
 
         options.publicKey.challenge = base64urlToBuffer(options.publicKey.challenge);
         if (options.publicKey.allowCredentials) {
@@ -108,7 +112,7 @@ async function authenticatePasskey() {
             }
         });
 
-        const finResp = await fetch(apiURL('auth/login/finish'), {
+        const finResp = await fetch(apiURL('auth/login/finish') + '?challenge_id=' + encodeURIComponent(challengeID), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: body

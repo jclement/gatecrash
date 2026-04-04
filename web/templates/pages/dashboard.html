@@ -168,11 +168,11 @@
                     <span>Preserve original Host header</span>
                 </label>
                 <label class="flex items-center gap-2 text-sm">
-                    <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
+                    <input type="checkbox" x-model="tunnel.tlsPassthrough" @change="if (tunnel.tlsPassthrough) tunnel.requireAuth = false" class="rounded">
                     <span>TLS Passthrough</span>
                 </label>
             </div>
-            <template x-if="tunnel.type === 'http'">
+            <template x-if="tunnel.type === 'http' && !tunnel.tlsPassthrough">
                 <div class="border-t border-gray-200 pt-3 mt-1 space-y-2">
                     <label class="flex items-center gap-2 text-sm">
                         <input type="checkbox" x-model="tunnel.requireAuth" class="rounded">

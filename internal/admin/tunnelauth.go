@@ -27,9 +27,9 @@ type TunnelAuthSession struct {
 	secret []byte
 }
 
-// NewTunnelAuthSession creates a new tunnel auth session manager.
+// NewTunnelAuthSession creates a new tunnel auth session manager with a purpose-derived key.
 func NewTunnelAuthSession(secret string) *TunnelAuthSession {
-	return &TunnelAuthSession{secret: []byte(secret)}
+	return &TunnelAuthSession{secret: DeriveKey(secret, "tunnel-auth")}
 }
 
 // CreateSession sets a tunnel auth cookie scoped to the given hostname.

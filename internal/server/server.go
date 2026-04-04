@@ -55,6 +55,9 @@ type Server struct {
 	// Bandwidth history
 	bwTracker *bandwidthTracker
 
+	// Rate limiter for auth endpoints
+	authLimiter *ipRateLimiter
+
 	// Auth components
 	passkeyStore *admin.PasskeyStore
 	sessionMgr   *admin.SessionManager
@@ -68,13 +71,14 @@ type Server struct {
 // New creates a new server instance.
 func New(cfg *config.Config, configPath, version string) *Server {
 	return &Server{
-		cfg:        cfg,
-		configPath: configPath,
-		version:    version,
-		registry:   NewRegistry(),
-		adminMux:   http.NewServeMux(),
-		sse:        NewSSEBroadcaster(),
-		bwTracker:  newBandwidthTracker(120), // ~4 min at 2s intervals
+		cfg:         cfg,
+		configPath:  configPath,
+		version:     version,
+		registry:    NewRegistry(),
+		adminMux:    http.NewServeMux(),
+		sse:         NewSSEBroadcaster(),
+		bwTracker:   newBandwidthTracker(120), // ~4 min at 2s intervals
+		authLimiter: newIPRateLimiter(20, time.Minute),
 	}
 }
 
@@ -303,17 +307,17 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("GET /login", s.handleLogin)
 	s.adminMux.HandleFunc("GET /setup", s.handleSetup)
 
-	// WebAuthn API endpoints
+	// WebAuthn API endpoints (rate-limited)
 	// Registration requires either setup mode (no passkeys) or an authenticated session
-	s.adminMux.HandleFunc("POST /auth/register/begin", s.requireAuthOrSetup(s.webauthn.HandleRegisterBegin))
-	s.adminMux.HandleFunc("POST /auth/register/finish", s.requireAuthOrSetup(s.webauthn.HandleRegisterFinish))
+	s.adminMux.HandleFunc("POST /auth/register/begin", rateLimit(s.authLimiter, s.requireAuthOrSetup(s.webauthn.HandleRegisterBegin)))
+	s.adminMux.HandleFunc("POST /auth/register/finish", rateLimit(s.authLimiter, s.requireAuthOrSetup(s.webauthn.HandleRegisterFinish)))
 	// Login endpoints are public (called by JS on login page)
-	s.adminMux.HandleFunc("POST /auth/login/begin", s.webauthn.HandleLoginBegin)
-	s.adminMux.HandleFunc("POST /auth/login/finish", s.webauthn.HandleLoginFinish)
+	s.adminMux.HandleFunc("POST /auth/login/begin", rateLimit(s.authLimiter, s.webauthn.HandleLoginBegin))
+	s.adminMux.HandleFunc("POST /auth/login/finish", rateLimit(s.authLimiter, s.webauthn.HandleLoginFinish))
 
-	// OIDC endpoints — public (OAuth2 flow)
-	s.adminMux.HandleFunc("GET /oidc/login", s.handleOIDCLogin)
-	s.adminMux.HandleFunc("GET /oidc/callback", s.handleOIDCCallback)
+	// OIDC endpoints — public (OAuth2 flow, rate-limited)
+	s.adminMux.HandleFunc("GET /oidc/login", rateLimit(s.authLimiter, s.handleOIDCLogin))
+	s.adminMux.HandleFunc("GET /oidc/callback", rateLimit(s.authLimiter, s.handleOIDCCallback))
 	// Logout
 	s.adminMux.HandleFunc("POST /logout", s.handleLogout)
 
@@ -671,6 +675,12 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 	}
 	if req.Type == "tcp" && req.ListenPort <= 0 {
 		return fmt.Errorf("TCP tunnels require a listen_port > 0")
+	}
+	if req.RequireAuth && req.Type == "tcp" {
+		return fmt.Errorf("require_auth is not supported on TCP tunnels")
+	}
+	if req.RequireAuth && req.TLSPassthrough {
+		return fmt.Errorf("require_auth is not supported with TLS passthrough (auth is bypassed at the TLS layer)")
 	}
 
 	// Check for conflicts
@@ -1316,7 +1326,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	claims, st, err := s.oidcProvider.Exchange(r.Context(), state, code, "")
 	if err != nil {
 		slog.Error("OIDC callback failed", "error", err)
-		s.serveErrorPage(w, r, http.StatusForbidden, "Authentication Failed", "OIDC authentication failed: "+err.Error())
+		s.serveErrorPage(w, r, http.StatusForbidden, "Authentication Failed", "OIDC authentication failed. Please try again.")
 		return
 	}
 
