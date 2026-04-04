@@ -71,8 +71,11 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	req.Header.Set("X-Real-IP", data.RemoteAddr)
 	req.Header.Set("X-Request-Id", data.RequestID)
 
+	// Resolve target based on incoming hostname (route map or default)
+	targetAddr, targetScheme, _ := c.resolveTarget(data.Host)
+
 	// Rewrite the request URL to target the local service
-	targetURL := fmt.Sprintf("%s://%s%s", c.targetScheme(), c.targetAddr(), data.URI)
+	targetURL := fmt.Sprintf("%s://%s%s", targetScheme, targetAddr, data.URI)
 	req.URL, _ = url.Parse(targetURL)
 	req.RequestURI = "" // Must be empty for http.Client
 
@@ -82,7 +85,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 		req.Host = data.Host
 	} else {
 		// Rewrite Host to target address (default)
-		req.Host = c.targetAddr()
+		req.Host = targetAddr
 	}
 
 	// WebSocket / upgrade requests must bypass http.Client because Go's
@@ -97,7 +100,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		slog.Error("target request failed",
-			"target", c.targetAddr(),
+			"target", targetAddr,
 			"method", data.Method,
 			"uri", data.URI,
 			"error", err,
@@ -156,7 +159,7 @@ func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct 
 	TLS          bool
 	PreserveHost bool
 }) {
-	target := c.targetAddr()
+	target, _, tlsMode := c.resolveTarget(data.Host)
 
 	var conn net.Conn
 	var err error
@@ -173,9 +176,9 @@ func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct 
 	defer conn.Close()
 
 	// Wrap with TLS if the target requires it
-	if c.cfg.TargetTLS != "" {
+	if tlsMode != "" {
 		tlsConn := tls.Client(conn, &tls.Config{
-			InsecureSkipVerify: c.cfg.TargetTLS == "tls-insecure",
+			InsecureSkipVerify: tlsMode == "tls-insecure",
 		})
 		if err := tlsConn.Handshake(); err != nil {
 			slog.Error("upgrade: TLS handshake failed",

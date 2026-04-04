@@ -345,16 +345,32 @@ gatecrash help          Show help
 |------|---------|----------|---------|-------------|
 | `--server` | `GATECRASH_SERVER` | **Yes** | | Server SSH address (`host:port`) |
 | `--token` | `GATECRASH_TOKEN` | **Yes** | | Tunnel token (`tunnel_id:secret`) |
-| `--target` | `GATECRASH_TARGET` | **Yes** | | Target service address (`[scheme://]host:port`) |
+| `--target` | `GATECRASH_TARGET` | **Yes** | | Target address (repeatable, see below) |
 | `--host-key` | `GATECRASH_HOST_KEY` | **Yes** | | Server SSH fingerprint (`SHA256:...`) |
 | `--count` | `GATECRASH_COUNT` | No | `1` | Parallel tunnel connections (1-10) |
 | `--debug` | | No | `false` | Enable debug logging |
 
+#### Multi-Target Routing
+
+An HTTP tunnel with multiple hostnames can route each to a different backend using `--target`:
+
+```bash
+gatecrash --server host:port --token homelab:secret \
+  --target git.example.com=forgejo:3000 \
+  --target gist.example.com=opengist:8080
+```
+
+A bare `--target host:port` (without `=`) sets the default target for unmatched hostnames and TCP tunnels.
+
+Via environment variable: `GATECRASH_TARGET=git.example.com=forgejo:3000,gist.example.com=opengist:8080`
+
 #### Target Schemes
+
+Route targets support scheme prefixes:
 
 | Target | Behavior |
 |--------|----------|
-| `localhost:8080` | Plain HTTP (default) |
+| `localhost:8080` | Plain HTTP / TCP (default) |
 | `https://localhost:8443` | TLS with certificate verification |
 | `https+insecure://localhost:8443` | TLS without certificate verification |
 
@@ -410,6 +426,36 @@ services:
       GATECRASH_TARGET: whoami:80
     depends_on:
       - whoami
+    restart: unless-stopped
+```
+
+### Docker Compose -- Multi-Service Routing
+
+Route multiple hostnames to different containers through a single tunnel:
+
+```yaml
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:latest
+    expose:
+      - "3000"
+      - "22"
+
+  opengist:
+    image: ghcr.io/thomiceli/opengist:latest
+    expose:
+      - "8080"
+
+  tunnel:
+    image: ghcr.io/jclement/gatecrash:latest
+    environment:
+      GATECRASH_SERVER: tunnel.example.com:51234
+      GATECRASH_HOST_KEY: "SHA256:your_host_key_fingerprint"
+      GATECRASH_TOKEN: "homelab:YOUR_SECRET"
+      GATECRASH_TARGET: "git.example.com=forgejo:3000,gist.example.com=opengist:8080"
+    depends_on:
+      - forgejo
+      - opengist
     restart: unless-stopped
 ```
 

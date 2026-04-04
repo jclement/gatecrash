@@ -19,14 +19,22 @@ import (
 	"github.com/jclement/gatecrash/internal/protocol"
 )
 
+// RouteTarget defines a backend target for routing.
+type RouteTarget struct {
+	Host string
+	Port int
+	TLS  string // "", "tls", or "tls-insecure"
+}
+
 // Config holds the client configuration.
 type Config struct {
 	ServerAddr string // host:port of the SSH server
 	Token      string // tunnel token (tunnel_id:secret)
-	TargetHost string // target service host
-	TargetPort int    // target service port
+	TargetHost string // default target service host
+	TargetPort int    // default target service port
 	HostKey    string // optional SSH host key fingerprint (SHA256:...)
 	TargetTLS  string // "", "tls", or "tls-insecure"
+	Routes     map[string]RouteTarget // hostname or "tcp" → target
 }
 
 // Client connects to the gatecrash server and handles tunnel requests.
@@ -204,6 +212,20 @@ func (c *Client) targetScheme() string {
 		return "https"
 	}
 	return "http"
+}
+
+// resolveTarget returns the target address and scheme for a given hostname.
+// Checks routes first, then falls back to the default target.
+// The key is the public hostname for HTTP, or "tcp" for TCP tunnels.
+func (c *Client) resolveTarget(key string) (addr, scheme, tlsMode string) {
+	if rt, ok := c.cfg.Routes[key]; ok {
+		addr = net.JoinHostPort(rt.Host, fmt.Sprintf("%d", rt.Port))
+		if rt.TLS != "" {
+			return addr, "https", rt.TLS
+		}
+		return addr, "http", ""
+	}
+	return c.targetAddr(), c.targetScheme(), c.cfg.TargetTLS
 }
 
 // makeHostKeyCallback creates a host key callback that verifies the server key

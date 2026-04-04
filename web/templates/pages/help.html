@@ -51,6 +51,18 @@
             Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel token and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
         </p>
         <div class="space-y-2 mt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Multi-Target Routing</p>
+            <p class="text-sm text-gray-600">
+                Route multiple hostnames to different backends through a single tunnel using <code class="bg-gray-100 px-1 rounded text-xs">--target</code>:
+            </p>
+            <pre class="bg-gray-900 text-green-400 text-xs rounded p-3 overflow-x-auto">gatecrash --server {{.Data.SSHAddr}} --token &lt;TOKEN&gt; \
+  --target git.example.com=forgejo:3000 \
+  --target gist.example.com=opengist:8080</pre>
+            <p class="text-sm text-gray-600">
+                A bare <code class="bg-gray-100 px-1 rounded text-xs">--target host:port</code> sets the default target for unmatched hostnames and TCP tunnels.
+            </p>
+        </div>
+        <div class="space-y-2 mt-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Target Schemes</p>
             <p class="text-sm text-gray-600">
                 If your local service uses HTTPS, prefix the target address with a scheme:

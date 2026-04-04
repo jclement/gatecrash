@@ -52,10 +52,15 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
 	fmt.Fprintf(os.Stderr, "  --server HOST:PORT   Server SSH address (or GATECRASH_SERVER)\n")
 	fmt.Fprintf(os.Stderr, "  --token TOKEN        Tunnel token (or GATECRASH_TOKEN)\n")
-	fmt.Fprintf(os.Stderr, "  --target ADDR        Target service address (or GATECRASH_TARGET)\n")
+	fmt.Fprintf(os.Stderr, "  --target TARGET      Target address (repeatable, or GATECRASH_TARGET)\n")
 	fmt.Fprintf(os.Stderr, "  --host-key KEY       Server SSH host key fingerprint (or GATECRASH_HOST_KEY)\n")
 	fmt.Fprintf(os.Stderr, "  --count N            Number of tunnel connections (or GATECRASH_COUNT)\n")
 	fmt.Fprintf(os.Stderr, "  --debug              Enable debug logging\n")
+	fmt.Fprintf(os.Stderr, "\nTargets:\n")
+	fmt.Fprintf(os.Stderr, "  --target localhost:8080                  Default target\n")
+	fmt.Fprintf(os.Stderr, "  --target git.example.com=forgejo:3000   Route HTTP by hostname\n")
+	fmt.Fprintf(os.Stderr, "\n  For HTTP tunnels with multiple hostnames, use multiple --target flags.\n")
+	fmt.Fprintf(os.Stderr, "  TCP tunnels use the default target (bare --target host:port).\n")
 }
 
 func setupLogging(debug bool) {
@@ -95,19 +100,39 @@ func envOrDefaultInt(key string, def int) int {
 	return def
 }
 
+// targetFlags collects repeatable --target flags.
+type targetFlags []string
+
+func (r *targetFlags) String() string { return strings.Join(*r, ", ") }
+func (r *targetFlags) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
 func runClient(args []string) {
 	fs := flag.NewFlagSet("gatecrash", flag.ExitOnError)
 	serverAddr := fs.String("server", envOrDefault("GATECRASH_SERVER", ""), "server SSH address (host:port)")
 	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
-	target := fs.String("target", envOrDefault("GATECRASH_TARGET", ""), "target service address ([https://|https+insecure://]host:port)")
 	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
 	count := fs.Int("count", envOrDefaultInt("GATECRASH_COUNT", 1), "number of tunnel connections for redundancy")
 	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
+	var targets targetFlags
+	fs.Var(&targets, "target", "target: host:port or hostname=host:port (repeatable)")
 	fs.Parse(args)
+
+	// Also parse targets from env var (comma-separated)
+	if envTarget := os.Getenv("GATECRASH_TARGET"); envTarget != "" && len(targets) == 0 {
+		for _, t := range strings.Split(envTarget, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				targets = append(targets, t)
+			}
+		}
+	}
 
 	setupLogging(*debug)
 
-	if *serverAddr == "" || *token == "" || *target == "" {
+	if *serverAddr == "" || *token == "" || len(targets) == 0 {
 		printUsage()
 		os.Exit(1)
 	}
@@ -117,16 +142,31 @@ func runClient(args []string) {
 		os.Exit(1)
 	}
 
-	targetHost, targetPort, targetTLS, err := parseTarget(*target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid target address %q: %v\n", *target, err)
-		os.Exit(1)
+	// Parse target mappings
+	var targetHost string
+	var targetPort int
+	var targetTLS string
+	routeMap := make(map[string]client.RouteTarget)
+	for _, r := range targets {
+		key, rt, err := parseRoute(r)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid route %q: %v\n", r, err)
+			os.Exit(1)
+		}
+		if key == "default" {
+			// "default=host:port" or bare "host:port" sets the default target
+			targetHost = rt.Host
+			targetPort = rt.Port
+			targetTLS = rt.TLS
+		} else {
+			routeMap[key] = rt
+		}
 	}
 
 	slog.Info("gatecrash client starting",
 		"version", Version,
 		"server", *serverAddr,
-		"target", *target,
+		"targets", len(routeMap)+1,
 		"count", *count,
 	)
 
@@ -137,6 +177,7 @@ func runClient(args []string) {
 		TargetPort: targetPort,
 		HostKey:    *hostKey,
 		TargetTLS:  targetTLS,
+		Routes:     routeMap,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -247,4 +288,32 @@ func parseTarget(addr string) (host string, port int, tlsMode string, err error)
 		}
 	}
 	return "", 0, "", fmt.Errorf("expected [scheme://]host:port format")
+}
+
+// parseRoute parses a route mapping.
+// Formats:
+//
+//	"host:port"                     → default route (used for TCP and unmatched HTTP)
+//	"default=host:port"             → default route (explicit)
+//	"hostname=host:port"            → HTTP route by hostname
+//	"hostname=[scheme://]host:port" → with TLS scheme
+func parseRoute(s string) (key string, rt client.RouteTarget, err error) {
+	parts := strings.SplitN(s, "=", 2)
+	if len(parts) == 1 {
+		// Bare "host:port" → default
+		host, port, tlsMode, err := parseTarget(s)
+		if err != nil {
+			return "", rt, err
+		}
+		return "default", client.RouteTarget{Host: host, Port: port, TLS: tlsMode}, nil
+	}
+	if parts[0] == "" || parts[1] == "" {
+		return "", rt, fmt.Errorf("expected [key=]host:port format")
+	}
+	key = parts[0]
+	host, port, tlsMode, err := parseTarget(parts[1])
+	if err != nil {
+		return "", rt, err
+	}
+	return key, client.RouteTarget{Host: host, Port: port, TLS: tlsMode}, nil
 }

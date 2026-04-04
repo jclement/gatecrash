@@ -31,7 +31,7 @@ func (c *Client) handleDirectTCPIP(newCh gossh.NewChannel) {
 	defer ch.Close()
 	go gossh.DiscardRequests(reqs)
 
-	// Connect to local target (raw TCP — the application protocol handles its own TLS)
+	// Connect to local target (raw TCP — uses the default target)
 	target := c.targetAddr()
 	conn, err := net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {

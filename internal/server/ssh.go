@@ -127,6 +127,7 @@ func (s *Server) handleControlChannel(srv *ssh.Server, conn *gossh.ServerConn, n
 			if err := json.Unmarshal(msg.Data, &info); err == nil {
 				tunnel.SetClientVersion(conn, info.Version)
 				slog.Debug("client info", "tunnel", tunnelID, "version", info.Version, "os", info.OS, "arch", info.Arch, "hostname", info.Hostname)
+				s.sse.Broadcast("tunnel-info", tunnelID)
 			}
 		}
 	}
