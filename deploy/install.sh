@@ -101,9 +101,11 @@ sudo mkdir -p "${INSTALL_DIR}"
 sudo mv /tmp/gatecrash-server "${INSTALL_DIR}/gatecrash-server"
 
 if [ "$UPGRADING" = "true" ]; then
-    # Ensure install dir is owned by the service user for self-update
+    # Ensure install dir and config dir are owned by the service user
     EXISTING_USER=$(grep -oP '(?<=^User=)\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${SERVICE_USER}")
     sudo chown -R "${EXISTING_USER}:${EXISTING_USER}" "${INSTALL_DIR}"
+    EXISTING_CONFIG=$(grep -oP '(?<=--config )\S+' "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || echo "${CONFIG_DIR}/gatecrash.toml")
+    sudo chown -R "${EXISTING_USER}:${EXISTING_USER}" "$(dirname "$EXISTING_CONFIG")"
     ok "Binary upgraded to v${LATEST}"
     # Update systemd unit if it exists (picks up new hardening settings)
     if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
