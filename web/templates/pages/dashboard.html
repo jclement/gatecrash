@@ -535,7 +535,7 @@ function dashboard() {
             this.tunnelOpen = false;
             if (this.tunnelMode === 'create') {
                 const data = await resp.json();
-                if (data.secret) {
+                if (data.token) {
                     this.secret = data;
                     this.secretOpen = true;
                 }
