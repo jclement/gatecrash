@@ -162,10 +162,10 @@
                 <input type="number" x-model="tunnel.listenPort" min="1" max="65535" placeholder="9000"
                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
             </div>
-            <div x-show="tunnel.type === 'http'" class="flex items-center gap-6">
+            <div x-show="tunnel.type === 'http'" class="space-y-1">
                 <label class="flex items-center gap-2 text-sm">
                     <input type="checkbox" x-model="tunnel.preserveHost" class="rounded">
-                    <span>Preserve Host</span>
+                    <span>Preserve original Host header</span>
                 </label>
                 <label class="flex items-center gap-2 text-sm">
                     <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
