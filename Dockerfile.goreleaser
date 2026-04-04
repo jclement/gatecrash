@@ -1,10 +1,12 @@
 FROM alpine:3.23
+ARG TARGETOS
+ARG TARGETARCH
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 1000 gatecrash && \
     mkdir -p /etc/gatecrash/certs && \
     chown -R gatecrash:gatecrash /etc/gatecrash
 WORKDIR /app
-COPY gatecrash-server .
+COPY ${TARGETOS}/${TARGETARCH}/gatecrash-server .
 EXPOSE 443 80
 VOLUME ["/etc/gatecrash"]
 USER gatecrash

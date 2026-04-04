@@ -1,4 +1,6 @@
 FROM scratch
+ARG TARGETOS
+ARG TARGETARCH
 COPY --from=alpine:3.23 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY gatecrash /gatecrash
+COPY ${TARGETOS}/${TARGETARCH}/gatecrash /gatecrash
 ENTRYPOINT ["/gatecrash"]

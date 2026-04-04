@@ -72,69 +72,30 @@ brews:
     install: |
       bin.install "gatecrash"
 
-dockers:
-  # Server images
-  - ids: [gatecrash-server]
-    goos: linux
-    goarch: amd64
+dockers_v2:
+  - id: gatecrash-server
+    ids: [gatecrash-server]
     dockerfile: Dockerfile.goreleaser
-    use: buildx
-    build_flag_templates: ["--platform=linux/amd64"]
-    image_templates:
-      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-amd64"
-      - "ghcr.io/jclement/gatecrash-server:latest-amd64"
+    images:
+      - "ghcr.io/jclement/gatecrash-server"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
 
-  - ids: [gatecrash-server]
-    goos: linux
-    goarch: arm64
-    dockerfile: Dockerfile.goreleaser
-    use: buildx
-    build_flag_templates: ["--platform=linux/arm64"]
-    image_templates:
-      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-arm64"
-      - "ghcr.io/jclement/gatecrash-server:latest-arm64"
-
-  # Client images
-  - ids: [gatecrash]
-    goos: linux
-    goarch: amd64
+  - id: gatecrash
+    ids: [gatecrash]
     dockerfile: Dockerfile.goreleaser.client
-    use: buildx
-    build_flag_templates: ["--platform=linux/amd64"]
-    image_templates:
-      - "ghcr.io/jclement/gatecrash:{{ .Version }}-amd64"
-      - "ghcr.io/jclement/gatecrash:latest-amd64"
-
-  - ids: [gatecrash]
-    goos: linux
-    goarch: arm64
-    dockerfile: Dockerfile.goreleaser.client
-    use: buildx
-    build_flag_templates: ["--platform=linux/arm64"]
-    image_templates:
-      - "ghcr.io/jclement/gatecrash:{{ .Version }}-arm64"
-      - "ghcr.io/jclement/gatecrash:latest-arm64"
-
-docker_manifests:
-  # Server manifests
-  - name_template: "ghcr.io/jclement/gatecrash-server:{{ .Version }}"
-    image_templates:
-      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-amd64"
-      - "ghcr.io/jclement/gatecrash-server:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/jclement/gatecrash-server:latest"
-    image_templates:
-      - "ghcr.io/jclement/gatecrash-server:latest-amd64"
-      - "ghcr.io/jclement/gatecrash-server:latest-arm64"
-
-  # Client manifests
-  - name_template: "ghcr.io/jclement/gatecrash:{{ .Version }}"
-    image_templates:
-      - "ghcr.io/jclement/gatecrash:{{ .Version }}-amd64"
-      - "ghcr.io/jclement/gatecrash:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/jclement/gatecrash:latest"
-    image_templates:
-      - "ghcr.io/jclement/gatecrash:latest-amd64"
-      - "ghcr.io/jclement/gatecrash:latest-arm64"
+    images:
+      - "ghcr.io/jclement/gatecrash"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
 
 changelog:
   sort: asc
