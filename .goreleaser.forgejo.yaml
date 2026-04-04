@@ -1,0 +1,88 @@
+version: 2
+project_name: gatecrash
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gatecrash-server
+    main: ./cmd/gatecrash-server
+    binary: gatecrash-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+  - id: gatecrash
+    main: ./cmd/gatecrash
+    binary: gatecrash
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+archives:
+  - id: gatecrash-server
+    ids: [gatecrash-server]
+    name_template: "gatecrash-server_{{ .Os }}_{{ .Arch }}"
+    formats: [binary]
+
+  - id: gatecrash
+    ids: [gatecrash]
+    name_template: "gatecrash_{{ .Os }}_{{ .Arch }}"
+    formats: [binary]
+
+dockers_v2:
+  - id: gatecrash-server
+    ids: [gatecrash-server]
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - "git.onewheelgeek.net/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/gatecrash-server"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+  - id: gatecrash
+    ids: [gatecrash]
+    dockerfile: Dockerfile.goreleaser.client
+    images:
+      - "git.onewheelgeek.net/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/gatecrash"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^ci:", "^chore:"]
+
+release:
+  gitea:
+    owner: "{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: gatecrash
+  prerelease: auto
+  footer: |
+    ## Docker
+
+    **Server:**
+    ```bash
+    docker pull git.onewheelgeek.net/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/gatecrash-server:{{ .Version }}
+    ```
+
+    **Client:**
+    ```bash
+    docker pull git.onewheelgeek.net/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/gatecrash:{{ .Version }}
+    ```
+
+gitea_urls:
+  api: https://git.onewheelgeek.net/api/v1
+  download: https://git.onewheelgeek.net

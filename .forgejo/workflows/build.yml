@@ -1,0 +1,22 @@
+name: Build and Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: https://github.com/jdx/mise-action@v4
+        with:
+          experimental: true
+          github_token: ${{ secrets.GH_PAT }}
+        env:
+          MISE_LOG_LEVEL: debug
+      - run: go mod download
+      - run: mise run test
+      - run: mise run lint
+      - run: mise run build

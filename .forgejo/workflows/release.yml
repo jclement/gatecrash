@@ -1,0 +1,30 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: https://github.com/jdx/mise-action@v4
+        with:
+          experimental: true
+          github_token: ${{ secrets.GH_PAT }}
+        env:
+          MISE_LOG_LEVEL: debug
+      - name: Login to container registry
+        run: echo "${{ secrets.RELEASE_TOKEN }}" | docker login git.onewheelgeek.net -u "${{ github.actor }}" --password-stdin
+      - uses: https://github.com/docker/setup-qemu-action@v3
+      - uses: https://github.com/docker/setup-buildx-action@v3
+      - name: Run GoReleaser
+        run: goreleaser release --clean -f .goreleaser.forgejo.yaml
+        env:
+          GITHUB_TOKEN: ""
+          GITEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
