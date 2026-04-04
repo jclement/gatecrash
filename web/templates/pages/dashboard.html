@@ -450,9 +450,15 @@ function dashboard() {
                         if (!t.connected) {
                             html = '<span class="text-xs text-gray-400">-</span>';
                         } else if (t.client_count === 1) {
-                            html = '<span class="text-xs">' + _escapeHTML(t.clients[0].addr) + '</span> <span class="text-xs text-gray-400">' + _escapeHTML(t.clients[0].uptime) + '</span>';
+                            const c0 = t.clients[0];
+                            html = '<span class="text-xs">' + _escapeHTML(c0.addr) + '</span> <span class="text-xs text-gray-400">' + _escapeHTML(c0.uptime) + '</span>';
+                            if (c0.version) {
+                                const outdated = t.server_version && t.server_version !== 'dev' && c0.version !== t.server_version;
+                                const cls = outdated ? 'text-xs text-amber-600 font-medium' : 'text-xs text-gray-400';
+                                html += ' <span class="' + cls + '">v' + _escapeHTML(c0.version) + '</span>';
+                            }
                         } else {
-                            const tip = t.clients.map(c => c.addr + ' (' + c.uptime + ')').sort().join('\n');
+                            const tip = t.clients.map(c => c.addr + ' (' + c.uptime + (c.version ? ', v' + c.version : '') + ')').sort().join('\n');
                             html = '<span class="text-xs" data-tip="' + _escapeHTML(tip) + '">' + t.client_count + ' clients</span>';
                         }
                         const prevClient = prev._clientHTML;

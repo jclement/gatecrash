@@ -1079,15 +1079,16 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 		Version string `json:"version,omitempty"`
 	}
 	type tunnelJSON struct {
-		ID          string       `json:"id"`
-		Type        string       `json:"type"`
-		Connected   bool         `json:"connected"`
-		ClientCount int          `json:"client_count"`
-		Clients     []clientJSON `json:"clients,omitempty"`
-		ActiveConns int32        `json:"active_conns"`
-		BytesIn     int64        `json:"bytes_in"`
-		BytesOut    int64        `json:"bytes_out"`
-		Requests    int64        `json:"requests"`
+		ID            string       `json:"id"`
+		Type          string       `json:"type"`
+		Connected     bool         `json:"connected"`
+		ClientCount   int          `json:"client_count"`
+		Clients       []clientJSON `json:"clients,omitempty"`
+		ActiveConns   int32        `json:"active_conns"`
+		BytesIn       int64        `json:"bytes_in"`
+		BytesOut      int64        `json:"bytes_out"`
+		Requests      int64        `json:"requests"`
+		ServerVersion string       `json:"server_version,omitempty"`
 	}
 	result := make([]tunnelJSON, len(tunnels))
 	for i, t := range tunnels {
@@ -1100,15 +1101,16 @@ func (s *Server) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		result[i] = tunnelJSON{
-			ID:          t.ID,
-			Type:        t.Type,
-			Connected:   t.IsConnected(),
-			ClientCount: t.ClientCount(),
-			Clients:     clients,
-			ActiveConns: t.Metrics.ActiveConns.Load(),
-			BytesIn:     t.Metrics.BytesIn.Load(),
-			BytesOut:    t.Metrics.BytesOut.Load(),
-			Requests:    t.Metrics.RequestCount.Load(),
+			ID:            t.ID,
+			Type:          t.Type,
+			Connected:     t.IsConnected(),
+			ClientCount:   t.ClientCount(),
+			Clients:       clients,
+			ActiveConns:   t.Metrics.ActiveConns.Load(),
+			BytesIn:       t.Metrics.BytesIn.Load(),
+			BytesOut:      t.Metrics.BytesOut.Load(),
+			Requests:      t.Metrics.RequestCount.Load(),
+			ServerVersion: strings.TrimPrefix(s.version, "v"),
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
