@@ -188,7 +188,7 @@ func runUpdate(args []string) {
 	repo := "jclement/gatecrash"
 	slog.Info("checking for updates", "current", Version)
 
-	result, err := update.Check(repo, Version)
+	result, err := update.Check(repo, Version, "gatecrash")
 	if err != nil {
 		slog.Error("update check failed", "error", err)
 		os.Exit(1)
@@ -216,7 +216,7 @@ func runUpdate(args []string) {
 		}
 	}
 
-	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL); err != nil {
+	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL, "gatecrash"); err != nil {
 		slog.Error("update failed", "error", err)
 		os.Exit(1)
 	}

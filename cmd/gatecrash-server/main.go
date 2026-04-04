@@ -99,7 +99,7 @@ func runServer(args []string) {
 
 	// Check for updates in background
 	if cfg.Update.Enabled {
-		go update.LogIfUpdateAvailable(cfg.Update.GitHubRepo, Version)
+		go update.LogIfUpdateAvailable(cfg.Update.GitHubRepo, Version, "gatecrash-server")
 	}
 
 	srv := server.New(cfg, *configPath, Version)
@@ -170,7 +170,7 @@ func runUpdate(args []string) {
 	repo := "jclement/gatecrash"
 	slog.Info("checking for updates", "current", Version)
 
-	result, err := update.Check(repo, Version)
+	result, err := update.Check(repo, Version, "gatecrash-server")
 	if err != nil {
 		slog.Error("update check failed", "error", err)
 		os.Exit(1)
@@ -198,7 +198,7 @@ func runUpdate(args []string) {
 		}
 	}
 
-	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL); err != nil {
+	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL, "gatecrash-server"); err != nil {
 		slog.Error("update failed", "error", err)
 		os.Exit(1)
 	}

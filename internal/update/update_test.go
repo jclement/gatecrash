@@ -57,7 +57,7 @@ func TestSelfUpdateUntrustedURL(t *testing.T) {
 	if IsDocker() {
 		// In Docker, SelfUpdate returns early with a Docker-specific error
 		// before it reaches URL validation.
-		err := SelfUpdate("https://evil.com/malicious", "")
+		err := SelfUpdate("https://evil.com/malicious", "", "gatecrash")
 		if err == nil {
 			t.Fatal("expected error in Docker, got nil")
 		}
@@ -67,7 +67,7 @@ func TestSelfUpdateUntrustedURL(t *testing.T) {
 		return
 	}
 
-	err := SelfUpdate("https://evil.com/malicious", "")
+	err := SelfUpdate("https://evil.com/malicious", "", "gatecrash")
 	if err == nil {
 		t.Fatal("expected error for untrusted URL, got nil")
 	}
@@ -80,7 +80,7 @@ func TestSelfUpdateInDocker(t *testing.T) {
 	if !IsDocker() {
 		t.Skip("not running in Docker")
 	}
-	err := SelfUpdate("https://github.com/jclement/gatecrash/releases/download/v1.0.0/gatecrash_linux_amd64", "")
+	err := SelfUpdate("https://github.com/jclement/gatecrash/releases/download/v1.0.0/gatecrash_linux_amd64", "", "gatecrash")
 	if err == nil {
 		t.Fatal("expected error in Docker, got nil")
 	}

@@ -48,7 +48,8 @@ type CheckResult struct {
 }
 
 // Check queries GitHub for the latest release and compares with current version.
-func Check(repo, currentVersion string) (*CheckResult, error) {
+// binaryName is the base name of the binary (e.g. "gatecrash" or "gatecrash-server").
+func Check(repo, currentVersion, binaryName string) (*CheckResult, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -77,7 +78,7 @@ func Check(repo, currentVersion string) (*CheckResult, error) {
 	}
 
 	// Find matching binary asset and checksums file
-	assetName := fmt.Sprintf("gatecrash_%s_%s", runtime.GOOS, runtime.GOARCH)
+	assetName := fmt.Sprintf("%s_%s_%s", binaryName, runtime.GOOS, runtime.GOARCH)
 	for _, a := range release.Assets {
 		if a.Name == assetName {
 			result.DownloadURL = a.BrowserDownloadURL
@@ -109,7 +110,8 @@ func validateDownloadURL(rawURL string) error {
 }
 
 // SelfUpdate downloads the latest release, verifies its checksum, and replaces the current binary.
-func SelfUpdate(downloadURL, checksumURL string) error {
+// binaryName is the base name used to look up the checksum (e.g. "gatecrash-server").
+func SelfUpdate(downloadURL, checksumURL, binaryName string) error {
 	if IsDocker() {
 		return fmt.Errorf("self-update is not supported in Docker containers; update your image instead")
 	}
@@ -173,7 +175,7 @@ func SelfUpdate(downloadURL, checksumURL string) error {
 			os.Remove(tmpPath)
 			return fmt.Errorf("checksum URL validation failed: %w", err)
 		}
-		assetName := fmt.Sprintf("gatecrash_%s_%s", runtime.GOOS, runtime.GOARCH)
+		assetName := fmt.Sprintf("%s_%s_%s", binaryName, runtime.GOOS, runtime.GOARCH)
 		if err := verifyChecksum(tmpPath, checksumURL, assetName); err != nil {
 			os.Remove(tmpPath)
 			return fmt.Errorf("checksum verification failed: %w", err)
@@ -251,7 +253,7 @@ func IsDocker() bool {
 }
 
 // LogIfUpdateAvailable checks for updates and logs a warning if one is available.
-func LogIfUpdateAvailable(repo, currentVersion string) {
+func LogIfUpdateAvailable(repo, currentVersion, binaryName string) {
 	if currentVersion == "dev" {
 		return
 	}
@@ -259,7 +261,7 @@ func LogIfUpdateAvailable(repo, currentVersion string) {
 		return
 	}
 
-	result, err := Check(repo, currentVersion)
+	result, err := Check(repo, currentVersion, binaryName)
 	if err != nil {
 		slog.Debug("update check failed", "error", err)
 		return

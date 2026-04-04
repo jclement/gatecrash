@@ -1180,7 +1180,7 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL); err != nil {
+	if err := update.SelfUpdate(result.DownloadURL, result.ChecksumURL, "gatecrash-server"); err != nil {
 		slog.Error("update failed", "error", err)
 		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1266,7 +1266,7 @@ func (s *Server) runUpdateChecker(repo string, interval time.Duration) {
 }
 
 func (s *Server) checkForUpdate(repo string) {
-	result, err := update.Check(repo, s.version)
+	result, err := update.Check(repo, s.version, "gatecrash-server")
 	if err != nil {
 		slog.Debug("update check failed", "error", err)
 		return
