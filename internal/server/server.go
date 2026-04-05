@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -64,19 +66,36 @@ type Server struct {
 	webauthn     *admin.WebAuthnHandler
 	adminH       *admin.Handlers
 	auditLog     *admin.AuditLog
-	oidcProvider *admin.OIDCProvider
-	tunnelAuth   *admin.TunnelAuthSession
+	oidcProvider      *admin.OIDCProvider
+	tunnelAuth        *admin.TunnelAuthSession
+	passkeyTunnelAuth *admin.PasskeyTunnelSession
+
+	// Pending tunnel auth results, keyed by one-time token.
+	// After OIDC exchange on the admin host, results are parked here
+	// and the browser is redirected to the tunnel hostname to pick them up.
+	pendingTunnelAuthMu sync.Mutex
+	pendingTunnelAuth   map[string]*pendingTunnelAuthResult
+}
+
+// pendingTunnelAuthResult holds the outcome of an auth exchange for a tunnel auth flow.
+type pendingTunnelAuthResult struct {
+	claims    *admin.OIDCClaims // nil for passkey mode
+	passkey   bool              // true when auth was via passkey (no OIDC claims)
+	hostname  string
+	returnURL string
+	expires   time.Time
 }
 
 // New creates a new server instance.
 func New(cfg *config.Config, configPath, version string) *Server {
 	return &Server{
-		cfg:         cfg,
-		configPath:  configPath,
-		version:     version,
-		registry:    NewRegistry(),
-		adminMux:    http.NewServeMux(),
-		sse:         NewSSEBroadcaster(),
+		cfg:               cfg,
+		configPath:        configPath,
+		version:           version,
+		registry:          NewRegistry(),
+		adminMux:          http.NewServeMux(),
+		sse:               NewSSEBroadcaster(),
+		pendingTunnelAuth: make(map[string]*pendingTunnelAuthResult),
 		bwTracker:   newBandwidthTracker(120), // ~4 min at 2s intervals
 		authLimiter: newIPRateLimiter(20, time.Minute),
 	}
@@ -115,6 +134,15 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("SSH server: %w", err)
 	}
 	s.sshServer = sshSrv
+
+	// Validate that require_auth tunnels have admin_host configured
+	if s.cfg.Server.AdminHost == "" {
+		for _, tc := range s.cfg.Tunnel {
+			if tc.RequireAuth {
+				return fmt.Errorf("tunnel %q has require_auth=true but server.admin_host is not configured — authentication requires the admin panel", tc.ID)
+			}
+		}
+	}
 
 	// Setup admin panel — enabled only when admin_host is configured
 	if s.cfg.Server.AdminHost != "" {
@@ -155,6 +183,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Start bandwidth sampler
 	go s.runBandwidthSampler(ctx)
+
+	// Cleanup expired pending tunnel auth tokens
+	go s.cleanupPendingTunnelAuth(ctx)
 
 	// Start SSH server
 	go func() {
@@ -237,8 +268,9 @@ func (s *Server) initAdmin() error {
 	}
 	s.auditLog = auditLog
 
-	// Tunnel auth session manager (uses same secret as admin sessions)
+	// Tunnel auth session managers (use same secret as admin sessions)
 	s.tunnelAuth = admin.NewTunnelAuthSession(s.cfg.Server.Secret)
+	s.passkeyTunnelAuth = admin.NewPasskeyTunnelSession(s.cfg.Server.Secret)
 
 	// OIDC provider (initialized if configured)
 	if s.cfg.OIDC.IsConfigured() {
@@ -318,6 +350,9 @@ func (s *Server) setupAdminRoutes() {
 	// OIDC endpoints — public (OAuth2 flow, rate-limited)
 	s.adminMux.HandleFunc("GET /oidc/login", rateLimit(s.authLimiter, s.handleOIDCLogin))
 	s.adminMux.HandleFunc("GET /oidc/callback", rateLimit(s.authLimiter, s.handleOIDCCallback))
+
+	// Tunnel auth verify — requires admin session (passkey mode)
+	s.adminMux.HandleFunc("GET /tunnel-auth/verify", s.handleTunnelPasskeyVerify)
 	// Logout
 	s.adminMux.HandleFunc("POST /logout", s.handleLogout)
 
@@ -413,6 +448,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.sessionMgr.ValidateSession(r) {
+		// If there's a return URL (e.g. from tunnel auth verify), redirect there
+		if ret := r.URL.Query().Get("return"); ret != "" && isSafeReturnURL(ret) {
+			http.Redirect(w, r, ret, http.StatusSeeOther)
+			return
+		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
@@ -1211,6 +1251,18 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
+	// Validate that require_auth tunnels still have admin_host configured
+	if newCfg.Server.AdminHost == "" {
+		for _, tc := range newCfg.Tunnel {
+			if tc.RequireAuth {
+				slog.Error("config reload rejected: tunnel has require_auth=true but server.admin_host is not configured",
+					"tunnel", tc.ID)
+				s.sse.Broadcast("config-error", fmt.Sprintf("tunnel %q has require_auth=true but admin_host is not set", tc.ID))
+				return
+			}
+		}
+	}
+
 	tunnels := make([]struct {
 		ID              string
 		Type            string
@@ -1330,12 +1382,18 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if st.Purpose() != "admin" {
+	switch st.Purpose() {
+	case "admin":
+		s.completeAdminOIDCLogin(w, r, claims)
+	case "tunnel":
+		s.completeTunnelOIDCExchange(w, r, claims, st)
+	default:
 		http.Error(w, "invalid callback purpose", http.StatusBadRequest)
-		return
 	}
+}
 
-	// Evaluate admin claim filter
+// completeAdminOIDCLogin finishes an admin OIDC login after a successful exchange.
+func (s *Server) completeAdminOIDCLogin(w http.ResponseWriter, r *http.Request, claims *admin.OIDCClaims) {
 	s.cfgMu.RLock()
 	adminClaimName := s.cfg.OIDC.AdminClaimName
 	adminClaimValue := s.cfg.OIDC.AdminClaimValue
@@ -1357,6 +1415,123 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	s.auditLog.Log(actor, "admin.login.oidc", "Logged in via OIDC")
 	slog.Info("OIDC admin login", "actor", actor)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// completeTunnelOIDCExchange parks the OIDC result in memory and redirects the browser
+// to the tunnel hostname to pick it up and set the session cookie.
+func (s *Server) completeTunnelOIDCExchange(w http.ResponseWriter, r *http.Request, claims *admin.OIDCClaims, st *admin.OIDCState) {
+	if st.Hostname == "" {
+		http.Error(w, "missing tunnel hostname in state", http.StatusBadRequest)
+		return
+	}
+
+	// Generate a one-time token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	oneTimeToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
+
+	s.pendingTunnelAuthMu.Lock()
+	s.pendingTunnelAuth[oneTimeToken] = &pendingTunnelAuthResult{
+		claims:    claims,
+		hostname:  st.Hostname,
+		returnURL: st.ReturnURL,
+		expires:   time.Now().Add(60 * time.Second),
+	}
+	s.pendingTunnelAuthMu.Unlock()
+
+	// Redirect to the tunnel hostname to complete the flow
+	s.cfgMu.RLock()
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
+	completeURL := fmt.Sprintf("https://%s/.gatecrash/oidc/complete?token=%s", st.Hostname, oneTimeToken)
+	if httpsPort != 443 {
+		completeURL = fmt.Sprintf("https://%s:%d/.gatecrash/oidc/complete?token=%s", st.Hostname, httpsPort, oneTimeToken)
+	}
+
+	http.Redirect(w, r, completeURL, http.StatusFound)
+}
+
+// cleanupPendingTunnelAuth periodically removes expired pending tunnel auth tokens.
+func (s *Server) cleanupPendingTunnelAuth(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.pendingTunnelAuthMu.Lock()
+			for k, v := range s.pendingTunnelAuth {
+				if now.After(v.expires) {
+					delete(s.pendingTunnelAuth, k)
+				}
+			}
+			s.pendingTunnelAuthMu.Unlock()
+		}
+	}
+}
+
+// handleTunnelPasskeyVerify checks if the admin is logged in (passkey session on the admin host),
+// then generates a one-time token and redirects to the tunnel hostname to complete the flow.
+func (s *Server) handleTunnelPasskeyVerify(w http.ResponseWriter, r *http.Request) {
+	hostname := r.URL.Query().Get("hostname")
+	returnURL := r.URL.Query().Get("return")
+
+	if hostname == "" {
+		http.Error(w, "missing hostname", http.StatusBadRequest)
+		return
+	}
+
+	// Validate that hostname corresponds to a known tunnel (prevents open redirect)
+	if s.registry.FindByHostname(hostname) == nil {
+		http.Error(w, "unknown tunnel hostname", http.StatusBadRequest)
+		return
+	}
+
+	// Must have a valid admin session on the admin host
+	if !s.sessionMgr.ValidateSession(r) {
+		// Redirect to login, with a return URL back to this verify endpoint
+		verifyURL := "/tunnel-auth/verify?hostname=" + url.QueryEscape(hostname)
+		if returnURL != "" {
+			verifyURL += "&return=" + url.QueryEscape(returnURL)
+		}
+		http.Redirect(w, r, "/login?return="+url.QueryEscape(verifyURL), http.StatusFound)
+		return
+	}
+
+	// Admin is authenticated — generate one-time token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	oneTimeToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
+
+	s.pendingTunnelAuthMu.Lock()
+	s.pendingTunnelAuth[oneTimeToken] = &pendingTunnelAuthResult{
+		passkey:   true,
+		hostname:  hostname,
+		returnURL: returnURL,
+		expires:   time.Now().Add(60 * time.Second),
+	}
+	s.pendingTunnelAuthMu.Unlock()
+
+	// Redirect to the tunnel hostname to complete the flow
+	s.cfgMu.RLock()
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
+	completeURL := fmt.Sprintf("https://%s/.gatecrash/auth/complete?token=%s", hostname, oneTimeToken)
+	if httpsPort != 443 {
+		completeURL = fmt.Sprintf("https://%s:%d/.gatecrash/auth/complete?token=%s", hostname, httpsPort, oneTimeToken)
+	}
+
+	http.Redirect(w, r, completeURL, http.StatusFound)
 }
 
 // --- Audit Log Handlers ---

@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	tunnelAuthCookieName = "gatecrash_tunnel_auth"
-	tunnelAuthDuration   = 8 * time.Hour
+	tunnelAuthCookieName        = "gatecrash_tunnel_auth"
+	tunnelAuthDuration          = 8 * time.Hour
+	passkeyTunnelCookieName     = "gatecrash_passkey_tunnel"
+	passkeyTunnelSessionDuration = 8 * time.Hour
 )
 
 // tunnelAuthClaims holds OIDC claims in the tunnel auth JWT.
@@ -116,4 +118,85 @@ func (t *TunnelAuthSession) ValidateSession(r *http.Request, hostname string) (*
 	}
 
 	return oidcClaims, true
+}
+
+// passkeyTunnelClaims holds the JWT claims for passkey-based tunnel sessions.
+type passkeyTunnelClaims struct {
+	jwt.RegisteredClaims
+}
+
+// PasskeyTunnelSession manages passkey-based sessions for protected tunnels.
+// In passkey mode there is a single admin user, so the session only needs to
+// prove that the admin authenticated — no OIDC claims are stored.
+type PasskeyTunnelSession struct {
+	secret []byte
+}
+
+// NewPasskeyTunnelSession creates a new passkey tunnel session manager.
+func NewPasskeyTunnelSession(secret string) *PasskeyTunnelSession {
+	return &PasskeyTunnelSession{secret: DeriveKey(secret, "passkey-tunnel")}
+}
+
+// CreateSession sets a passkey tunnel auth cookie scoped to the given hostname.
+func (p *PasskeyTunnelSession) CreateSession(w http.ResponseWriter, hostname string) error {
+	claims := passkeyTunnelClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(passkeyTunnelSessionDuration)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "gatecrash-passkey-tunnel",
+			Subject:   hostname,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(p.secret)
+	if err != nil {
+		return err
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     passkeyTunnelCookieName,
+		Value:    signed,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(passkeyTunnelSessionDuration.Seconds()),
+	})
+
+	return nil
+}
+
+// ValidateSession checks if the request has a valid passkey tunnel session for the given hostname.
+func (p *PasskeyTunnelSession) ValidateSession(r *http.Request, hostname string) bool {
+	cookie, err := r.Cookie(passkeyTunnelCookieName)
+	if err != nil {
+		return false
+	}
+
+	token, err := jwt.ParseWithClaims(cookie.Value, &passkeyTunnelClaims{}, func(tok *jwt.Token) (interface{}, error) {
+		if _, ok := tok.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", tok.Header["alg"])
+		}
+		return p.secret, nil
+	})
+	if err != nil {
+		return false
+	}
+
+	claims, ok := token.Claims.(*passkeyTunnelClaims)
+	if !ok || !token.Valid {
+		return false
+	}
+
+	if claims.Issuer != "gatecrash-passkey-tunnel" {
+		return false
+	}
+
+	// Verify hostname matches to prevent cross-tunnel session reuse
+	if claims.Subject != hostname {
+		return false
+	}
+
+	return true
 }

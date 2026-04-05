@@ -142,14 +142,16 @@
         </div>
 
         <div class="space-y-2">
-            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Callback URLs</p>
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Callback URL</p>
             <p class="text-sm text-gray-600">
-                Register these callback URLs with your OIDC provider:
+                Register this callback URL with your OIDC provider:
             </p>
             <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
-                <li>Admin login: <code class="bg-gray-100 px-1 rounded text-xs">https://{{.Data.AdminHost}}/oidc/callback</code></li>
-                <li>Tunnel auth: <code class="bg-gray-100 px-1 rounded text-xs">https://&lt;tunnel-hostname&gt;/.gatecrash/oidc/callback</code> (one per protected hostname)</li>
+                <li><code class="bg-gray-100 px-1 rounded text-xs">https://{{.Data.AdminHost}}/oidc/callback</code></li>
             </ul>
+            <p class="text-sm text-gray-500">
+                Both admin login and tunnel "Require Auth" use this single callback URL.
+            </p>
         </div>
     </div>
 

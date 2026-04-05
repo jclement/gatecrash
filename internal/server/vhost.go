@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/jclement/gatecrash/internal/admin"
 )
@@ -43,9 +45,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2.5 Handle OIDC callbacks on tunnel hostnames
-	if strings.HasPrefix(r.URL.Path, "/.gatecrash/oidc/callback") {
-		s.handleTunnelOIDCCallback(w, r, host)
+	// 2.5 Handle auth completion on tunnel hostnames (redirected from admin host)
+	if strings.HasPrefix(r.URL.Path, "/.gatecrash/oidc/complete") {
+		s.handleTunnelOIDCComplete(w, r, host)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/.gatecrash/auth/complete") {
+		s.handleTunnelPasskeyComplete(w, r, host)
 		return
 	}
 
@@ -61,9 +67,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !tunnel.IsConnected() {
+		slog.Debug("tunnel offline", "tunnel", tunnel.ID, "host", host)
 		s.serveErrorPage(w, r, http.StatusBadGateway,
 			"Service Offline",
-			fmt.Sprintf("The tunnel <strong>%s</strong> is currently offline. The service may be restarting.", html.EscapeString(tunnel.ID)),
+			fmt.Sprintf("The service at <strong>%s</strong> is currently offline.", html.EscapeString(host)),
 		)
 		return
 	}
@@ -101,9 +108,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			r.Header.Set(headerName, headerValue)
 		} else {
-			// Passkey mode: require admin session
-			if !s.sessionMgr.ValidateSession(r) {
-				http.Redirect(w, r, "https://"+s.cfg.Server.AdminHost+"/login", http.StatusFound)
+			// Passkey mode: require passkey tunnel session on this hostname
+			if !s.passkeyTunnelAuth.ValidateSession(r, host) {
+				s.initiateTunnelPasskeyAuth(w, r, host)
 				return
 			}
 		}
@@ -159,18 +166,11 @@ func stripPort(host string) string {
 }
 
 // initiateTunnelAuth redirects the user to the OIDC provider for tunnel authentication.
+// The OIDC callback always goes through the admin host, avoiding the need to register
+// per-tunnel redirect URIs with the OIDC provider.
 func (s *Server) initiateTunnelAuth(w http.ResponseWriter, r *http.Request, hostname string) {
-	s.cfgMu.RLock()
-	httpsPort := s.cfg.Server.HTTPSPort
-	s.cfgMu.RUnlock()
-
-	callbackURL := fmt.Sprintf("https://%s/.gatecrash/oidc/callback", hostname)
-	if httpsPort != 443 {
-		callbackURL = fmt.Sprintf("https://%s:%d/.gatecrash/oidc/callback", hostname, httpsPort)
-	}
-
 	returnURL := r.URL.RequestURI()
-	authURL, _, err := s.oidcProvider.AuthURLForCallback("tunnel", returnURL, hostname, callbackURL)
+	authURL, _, err := s.oidcProvider.AuthURL("tunnel", returnURL, hostname)
 	if err != nil {
 		slog.Error("failed to generate tunnel OIDC auth URL", "error", err, "hostname", hostname)
 		s.serveErrorPage(w, r, http.StatusInternalServerError,
@@ -182,49 +182,53 @@ func (s *Server) initiateTunnelAuth(w http.ResponseWriter, r *http.Request, host
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// handleTunnelOIDCCallback handles the OIDC callback on a tunnel hostname.
-func (s *Server) handleTunnelOIDCCallback(w http.ResponseWriter, r *http.Request, hostname string) {
-	if s.oidcProvider == nil || s.tunnelAuth == nil {
-		http.Error(w, "OIDC is not configured", http.StatusBadRequest)
+// handleTunnelOIDCComplete handles the final step of tunnel OIDC auth.
+// The browser is redirected here from the admin host after a successful OIDC exchange,
+// carrying a one-time token that maps to the stored auth result.
+func (s *Server) handleTunnelOIDCComplete(w http.ResponseWriter, r *http.Request, hostname string) {
+	if s.tunnelAuth == nil {
+		http.Error(w, "tunnel auth is not configured", http.StatusBadRequest)
 		return
 	}
 
-	code := r.URL.Query().Get("code")
-	state := r.URL.Query().Get("state")
-	if code == "" || state == "" {
-		http.Error(w, "missing code or state", http.StatusBadRequest)
+	oneTimeToken := r.URL.Query().Get("token")
+	if oneTimeToken == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
 		return
 	}
 
-	s.cfgMu.RLock()
-	httpsPort := s.cfg.Server.HTTPSPort
-	s.cfgMu.RUnlock()
-
-	callbackURL := fmt.Sprintf("https://%s/.gatecrash/oidc/callback", hostname)
-	if httpsPort != 443 {
-		callbackURL = fmt.Sprintf("https://%s:%d/.gatecrash/oidc/callback", hostname, httpsPort)
+	// Look up and consume the pending auth result
+	s.pendingTunnelAuthMu.Lock()
+	result, ok := s.pendingTunnelAuth[oneTimeToken]
+	if ok {
+		delete(s.pendingTunnelAuth, oneTimeToken)
 	}
+	s.pendingTunnelAuthMu.Unlock()
 
-	claims, st, err := s.oidcProvider.Exchange(r.Context(), state, code, callbackURL)
-	if err != nil {
-		slog.Error("tunnel OIDC callback failed", "error", err, "hostname", hostname)
+	if !ok || time.Now().After(result.expires) {
 		s.serveErrorPage(w, r, http.StatusForbidden,
 			"Authentication Failed",
-			"OIDC authentication failed. Please try again.")
+			"Authentication token is invalid or expired. Please try again.")
+		return
+	}
+
+	// Verify the hostname matches what was in the OIDC flow
+	if result.hostname != hostname {
+		http.Error(w, "hostname mismatch", http.StatusBadRequest)
 		return
 	}
 
 	// Evaluate optional claim filter
 	tunnel := s.registry.FindByHostname(hostname)
-	if tunnel != nil && !admin.MatchesClaim(claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
+	if tunnel != nil && !admin.MatchesClaim(result.claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
 		s.serveErrorPage(w, r, http.StatusForbidden,
 			"Access Denied",
 			fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(hostname)))
 		return
 	}
 
-	// Create tunnel auth session
-	if err := s.tunnelAuth.CreateSession(w, claims, hostname); err != nil {
+	// Create tunnel auth session cookie on this hostname
+	if err := s.tunnelAuth.CreateSession(w, result.claims, hostname); err != nil {
 		slog.Error("failed to create tunnel auth session", "error", err)
 		http.Error(w, "session creation failed", http.StatusInternalServerError)
 		return
@@ -232,8 +236,77 @@ func (s *Server) handleTunnelOIDCCallback(w http.ResponseWriter, r *http.Request
 
 	// Redirect to the original URL (validated to prevent open redirect)
 	returnURL := "/"
-	if st != nil && st.ReturnURL != "" && isSafeReturnURL(st.ReturnURL) {
-		returnURL = st.ReturnURL
+	if result.returnURL != "" && isSafeReturnURL(result.returnURL) {
+		returnURL = result.returnURL
+	}
+	http.Redirect(w, r, returnURL, http.StatusFound)
+}
+
+// initiateTunnelPasskeyAuth redirects the user to the admin host to verify their passkey session.
+func (s *Server) initiateTunnelPasskeyAuth(w http.ResponseWriter, r *http.Request, hostname string) {
+	s.cfgMu.RLock()
+	adminHost := s.cfg.Server.AdminHost
+	httpsPort := s.cfg.Server.HTTPSPort
+	s.cfgMu.RUnlock()
+
+	returnURL := r.URL.RequestURI()
+	verifyURL := fmt.Sprintf("https://%s/tunnel-auth/verify?hostname=%s&return=%s",
+		adminHost, url.QueryEscape(hostname), url.QueryEscape(returnURL))
+	if httpsPort != 443 {
+		verifyURL = fmt.Sprintf("https://%s:%d/tunnel-auth/verify?hostname=%s&return=%s",
+			adminHost, httpsPort, url.QueryEscape(hostname), url.QueryEscape(returnURL))
+	}
+
+	http.Redirect(w, r, verifyURL, http.StatusFound)
+}
+
+// handleTunnelPasskeyComplete handles the final step of passkey-based tunnel auth.
+// The browser is redirected here from the admin host after verifying the admin session,
+// carrying a one-time token that maps to the stored auth result.
+func (s *Server) handleTunnelPasskeyComplete(w http.ResponseWriter, r *http.Request, hostname string) {
+	oneTimeToken := r.URL.Query().Get("token")
+	if oneTimeToken == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	// Look up and consume the pending auth result
+	s.pendingTunnelAuthMu.Lock()
+	result, ok := s.pendingTunnelAuth[oneTimeToken]
+	if ok {
+		delete(s.pendingTunnelAuth, oneTimeToken)
+	}
+	s.pendingTunnelAuthMu.Unlock()
+
+	if !ok || time.Now().After(result.expires) {
+		s.serveErrorPage(w, r, http.StatusForbidden,
+			"Authentication Failed",
+			"Authentication token is invalid or expired. Please try again.")
+		return
+	}
+
+	if !result.passkey {
+		http.Error(w, "invalid token type", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the hostname matches
+	if result.hostname != hostname {
+		http.Error(w, "hostname mismatch", http.StatusBadRequest)
+		return
+	}
+
+	// Create passkey tunnel session cookie on this hostname
+	if err := s.passkeyTunnelAuth.CreateSession(w, hostname); err != nil {
+		slog.Error("failed to create passkey tunnel session", "error", err)
+		http.Error(w, "session creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Redirect to the original URL
+	returnURL := "/"
+	if result.returnURL != "" && isSafeReturnURL(result.returnURL) {
+		returnURL = result.returnURL
 	}
 	http.Redirect(w, r, returnURL, http.StatusFound)
 }

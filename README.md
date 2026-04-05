@@ -291,12 +291,13 @@ When `auth_claim_name` is empty, any authenticated OIDC user can access the tunn
 
 Claim filters support string and array claims (e.g. if `groups` is `["engineering", "ops"]`, filtering on `engineering` will match).
 
-### Callback URLs
+### Callback URL
 
-Register these callback URLs with your OIDC provider:
+Register this callback URL with your OIDC provider:
 
-- **Admin login:** `https://<admin_host>/oidc/callback`
-- **Tunnel auth:** `https://<tunnel_hostname>/.gatecrash/oidc/callback` (one per protected tunnel hostname)
+- `https://<admin_host>/oidc/callback`
+
+Both admin login and tunnel "Require Auth" use this single callback URL. There is no need to register per-tunnel callback URLs.
 
 ---
 

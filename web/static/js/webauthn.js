@@ -121,7 +121,13 @@ async function authenticatePasskey() {
         if (finResp.ok) {
             status.textContent = 'Authenticated! Redirecting...';
             status.className = 'is-size-7 mt-2 has-text-success';
-            setTimeout(() => window.location.href = apiURL('.'), 1000);
+            const params = new URLSearchParams(window.location.search);
+            let returnURL = params.get('return');
+            // Validate: must be a relative path (no open redirect)
+            if (!returnURL || !returnURL.startsWith('/') || returnURL.startsWith('//')) {
+                returnURL = apiURL('.');
+            }
+            setTimeout(() => window.location.href = returnURL, 1000);
         } else {
             throw new Error('Authentication failed');
         }

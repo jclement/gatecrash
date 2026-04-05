@@ -137,57 +137,6 @@ func (p *OIDCProvider) AuthURL(purpose, returnURL, hostname string) (authURL, st
 	return p.oauth2Cfg.AuthCodeURL(state, opts...), state, nil
 }
 
-// AuthURLForCallback creates an auth URL with a specific callback URL override.
-// Used for tunnel auth where the callback goes to the tunnel hostname.
-func (p *OIDCProvider) AuthURLForCallback(purpose, returnURL, hostname, callbackURL string) (authURL, state string, err error) {
-	state, err = randomString(32)
-	if err != nil {
-		return "", "", fmt.Errorf("generating state: %w", err)
-	}
-
-	nonce, err := randomString(32)
-	if err != nil {
-		return "", "", fmt.Errorf("generating nonce: %w", err)
-	}
-
-	st := &OIDCState{
-		nonce:     nonce,
-		ReturnURL: returnURL,
-		purpose:   purpose,
-		Hostname:  hostname,
-		expires:   time.Now().Add(5 * time.Minute),
-	}
-
-	// Build a config with the overridden redirect URL
-	cfgCopy := *p.oauth2Cfg
-	cfgCopy.RedirectURL = callbackURL
-
-	opts := []oauth2.AuthCodeOption{
-		oauth2.SetAuthURLParam("nonce", nonce),
-	}
-
-	if p.cfg.UsePKCE {
-		verifier, err := randomString(64)
-		if err != nil {
-			return "", "", fmt.Errorf("generating PKCE verifier: %w", err)
-		}
-		st.pkceVerifier = verifier
-
-		h := sha256.Sum256([]byte(verifier))
-		challenge := base64.RawURLEncoding.EncodeToString(h[:])
-		opts = append(opts,
-			oauth2.SetAuthURLParam("code_challenge", challenge),
-			oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-		)
-	}
-
-	p.mu.Lock()
-	p.states[state] = st
-	p.mu.Unlock()
-
-	return cfgCopy.AuthCodeURL(state, opts...), state, nil
-}
-
 // Exchange validates the state and exchanges the authorization code for claims.
 // callbackURL should match the redirect_uri used when initiating the flow.
 func (p *OIDCProvider) Exchange(ctx context.Context, state, code, callbackURL string) (*OIDCClaims, *OIDCState, error) {
