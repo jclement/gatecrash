@@ -270,7 +270,7 @@
                 <!-- Phase dots -->
                 <div class="flex items-center gap-1 ml-1">
                     <template x-for="p in ['latency','download','upload']" :key="p">
-                        <div class="w-1.5 h-1.5 rounded-full" :class="diagPhase === p ? 'bg-blue-500 animate-pulse' : (diagCompletedPhases.includes(p) ? 'bg-green-500' : 'bg-gray-300')"></div>
+                        <div class="w-2 h-2 rounded-full" :class="diagPhase === p ? 'bg-blue-500 animate-pulse' : (diagCompletedPhases.includes(p) ? 'bg-green-500' : 'bg-gray-300')"></div>
                     </template>
                 </div>
             </div>
@@ -305,16 +305,8 @@
             </div>
 
             <!-- Combined throughput graph -->
-            <div>
-                <div class="flex items-center justify-between mb-1">
-                    <div class="flex items-center gap-3 text-[10px]">
-                        <span class="flex items-center gap-1"><span class="inline-block w-3 h-0.5 rounded bg-blue-500"></span><span class="text-gray-400">Download</span></span>
-                        <span class="flex items-center gap-1"><span class="inline-block w-3 h-0.5 rounded bg-orange-400"></span><span class="text-gray-400">Upload</span></span>
-                    </div>
-                </div>
-                <div class="h-20 bg-gray-50 rounded overflow-hidden relative">
-                    <canvas x-ref="diagCanvas" class="w-full h-full"></canvas>
-                </div>
+            <div class="h-20 bg-gray-50 rounded overflow-hidden relative">
+                <canvas x-ref="diagCanvas" class="w-full h-full"></canvas>
             </div>
         </div>
         <div class="px-4 py-2 border-t border-gray-200 flex justify-between items-center">
@@ -741,7 +733,7 @@ function dashboard() {
                     this.diagPhase = 'download';
                     this.diagDlCurrent = evt.mbps;
                     this.diagDlBytes = evt.bytes;
-                    this.diagDlSamples = [...this.diagDlSamples, evt.mbps];
+                    this.diagDlSamples = [...this.diagDlSamples, {ms: evt.ms, mbps: evt.mbps}];
                     this._drawCombinedGraph();
                     break;
                 case 'upload':
@@ -749,16 +741,16 @@ function dashboard() {
                     this.diagPhase = 'upload';
                     this.diagUlCurrent = evt.mbps;
                     this.diagUlBytes = evt.bytes;
-                    this.diagUlSamples = [...this.diagUlSamples, evt.mbps];
+                    this.diagUlSamples = [...this.diagUlSamples, {ms: evt.ms, mbps: evt.mbps}];
                     this._drawCombinedGraph();
                     break;
                 case 'done':
                     if (this.diagPhase === 'upload') this.diagCompletedPhases = [...this.diagCompletedPhases, 'upload'];
                     this.diagPhase = 'done';
                     if (this.diagDlSamples.length > 0)
-                        this.diagDlCurrent = this.diagDlSamples.reduce((a, b) => a + b, 0) / this.diagDlSamples.length;
+                        this.diagDlCurrent = this.diagDlSamples.reduce((a, s) => a + s.mbps, 0) / this.diagDlSamples.length;
                     if (this.diagUlSamples.length > 0)
-                        this.diagUlCurrent = this.diagUlSamples.reduce((a, b) => a + b, 0) / this.diagUlSamples.length;
+                        this.diagUlCurrent = this.diagUlSamples.reduce((a, s) => a + s.mbps, 0) / this.diagUlSamples.length;
                     break;
                 case 'error':
                     this.diagError = evt.error;
@@ -777,18 +769,17 @@ function dashboard() {
 
             const dl = this.diagDlSamples;
             const ul = this.diagUlSamples;
-            const maxLen = Math.max(dl.length, ul.length, 2);
-            const allPts = [...dl, ...ul];
-            if (allPts.length === 0) return;
-            const max = Math.max(...allPts) * 1.15 || 1;
-            const step = w / (maxLen - 1);
+            const allMbps = [...dl.map(s => s.mbps), ...ul.map(s => s.mbps)];
+            if (allMbps.length === 0) return;
+            const max = Math.max(...allMbps) * 1.15 || 1;
+            const dur = 10000; // each phase runs 10s
 
             const drawLine = (data, color) => {
                 if (data.length < 2) return;
                 ctx.beginPath();
-                ctx.moveTo(0, h - (data[0] / max) * h);
+                ctx.moveTo((data[0].ms / dur) * w, h - (data[0].mbps / max) * h);
                 for (let i = 1; i < data.length; i++) {
-                    ctx.lineTo(i * step, h - (data[i] / max) * h);
+                    ctx.lineTo((data[i].ms / dur) * w, h - (data[i].mbps / max) * h);
                 }
                 ctx.strokeStyle = color;
                 ctx.lineWidth = 2 * dpr;
