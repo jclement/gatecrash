@@ -157,6 +157,7 @@ func (c *Client) connect(ctx context.Context) error {
 	// Register channel handlers for each type the server may open
 	httpChs := conn.HandleChannelOpen(protocol.ChannelHTTP)
 	tcpChs := conn.HandleChannelOpen(protocol.ChannelDirectTCPIP)
+	diagChs := conn.HandleChannelOpen(protocol.ChannelDiagnostic)
 
 	// Wait for connection to close
 	connDone := make(chan struct{})
@@ -181,6 +182,11 @@ func (c *Client) connect(ctx context.Context) error {
 				return fmt.Errorf("TCP channel closed")
 			}
 			go c.handleDirectTCPIP(newCh)
+		case newCh, ok := <-diagChs:
+			if !ok {
+				return fmt.Errorf("diagnostic channel closed")
+			}
+			go c.handleDiagnosticChannel(newCh)
 		}
 	}
 }

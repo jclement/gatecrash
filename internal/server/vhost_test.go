@@ -253,8 +253,8 @@ func TestVhostTunnelOffline(t *testing.T) {
 	if !strings.Contains(body, "Service Offline") {
 		t.Fatalf("expected 'Service Offline' in body, got: %s", body)
 	}
-	if !strings.Contains(body, "offline-app") {
-		t.Fatalf("expected tunnel ID 'offline-app' in body, got: %s", body)
+	if !strings.Contains(body, "offline.example.com") {
+		t.Fatalf("expected hostname 'offline.example.com' in body, got: %s", body)
 	}
 }
 

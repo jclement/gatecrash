@@ -369,6 +369,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireCSRF(s.handleEditTunnel))
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireCSRF(s.handleDeleteTunnel))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireCSRF(s.handleRegenerateSecret))
+	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireCSRF(s.handleTunnelTest))
 	s.adminMux.HandleFunc("POST /api/redirects", s.requireCSRF(s.handleCreateRedirect))
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireCSRF(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
@@ -1114,6 +1115,44 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.regenerate", fmt.Sprintf("Regenerated secret for tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.secretResponse(tunnelID, plaintext))
+}
+
+func (s *Server) handleTunnelTest(w http.ResponseWriter, r *http.Request) {
+	tunnelID := r.PathValue("id")
+	if tunnelID == "" {
+		http.Error(w, "missing tunnel ID", http.StatusBadRequest)
+		return
+	}
+
+	tunnel := s.registry.FindByID(tunnelID)
+	if tunnel == nil {
+		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+
+	conn := tunnel.PickConn()
+	if conn == nil {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		json.NewEncoder(w).Encode(diagEvent{Phase: "error", Error: "tunnel is offline"})
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	enc := json.NewEncoder(w)
+	s.runDiagnosticStream(conn, func(e diagEvent) {
+		enc.Encode(e)
+		flusher.Flush()
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

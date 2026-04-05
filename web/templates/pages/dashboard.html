@@ -259,6 +259,98 @@
     </div>
 </div>
 
+<!-- Diagnostic Speedtest Modal -->
+<div x-show="diagOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center" @click.self="!diagRunning && (diagOpen = false)">
+    <div class="absolute inset-0 bg-black/50 -z-10"></div>
+    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 class="text-base font-semibold">Speed Test: <span x-text="diagTunnelId" class="font-mono"></span></h3>
+            <button @click="diagOpen = false" x-show="!diagRunning" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+        </div>
+        <div class="px-5 py-4 space-y-4">
+            <!-- Phase indicator -->
+            <div class="flex items-center gap-3 text-xs">
+                <template x-for="p in ['latency','download','upload']" :key="p">
+                    <div class="flex items-center gap-1.5">
+                        <div class="w-2 h-2 rounded-full"
+                             :class="diagPhase === p ? 'bg-blue-500 animate-pulse' : (diagCompletedPhases.includes(p) ? 'bg-green-500' : 'bg-gray-300')"></div>
+                        <span :class="diagPhase === p ? 'text-gray-800 font-medium' : 'text-gray-400'" x-text="p.charAt(0).toUpperCase() + p.slice(1)"></span>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Error display -->
+            <template x-if="diagError">
+                <div class="bg-red-50 border border-red-200 text-red-800 text-sm px-3 py-2 rounded" x-text="diagError"></div>
+            </template>
+
+            <!-- Latency Section -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Latency</h4>
+                    <div class="text-xs text-gray-400" x-text="diagLatencies.length ? diagLatencies.length + ' samples' : ''"></div>
+                </div>
+                <div class="grid grid-cols-3 gap-2 text-center mb-2">
+                    <div class="bg-gray-50 rounded px-2 py-2">
+                        <div class="text-xl font-bold tabular-nums" :class="diagLatencyMin > 0 ? 'text-gray-800' : 'text-gray-300'" x-text="diagLatencyMin > 0 ? diagLatencyMin.toFixed(1) : '-'"></div>
+                        <div class="text-[10px] text-gray-400 uppercase">Min ms</div>
+                    </div>
+                    <div class="bg-gray-50 rounded px-2 py-2">
+                        <div class="text-xl font-bold tabular-nums" :class="diagLatencyAvg > 0 ? 'text-gray-800' : 'text-gray-300'" x-text="diagLatencyAvg > 0 ? diagLatencyAvg.toFixed(1) : '-'"></div>
+                        <div class="text-[10px] text-gray-400 uppercase">Avg ms</div>
+                    </div>
+                    <div class="bg-gray-50 rounded px-2 py-2">
+                        <div class="text-xl font-bold tabular-nums" :class="diagLatencyMax > 0 ? 'text-gray-800' : 'text-gray-300'" x-text="diagLatencyMax > 0 ? diagLatencyMax.toFixed(1) : '-'"></div>
+                        <div class="text-[10px] text-gray-400 uppercase">Max ms</div>
+                    </div>
+                </div>
+                <!-- Latency sparkline -->
+                <div class="h-8 bg-gray-50 rounded overflow-hidden flex items-end gap-px px-1">
+                    <template x-for="(ms, i) in diagLatencies" :key="i">
+                        <div class="flex-1 bg-blue-400 rounded-t transition-all duration-150" :style="'height:' + Math.max(4, Math.min(100, (ms / Math.max(1, diagLatencyMax)) * 100)) + '%'"></div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Download Section -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Download (Server &rarr; Client)</h4>
+                    <div class="text-xs text-gray-400 tabular-nums" x-text="diagDlBytes > 0 ? _formatBytes(diagDlBytes) : ''"></div>
+                </div>
+                <div class="text-3xl font-bold tabular-nums mb-1" :class="diagDlCurrent > 0 ? 'text-blue-600' : 'text-gray-300'" x-text="diagDlCurrent > 0 ? diagDlCurrent.toFixed(1) : '-'">
+                </div>
+                <div class="text-[10px] text-gray-400 uppercase mb-1">Mbps</div>
+                <div class="h-12 bg-gray-50 rounded overflow-hidden relative">
+                    <canvas x-ref="dlCanvas" class="w-full h-full"></canvas>
+                </div>
+            </div>
+
+            <!-- Upload Section -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Upload (Client &rarr; Server)</h4>
+                    <div class="text-xs text-gray-400 tabular-nums" x-text="diagUlBytes > 0 ? _formatBytes(diagUlBytes) : ''"></div>
+                </div>
+                <div class="text-3xl font-bold tabular-nums mb-1" :class="diagUlCurrent > 0 ? 'text-orange-500' : 'text-gray-300'" x-text="diagUlCurrent > 0 ? diagUlCurrent.toFixed(1) : '-'">
+                </div>
+                <div class="text-[10px] text-gray-400 uppercase mb-1">Mbps</div>
+                <div class="h-12 bg-gray-50 rounded overflow-hidden relative">
+                    <canvas x-ref="ulCanvas" class="w-full h-full"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-between">
+            <button @click="testTunnel(diagTunnelId)" x-show="!diagRunning" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Re-run</button>
+            <div x-show="diagRunning" class="flex items-center gap-2 text-xs text-gray-400">
+                <svg class="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                Testing...
+            </div>
+            <button @click="diagOpen = false" x-show="!diagRunning" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast Container -->
 <div class="fixed top-4 right-4 z-[60] flex flex-col gap-2">
     <template x-for="toast in toasts" :key="toast.id">
@@ -572,6 +664,155 @@ function dashboard() {
                 });
         },
 
+        // Diagnostic speedtest state
+        diagOpen: false,
+        diagRunning: false,
+        diagTunnelId: '',
+        diagPhase: '',
+        diagCompletedPhases: [],
+        diagError: '',
+
+        // Latency
+        diagLatencies: [],
+        diagLatencyMin: 0,
+        diagLatencyAvg: 0,
+        diagLatencyMax: 0,
+
+        // Download
+        diagDlSamples: [],
+        diagDlCurrent: 0,
+        diagDlBytes: 0,
+
+        // Upload
+        diagUlSamples: [],
+        diagUlCurrent: 0,
+        diagUlBytes: 0,
+
+        _diagResetState() {
+            this.diagPhase = '';
+            this.diagCompletedPhases = [];
+            this.diagError = '';
+            this.diagLatencies = [];
+            this.diagLatencyMin = 0;
+            this.diagLatencyAvg = 0;
+            this.diagLatencyMax = 0;
+            this.diagDlSamples = [];
+            this.diagDlCurrent = 0;
+            this.diagDlBytes = 0;
+            this.diagUlSamples = [];
+            this.diagUlCurrent = 0;
+            this.diagUlBytes = 0;
+        },
+
+        async testTunnel(id) {
+            this.diagTunnelId = id;
+            this.diagOpen = true;
+            this._diagResetState();
+            this.diagRunning = true;
+
+            try {
+                const resp = await fetch('/api/tunnels/' + id + '/test', { method: 'POST', headers: csrfHeaders() });
+                if (!resp.ok) { this.diagError = 'Request failed: ' + await resp.text(); this.diagRunning = false; return; }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete line
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const evt = JSON.parse(line);
+                            this._diagHandleEvent(evt);
+                        } catch (_) {}
+                    }
+                }
+                // Process any remaining data
+                if (buffer.trim()) {
+                    try { this._diagHandleEvent(JSON.parse(buffer)); } catch (_) {}
+                }
+            } catch (e) {
+                this.diagError = 'Network error: ' + e.message;
+            } finally {
+                this.diagRunning = false;
+            }
+        },
+
+        _diagHandleEvent(evt) {
+            switch (evt.phase) {
+                case 'latency':
+                    this.diagPhase = 'latency';
+                    this.diagLatencies = [...this.diagLatencies, evt.ms];
+                    const lats = this.diagLatencies;
+                    this.diagLatencyMin = Math.min(...lats);
+                    this.diagLatencyMax = Math.max(...lats);
+                    this.diagLatencyAvg = lats.reduce((a, b) => a + b, 0) / lats.length;
+                    break;
+                case 'download':
+                    if (this.diagPhase === 'latency') this.diagCompletedPhases = [...this.diagCompletedPhases, 'latency'];
+                    this.diagPhase = 'download';
+                    this.diagDlCurrent = evt.mbps;
+                    this.diagDlBytes = evt.bytes;
+                    this.diagDlSamples = [...this.diagDlSamples, evt.mbps];
+                    this._drawSparkline(this.$refs.dlCanvas, this.diagDlSamples, '#3b82f6', 'rgba(59,130,246,0.15)');
+                    break;
+                case 'upload':
+                    if (this.diagPhase === 'download') this.diagCompletedPhases = [...this.diagCompletedPhases, 'download'];
+                    this.diagPhase = 'upload';
+                    this.diagUlCurrent = evt.mbps;
+                    this.diagUlBytes = evt.bytes;
+                    this.diagUlSamples = [...this.diagUlSamples, evt.mbps];
+                    this._drawSparkline(this.$refs.ulCanvas, this.diagUlSamples, '#f97316', 'rgba(249,115,22,0.15)');
+                    break;
+                case 'done':
+                    if (this.diagPhase === 'upload') this.diagCompletedPhases = [...this.diagCompletedPhases, 'upload'];
+                    this.diagPhase = 'done';
+                    // Show final averages
+                    if (this.diagDlSamples.length > 0)
+                        this.diagDlCurrent = this.diagDlSamples.reduce((a, b) => a + b, 0) / this.diagDlSamples.length;
+                    if (this.diagUlSamples.length > 0)
+                        this.diagUlCurrent = this.diagUlSamples.reduce((a, b) => a + b, 0) / this.diagUlSamples.length;
+                    break;
+                case 'error':
+                    this.diagError = evt.error;
+                    break;
+            }
+        },
+
+        _drawSparkline(canvas, data, stroke, fill) {
+            if (!canvas || data.length < 2) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width = canvas.offsetWidth * (window.devicePixelRatio || 1);
+            const h = canvas.height = canvas.offsetHeight * (window.devicePixelRatio || 1);
+            ctx.clearRect(0, 0, w, h);
+
+            const max = Math.max(...data) * 1.1 || 1;
+            const step = w / (data.length - 1);
+
+            ctx.beginPath();
+            ctx.moveTo(0, h - (data[0] / max) * h);
+            for (let i = 1; i < data.length; i++) {
+                ctx.lineTo(i * step, h - (data[i] / max) * h);
+            }
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = 2 * (window.devicePixelRatio || 1);
+            ctx.stroke();
+
+            // Fill area
+            ctx.lineTo((data.length - 1) * step, h);
+            ctx.lineTo(0, h);
+            ctx.closePath();
+            ctx.fillStyle = fill;
+            ctx.fill();
+        },
+
         // Redirect CRUD
         openCreateRedirect() {
             this.redirectMode = 'create';
@@ -739,6 +980,8 @@ function dashboard() {
     <td class="px-3 py-2 text-right font-mono text-sm font-bold" data-field="active" data-label="Active">{{.ActiveConns}}</td>
     <td class="px-3 py-2 text-right card-actions">
         <div class="flex items-center justify-end gap-1">
+            {{if .Connected}}<button @click="testTunnel('{{.ID}}')"
+                    class="text-xs bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 rounded font-medium transition-colors">Test</button>{{end}}
             <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}}, {{.RequireAuth}}, '{{.AuthClaimName}}', '{{.AuthClaimValue}}', '{{.AuthHeader}}', '{{.AuthHeaderClaim}}')"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
             <button @click="regenerateSecret('{{.ID}}')"

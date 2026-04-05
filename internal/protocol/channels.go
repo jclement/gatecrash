@@ -15,6 +15,10 @@ const (
 	// ChannelControl is a long-lived channel for heartbeat and metadata exchange.
 	// Opened by the client immediately after SSH connection.
 	ChannelControl = "gatecrash-control"
+
+	// ChannelDiagnostic is opened by the server toward the client to run
+	// latency and throughput diagnostics on the tunnel link itself.
+	ChannelDiagnostic = "gatecrash-diagnostic"
 )
 
 // HTTPChannelData is sent as extra data when the server opens a gatecrash-http channel.
@@ -55,4 +59,20 @@ type ClientInfo struct {
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
 	Hostname string `json:"hostname"`
+}
+
+// Diagnostic message types exchanged over ChannelDiagnostic as length-prefixed JSON.
+const (
+	DiagPing     = "ping"
+	DiagPong     = "pong"
+	DiagDownload = "download" // server tells client to read N bytes of payload
+	DiagUpload   = "upload"   // server tells client to send N bytes of payload
+	DiagResult   = "result"   // client confirms completion
+)
+
+// DiagMessage is a single diagnostic command/response.
+type DiagMessage struct {
+	Type string `json:"type"`
+	Size int    `json:"size,omitempty"` // payload size for download/upload
+	Seq  int    `json:"seq,omitempty"`  // sequence number for ping/pong
 }
