@@ -357,6 +357,15 @@ function dashboard() {
     const getCSRFToken = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
     const csrfHeaders = () => ({ 'X-CSRF-Token': getCSRFToken(), 'Content-Type': 'application/json' });
 
+    // Returns true if the response indicates an expired session, and redirects to login.
+    function _authExpired(resp) {
+        if (resp && resp.status === 401) {
+            window.location.href = '/login';
+            return true;
+        }
+        return false;
+    }
+
     return {
         // Confirm modal state
         confirmOpen: false,
@@ -388,6 +397,7 @@ function dashboard() {
         // SSE + stats polling
         _sse: null,
         _pollTimer: null,
+        _keepaliveTimer: null,
         _statsCache: {},
         refreshInterval: parseInt(localStorage.getItem('dashboardRefreshInterval') ?? '5000', 10),
 
@@ -402,11 +412,13 @@ function dashboard() {
         init() {
             this._connectSSE();
             this._startPollTimer();
+            this._startKeepaliveTimer();
             this._initBandwidthGraph();
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden) {
                     this._stopPollTimer();
                 } else {
+                    this._sessionKeepalive();
                     this._refreshStats();
                     this._startPollTimer();
                 }
@@ -416,6 +428,7 @@ function dashboard() {
         destroy() {
             if (this._sse) { this._sse.close(); this._sse = null; }
             this._stopPollTimer();
+            if (this._keepaliveTimer) { clearInterval(this._keepaliveTimer); this._keepaliveTimer = null; }
         },
 
         _startPollTimer() {
@@ -435,6 +448,19 @@ function dashboard() {
             this._startPollTimer();
         },
 
+        _startKeepaliveTimer() {
+            if (this._keepaliveTimer) clearInterval(this._keepaliveTimer);
+            // Refresh session every 5 minutes to prevent expiry during active use.
+            this._keepaliveTimer = setInterval(() => this._sessionKeepalive(), 5 * 60 * 1000);
+        },
+
+        async _sessionKeepalive() {
+            try {
+                const resp = await fetch('/api/session/keepalive');
+                if (_authExpired(resp)) return;
+            } catch (_) {}
+        },
+
         _connectSSE() {
             if (this._sse) this._sse.close();
             const es = new EventSource('/api/events');
@@ -451,7 +477,14 @@ function dashboard() {
             });
             es.onerror = () => {
                 es.close();
-                setTimeout(() => this._connectSSE(), 3000);
+                // Check if the session is still valid before reconnecting.
+                // If expired, redirect to login instead of looping forever.
+                fetch('/api/session/keepalive').then(resp => {
+                    if (_authExpired(resp)) return;
+                    setTimeout(() => this._connectSSE(), 3000);
+                }).catch(() => {
+                    setTimeout(() => this._connectSSE(), 3000);
+                });
             };
             this._sse = es;
         },
@@ -459,6 +492,7 @@ function dashboard() {
         async _refreshTunnels() {
             try {
                 const resp = await fetch('/api/tunnels/html');
+                if (_authExpired(resp)) return;
                 if (resp.ok) {
                     document.getElementById('tunnel-table-body').innerHTML = await resp.text();
                     this._statsCache = {};
@@ -469,6 +503,7 @@ function dashboard() {
         async _refreshRedirects() {
             try {
                 const resp = await fetch('/api/redirects/html');
+                if (_authExpired(resp)) return;
                 if (resp.ok) document.getElementById('redirect-table-body').innerHTML = await resp.text();
             } catch (_) {}
         },
@@ -476,6 +511,7 @@ function dashboard() {
         async _refreshStats() {
             try {
                 const resp = await fetch('/api/tunnels');
+                if (_authExpired(resp)) return;
                 if (!resp.ok) return;
                 const tunnels = await resp.json();
 
@@ -598,6 +634,7 @@ function dashboard() {
                 headers: csrfHeaders(),
                 body: JSON.stringify(body),
             });
+            if (_authExpired(resp)) return;
             if (!resp.ok) { this.showToast('Error: ' + await resp.text()); return; }
 
             this.tunnelOpen = false;
@@ -616,6 +653,7 @@ function dashboard() {
                 'Delete', 'bg-red-600 hover:bg-red-700',
                 async () => {
                     const resp = await fetch('/api/tunnels/' + id, { method: 'DELETE', headers: csrfHeaders() });
+                    if (_authExpired(resp)) return;
                     if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); }
                 });
         },
@@ -626,6 +664,7 @@ function dashboard() {
                 'Regenerate', 'bg-amber-500 hover:bg-amber-600',
                 async () => {
                     const resp = await fetch('/api/tunnels/' + tunnelId + '/regenerate', { method: 'POST', headers: csrfHeaders() });
+                    if (_authExpired(resp)) return;
                     if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
                     const data = await resp.json();
                     this.secret = data;
@@ -685,6 +724,7 @@ function dashboard() {
 
             try {
                 const resp = await fetch('/api/tunnels/' + id + '/test', { method: 'POST', headers: csrfHeaders() });
+                if (_authExpired(resp)) return;
                 if (!resp.ok) { this.diagError = 'Request failed: ' + await resp.text(); this.diagRunning = false; return; }
 
                 const reader = resp.body.getReader();
@@ -813,6 +853,7 @@ function dashboard() {
                 headers: csrfHeaders(),
                 body: JSON.stringify(body),
             });
+            if (_authExpired(resp)) return;
             if (!resp.ok) { this.showToast('Error: ' + await resp.text()); return; }
             this.redirectOpen = false;
         },
@@ -823,6 +864,7 @@ function dashboard() {
                 'Delete', 'bg-red-600 hover:bg-red-700',
                 async () => {
                     const resp = await fetch('/api/redirects/' + encodeURIComponent(from), { method: 'DELETE', headers: csrfHeaders() });
+                    if (_authExpired(resp)) return;
                     if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); }
                 });
         },
@@ -881,6 +923,7 @@ function dashboard() {
         async _loadBandwidthHistory() {
             try {
                 const resp = await fetch('/api/bandwidth');
+                if (_authExpired(resp)) return;
                 if (!resp.ok) return;
                 const samples = await resp.json();
                 if (!samples || !samples.length) return;

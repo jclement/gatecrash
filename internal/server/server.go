@@ -361,10 +361,11 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("GET /help", s.requireAuth(s.handleHelp))
 	s.adminMux.HandleFunc("GET /passkeys", s.requireAuth(s.handlePasskeys))
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
-	s.adminMux.HandleFunc("GET /api/bandwidth", s.requireAuth(s.handleAPIBandwidth))
-	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuth(s.handleAPITunnels))
-	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAuth(s.handleAPITunnelsHTML))
-	s.adminMux.HandleFunc("GET /api/redirects/html", s.requireAuth(s.handleAPIRedirectsHTML))
+	s.adminMux.HandleFunc("GET /api/session/keepalive", s.handleSessionKeepalive)
+	s.adminMux.HandleFunc("GET /api/bandwidth", s.requireAuthAPI(s.handleAPIBandwidth))
+	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAuthAPI(s.handleAPITunnels))
+	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAuthAPI(s.handleAPITunnelsHTML))
+	s.adminMux.HandleFunc("GET /api/redirects/html", s.requireAuthAPI(s.handleAPIRedirectsHTML))
 	s.adminMux.HandleFunc("POST /api/tunnels", s.requireCSRF(s.handleCreateTunnel))
 	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireCSRF(s.handleEditTunnel))
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireCSRF(s.handleDeleteTunnel))
@@ -375,11 +376,11 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
 	// Audit log
 	s.adminMux.HandleFunc("GET /auditlog", s.requireAuth(s.handleAuditLogPage))
-	s.adminMux.HandleFunc("GET /api/auditlog", s.requireAuth(s.handleAPIAuditLog))
+	s.adminMux.HandleFunc("GET /api/auditlog", s.requireAuthAPI(s.handleAPIAuditLog))
 
-	s.adminMux.HandleFunc("GET /api/update", s.requireAuth(s.handleGetUpdate))
+	s.adminMux.HandleFunc("GET /api/update", s.requireAuthAPI(s.handleGetUpdate))
 	s.adminMux.HandleFunc("POST /api/update", s.requireCSRF(s.handlePostUpdate))
-	s.adminMux.HandleFunc("GET /api/events", s.requireAuth(s.sse.ServeHTTP))
+	s.adminMux.HandleFunc("GET /api/events", s.requireAuthAPI(s.sse.ServeHTTP))
 }
 
 // requireAuthOrSetup allows access if no passkeys exist (setup mode) or the user is authenticated.
@@ -416,6 +417,19 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !s.sessionMgr.ValidateSession(r) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireAuthAPI wraps an API handler with authentication checks.
+// Returns 401 JSON instead of redirecting, so fetch() callers can detect session expiry.
+func (s *Server) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.sessionMgr.ValidateSession(r) {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"session expired"}`, http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
@@ -1223,6 +1237,24 @@ func (s *Server) runBandwidthSampler(ctx context.Context) {
 			s.bwTracker.record(totalIn, totalOut)
 		}
 	}
+}
+
+// handleSessionKeepalive validates and refreshes the session, extending its expiry.
+// Returns 401 if the session is invalid, 200 with a refreshed cookie if valid.
+func (s *Server) handleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
+	if !s.sessionMgr.ValidateSession(r) {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"session expired"}`, http.StatusUnauthorized)
+		return
+	}
+	// Re-issue the session cookie to extend its expiry (sliding window).
+	actor := s.sessionMgr.GetActor(r)
+	if err := s.sessionMgr.CreateSession(w, actor); err != nil {
+		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
 }
 
 func (s *Server) handleAPIBandwidth(w http.ResponseWriter, r *http.Request) {

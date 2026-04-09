@@ -138,6 +138,7 @@
             async checkUpdate() {
                 try {
                     const resp = await fetch('/api/update');
+                    if (resp.status === 401) { window.location.href = '/login'; return; }
                     if (!resp.ok) return;
                     const data = await resp.json();
                     this.available = data.available;
