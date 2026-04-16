@@ -48,6 +48,8 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 
 	ch, reqs, err := conn.OpenChannel(protocol.ChannelHTTP, payload)
 	if err != nil {
+		// Remove the dead connection so PickConn won't select it again.
+		tunnel.RemoveClient(conn)
 		slog.Error("failed to open HTTP channel", "tunnel", tunnel.ID, "error", err)
 		http.Error(w, "tunnel unavailable", http.StatusBadGateway)
 		return
@@ -141,8 +143,10 @@ func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel,
 	}()
 	go func() {
 		io.Copy(clientConn, chReader) // tunnel → public client (use buffered reader)
+		clientConn.Close()            // unblock the other goroutine
 		done <- struct{}{}
 	}()
+	<-done
 	<-done
 }
 

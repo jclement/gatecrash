@@ -212,6 +212,7 @@ func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct 
 	done := make(chan struct{}, 2)
 	go func() {
 		io.Copy(conn, ch) // SSH channel → backend
+		conn.Close()       // unblock the other goroutine
 		done <- struct{}{}
 	}()
 	go func() {
@@ -221,6 +222,7 @@ func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct 
 		}
 		done <- struct{}{}
 	}()
+	<-done
 	<-done
 }
 

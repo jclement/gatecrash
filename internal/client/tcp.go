@@ -60,7 +60,9 @@ func (c *Client) handleDirectTCPIP(newCh gossh.NewChannel) {
 	}()
 	go func() {
 		io.Copy(conn, ch)
+		conn.Close() // unblock the other goroutine
 		done <- struct{}{}
 	}()
+	<-done
 	<-done
 }

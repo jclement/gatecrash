@@ -129,6 +129,8 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 
 	ch, reqs, err := sshConn.OpenChannel(protocol.ChannelDirectTCPIP, data)
 	if err != nil {
+		// Remove the dead connection so PickConn won't select it again.
+		tunnel.RemoveClient(sshConn)
 		slog.Error("TCP forward: failed to open channel", "tunnel", tunnel.ID, "error", err)
 		return
 	}
@@ -148,8 +150,10 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	go func() {
 		n, _ := io.Copy(conn, ch)
 		tunnel.Metrics.BytesOut.Add(n)
+		conn.Close() // unblock the other goroutine
 		done <- struct{}{}
 	}()
+	<-done
 	<-done
 }
 

@@ -41,6 +41,16 @@ func (s *Server) runDiagnosticStream(conn gossh.Conn, emit eventWriter) {
 	defer ch.Close()
 	go gossh.DiscardRequests(reqs)
 
+	// Set an overall deadline so a disconnected client can't block this
+	// HTTP handler goroutine forever. The full diagnostic takes ~20s
+	// (latency pings + 10s download + 10s upload), so 60s is generous.
+	type deadliner interface {
+		SetDeadline(t time.Time) error
+	}
+	if dl, ok := ch.(deadliner); ok {
+		dl.SetDeadline(time.Now().Add(60 * time.Second))
+	}
+
 	// --- Latency phase ---
 	for i := 0; i < diagPingCount; i++ {
 		ping := protocol.DiagMessage{Type: protocol.DiagPing, Seq: i}

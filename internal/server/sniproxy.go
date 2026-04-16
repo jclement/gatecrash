@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 )
 
 // sniListener wraps a raw TCP listener. On Accept it peeks at the TLS
@@ -35,11 +36,18 @@ func (l *sniListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 
+		// Set a deadline for the SNI peek so a slow/malicious client
+		// cannot block the accept loop indefinitely.
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
 		br := bufio.NewReader(conn)
 		sni, err := peekClientHelloSNI(br)
 		if err != nil {
 			slog.Debug("SNI peek failed, completing TLS handshake anyway", "remote", conn.RemoteAddr(), "error", err)
 		}
+
+		// Clear the deadline before handing the connection off.
+		conn.SetReadDeadline(time.Time{})
 
 		pc := &prefixConn{Conn: conn, reader: br}
 
