@@ -33,7 +33,7 @@ type eventWriter func(e diagEvent)
 
 // runDiagnosticStream opens a diagnostic channel and streams results via emit.
 func (s *Server) runDiagnosticStream(conn gossh.Conn, emit eventWriter) {
-	ch, reqs, err := conn.OpenChannel(protocol.ChannelDiagnostic, nil)
+	ch, reqs, err := openChannelTimeout(conn, protocol.ChannelDiagnostic, nil, channelOpenTimeout)
 	if err != nil {
 		emit(diagEvent{Phase: "error", Error: "client does not support diagnostics (upgrade client)"})
 		return
@@ -41,15 +41,20 @@ func (s *Server) runDiagnosticStream(conn gossh.Conn, emit eventWriter) {
 	defer ch.Close()
 	go gossh.DiscardRequests(reqs)
 
-	// Set an overall deadline so a disconnected client can't block this
-	// HTTP handler goroutine forever. The full diagnostic takes ~20s
-	// (latency pings + 10s download + 10s upload), so 60s is generous.
-	type deadliner interface {
-		SetDeadline(t time.Time) error
-	}
-	if dl, ok := ch.(deadliner); ok {
-		dl.SetDeadline(time.Now().Add(60 * time.Second))
-	}
+	// Enforce an overall deadline so a disconnected client can't block this HTTP
+	// handler goroutine forever. SSH channels do NOT implement SetDeadline, so we
+	// close the channel after the cap — that unblocks any pending Read/Write. The
+	// full diagnostic takes ~20s (latency pings + 10s download + 10s upload), so
+	// 90s is generous.
+	diagDone := make(chan struct{})
+	defer close(diagDone)
+	go func() {
+		select {
+		case <-diagDone:
+		case <-time.After(90 * time.Second):
+			ch.Close()
+		}
+	}()
 
 	// --- Latency phase ---
 	for i := 0; i < diagPingCount; i++ {
