@@ -46,7 +46,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 
 	payload := marshalHTTPChannelData(&data)
 
-	ch, reqs, err := conn.OpenChannel(protocol.ChannelHTTP, payload)
+	ch, reqs, err := openChannelTimeout(conn, protocol.ChannelHTTP, payload, channelOpenTimeout)
 	if err != nil {
 		// Remove the dead connection so PickConn won't select it again.
 		tunnel.RemoveClient(conn)
@@ -129,6 +129,7 @@ func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel,
 		return
 	}
 	defer clientConn.Close()
+	setTCPKeepAlive(clientConn, 30*time.Second)
 
 	resp.Write(buf)
 	buf.Flush()

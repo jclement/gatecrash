@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 
@@ -103,6 +104,10 @@ func (s *Server) reconcileTCPListeners() {
 func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	defer conn.Close()
 
+	// Detect a public peer that vanishes without FIN/RST so the io.Copy pumps
+	// below don't block forever reading from a dead socket.
+	setTCPKeepAlive(conn, 30*time.Second)
+
 	sshConn := tunnel.PickConn()
 	if sshConn == nil {
 		slog.Debug("TCP forward: tunnel offline", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
@@ -127,9 +132,11 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 		OriginPort: originPort,
 	})
 
-	ch, reqs, err := sshConn.OpenChannel(protocol.ChannelDirectTCPIP, data)
+	ch, reqs, err := openChannelTimeout(sshConn, protocol.ChannelDirectTCPIP, data, channelOpenTimeout)
 	if err != nil {
-		// Remove the dead connection so PickConn won't select it again.
+		// Remove the dead connection so PickConn won't select it again. On a
+		// wedged client this is the path that fires (openChannelTimeout closed
+		// the conn), preventing connections from piling up against it.
 		tunnel.RemoveClient(sshConn)
 		slog.Error("TCP forward: failed to open channel", "tunnel", tunnel.ID, "error", err)
 		return

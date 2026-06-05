@@ -102,6 +102,15 @@ func (s *Server) handleControlChannel(srv *ssh.Server, conn *gossh.ServerConn, n
 	slog.Info("tunnel client connected", "tunnel", tunnelID, "remote", conn.RemoteAddr(), "clients", tunnel.ClientCount())
 	s.sse.Broadcast("tunnel-connect", tunnelID)
 
+	// Actively probe the client so a half-open connection (TCP silently dropped,
+	// no FIN/RST) is detected and evicted within ~keepaliveInterval. Without this
+	// the server only learns a client is gone passively, and incoming-traffic
+	// writes keep refreshing gliderlabs' IdleTimeout so a dead conn can linger
+	// forever while the tunnel still shows as connected.
+	stopKeepalive := make(chan struct{})
+	go s.keepaliveLoop(conn, tunnel, tunnelID, stopKeepalive)
+	defer close(stopKeepalive)
+
 	defer func() {
 		tunnel.RemoveClient(conn)
 		slog.Info("tunnel client disconnected", "tunnel", tunnelID, "remote", conn.RemoteAddr(), "clients", tunnel.ClientCount())

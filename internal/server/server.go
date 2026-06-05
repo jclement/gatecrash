@@ -187,17 +187,27 @@ func (s *Server) Run(ctx context.Context) error {
 	// Cleanup expired pending tunnel auth tokens
 	go s.cleanupPendingTunnelAuth(ctx)
 
-	// Start SSH server
+	// errCh collects fatal listener errors from the goroutines below.
+	errCh := make(chan error, 3)
+
+	// Start SSH server. Use an explicit keepalive-enabling listener instead of
+	// ListenAndServe so accepted tunnel connections get OS-level TCP keepalives —
+	// gliderlabs does not enable them, leaving half-open clients undetected.
 	go func() {
 		slog.Info("SSH server listening", "addr", sshSrv.Addr)
-		if err := sshSrv.ListenAndServe(); err != nil {
+		ln, err := net.Listen("tcp", sshSrv.Addr)
+		if err != nil {
+			slog.Error("SSH listen failed", "addr", sshSrv.Addr, "error", err)
+			errCh <- fmt.Errorf("SSH listen: %w", err)
+			return
+		}
+		kal := keepAliveListener{TCPListener: ln.(*net.TCPListener), period: 30 * time.Second}
+		if err := sshSrv.Serve(kal); err != nil && err != ssh.ErrServerClosed {
 			slog.Error("SSH server error", "error", err)
 		}
 	}()
 
 	// Start HTTPS listener
-	errCh := make(chan error, 2)
-
 	go func() {
 		httpsAddr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.HTTPSPort)
 		rawListener, err := net.Listen("tcp", httpsAddr)
