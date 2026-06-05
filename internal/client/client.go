@@ -122,10 +122,24 @@ func (c *Client) connect(ctx context.Context) error {
 		Timeout:         10 * time.Second,
 	}
 
-	conn, err := gossh.Dial("tcp", c.cfg.ServerAddr, sshConfig)
+	// Dial manually so we can enable OS-level TCP keepalives on the underlying
+	// socket — this lets the client notice a half-open server connection even if
+	// the application keepalive somehow stalls.
+	netConn, err := net.DialTimeout("tcp", c.cfg.ServerAddr, sshConfig.Timeout)
 	if err != nil {
 		return fmt.Errorf("SSH dial: %w", err)
 	}
+	if tc, ok := netConn.(*net.TCPConn); ok {
+		tc.SetKeepAlive(true)
+		tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	sshClientConn, chans, reqs, err := gossh.NewClientConn(netConn, c.cfg.ServerAddr, sshConfig)
+	if err != nil {
+		netConn.Close()
+		return fmt.Errorf("SSH handshake: %w", err)
+	}
+	conn := gossh.NewClient(sshClientConn, chans, reqs)
 	defer conn.Close()
 
 	slog.Info("connected", "server", c.cfg.ServerAddr)
@@ -151,8 +165,9 @@ func (c *Client) connect(ctx context.Context) error {
 	infoBytes, _ := json.Marshal(infoMsg)
 	controlCh.Write(infoBytes)
 
-	// Start heartbeat
-	go c.heartbeatLoop(ctx, controlCh)
+	// Start heartbeat. This probes the server over the SSH connection and tears
+	// the connection down (triggering a reconnect) if the link goes half-open.
+	go c.heartbeatLoop(ctx, conn)
 
 	// Register channel handlers for each type the server may open
 	httpChs := conn.HandleChannelOpen(protocol.ChannelHTTP)
@@ -191,8 +206,12 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 }
 
-func (c *Client) heartbeatLoop(ctx context.Context, ch gossh.Channel) {
-	ticker := time.NewTicker(30 * time.Second)
+// heartbeatLoop probes the server with an SSH keepalive global request. A reply
+// (accepted or rejected) proves the link is two-way alive; a timeout or error
+// means the connection is half-open, so we close it to force a reconnect. The
+// timeout is required because SendRequest blocks forever on a dead connection.
+func (c *Client) heartbeatLoop(ctx context.Context, conn gossh.Conn) {
+	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -200,9 +219,21 @@ func (c *Client) heartbeatLoop(ctx context.Context, ch gossh.Channel) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			msg := protocol.ControlMessage{Type: protocol.ControlHeartbeat}
-			data, _ := json.Marshal(msg)
-			if _, err := ch.Write(data); err != nil {
+			res := make(chan bool, 1)
+			go func() {
+				_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
+				res <- err == nil
+			}()
+			select {
+			case alive := <-res:
+				if !alive {
+					slog.Warn("server keepalive failed, dropping connection")
+					conn.Close()
+					return
+				}
+			case <-time.After(10 * time.Second):
+				slog.Warn("server keepalive timed out, dropping connection")
+				conn.Close()
 				return
 			}
 		}
