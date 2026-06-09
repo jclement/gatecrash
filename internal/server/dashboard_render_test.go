@@ -52,4 +52,8 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 	if !strings.Contains(body, "203.0.113.4, 10.0.0.0/8") {
 		t.Error("expected AllowIPsCSV to render in the dashboard")
 	}
+	// An allowlist tunnel should expose the IPs management button.
+	if !strings.Contains(body, "openIPModal('mcp')") {
+		t.Error("expected IPs button for an ip_allowlist tunnel")
+	}
 }
