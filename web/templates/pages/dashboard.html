@@ -177,16 +177,20 @@
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="block text-xs font-medium text-gray-600 mb-1">IP Policy</label>
-                        <input type="text" x-model="tunnel.ipPolicy" placeholder="(none)"
-                               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                        <select x-model="tunnel.ipPolicy" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            <option value="">(none)</option>
+                            <template x-for="id in ipPolicyOptions" :key="id"><option :value="id" x-text="id"></option></template>
+                        </select>
                     </div>
-                    <div x-show="!(tunnel.type === 'http' && tunnel.tlsPassthrough) && tunnel.type === 'http'">
+                    <div x-show="tunnel.type === 'http' && !tunnel.tlsPassthrough">
                         <label class="block text-xs font-medium text-gray-600 mb-1">Auth Policy</label>
-                        <input type="text" x-model="tunnel.authPolicy" placeholder="(none)"
-                               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                        <select x-model="tunnel.authPolicy" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            <option value="">(none)</option>
+                            <template x-for="id in authPolicyOptions" :key="id"><option :value="id" x-text="id"></option></template>
+                        </select>
                     </div>
                 </div>
-                <p class="text-xs text-gray-400">Reference an access policy by ID. Manage policies under Access Policies.</p>
+                <p class="text-xs text-gray-400">Manage policies under <a href="/access-policies" class="text-blue-600 hover:underline">Access Policies</a>.</p>
             </div>
         </div>
         <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
@@ -229,94 +233,6 @@
     </div>
 </div>
 
-<!-- IP Allowlist Modal -->
-<div x-show="ipOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
-    <div class="absolute inset-0 bg-black/50" @click="ipOpen = false"></div>
-    <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[85vh]" @click.stop>
-        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-            <div class="flex items-center gap-2">
-                <h3 class="text-base font-semibold">IP Allowlist</h3>
-                <span class="font-mono text-xs text-gray-400" x-text="ipTunnel"></span>
-            </div>
-            <button @click="ipOpen = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
-        </div>
-        <div class="px-5 py-4 space-y-4 overflow-y-auto">
-            <!-- Permanent entries (config) -->
-            <div>
-                <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Permanent (config)</h4>
-                <template x-if="ipStatic.length === 0">
-                    <p class="text-sm text-gray-400">None. Edit the tunnel to add permanent IPs or CIDRs.</p>
-                </template>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="ip in ipStatic" :key="ip">
-                        <code class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded" x-text="ip"></code>
-                    </template>
-                </div>
-            </div>
-            <!-- Self-service grants -->
-            <div>
-                <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Self-service grants</h4>
-                <template x-if="ipLoading">
-                    <p class="text-sm text-gray-400">Loading…</p>
-                </template>
-                <template x-if="!ipLoading && ipGrants.length === 0">
-                    <p class="text-sm text-gray-400">No active grants. Visitors can authorize their IP from the access page.</p>
-                </template>
-                <table x-show="!ipLoading && ipGrants.length > 0" class="w-full text-sm">
-                    <thead>
-                        <tr class="text-left text-xs text-gray-400 border-b border-gray-200">
-                            <th class="py-1.5 font-medium">IP</th>
-                            <th class="py-1.5 font-medium">By</th>
-                            <th class="py-1.5 font-medium">Expires</th>
-                            <th class="py-1.5"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template x-for="g in ipGrants" :key="g.ip">
-                            <tr class="border-b border-gray-100">
-                                <td class="py-1.5"><code class="text-xs" x-text="g.ip"></code></td>
-                                <td class="py-1.5 text-gray-600 text-xs" x-text="g.granted_by || '—'"></td>
-                                <td class="py-1.5 text-gray-600 text-xs" x-text="expiresLabel(g.expires_at)"></td>
-                                <td class="py-1.5 text-right">
-                                    <button @click="revokeIP(g.ip)"
-                                            class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Revoke</button>
-                                </td>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
-            <!-- Shareable enrollment link -->
-            <div class="border-t border-gray-200 pt-3">
-                <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Enrollment link</h4>
-                <p class="text-xs text-gray-400 mb-2">Anyone with this link can authorize their own IP for 7 days <strong>without signing in</strong>. Treat it like a password; rotate to invalidate old links.</p>
-                <template x-if="!ipEnrollUrl">
-                    <button @click="rotateEnrollLink()"
-                            class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded font-medium transition-colors">Create enrollment link</button>
-                </template>
-                <template x-if="ipEnrollUrl">
-                    <div class="space-y-2">
-                        <div class="flex items-center gap-1.5">
-                            <input type="text" readonly :value="ipEnrollUrl" @focus="$event.target.select()"
-                                   class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-xs font-mono bg-gray-50">
-                            <button @click="copyEnrollLink()"
-                                    class="text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 px-2 py-1.5 rounded font-medium transition-colors">Copy</button>
-                        </div>
-                        <div class="flex gap-1.5">
-                            <button @click="rotateEnrollLink()"
-                                    class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">Rotate</button>
-                            <button @click="removeEnrollLink()"
-                                    class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Remove</button>
-                        </div>
-                    </div>
-                </template>
-            </div>
-        </div>
-        <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
-            <button @click="ipOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Close</button>
-        </div>
-    </div>
-</div>
 
 <!-- Confirmation Modal -->
 <div x-show="confirmOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
@@ -460,13 +376,6 @@ function dashboard() {
         secretOpen: false,
         secret: { token: '', command: '', docker: '' },
 
-        // IP allowlist modal
-        ipOpen: false,
-        ipTunnel: '',
-        ipStatic: [],
-        ipGrants: [],
-        ipEnrollUrl: '',
-        ipLoading: false,
 
         // Tunnel modal
         tunnelOpen: false,
@@ -486,6 +395,10 @@ function dashboard() {
         _statsCache: {},
         refreshInterval: parseInt(localStorage.getItem('dashboardRefreshInterval') ?? '5000', 10),
 
+        // Access policy options for the tunnel form dropdowns
+        ipPolicyOptions: [],
+        authPolicyOptions: [],
+
         // Bandwidth graph state
         bwLastBytes: null, // {in, out, time}
         bwInRate: '0 B/s',
@@ -498,6 +411,7 @@ function dashboard() {
             this._connectSSE();
             this._startPollTimer();
             this._startKeepaliveTimer();
+            this._loadPolicyOptions();
             this._initBandwidthGraph();
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden) {
@@ -684,13 +598,23 @@ function dashboard() {
         },
 
         // Tunnel CRUD
+        async _loadPolicyOptions() {
+            try {
+                const [ipR, authR] = await Promise.all([fetch('/api/ip-policies'), fetch('/api/auth-policies')]);
+                if (ipR.ok) this.ipPolicyOptions = ((await ipR.json()) || []).map(p => p.id);
+                if (authR.ok) this.authPolicyOptions = ((await authR.json()) || []).map(p => p.id);
+            } catch (_) {}
+        },
+
         openCreateTunnel() {
+            this._loadPolicyOptions();
             this.tunnelMode = 'create';
             this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, ipPolicy: '', authPolicy: '' };
             this.tunnelOpen = true;
         },
 
         openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough, ipPolicy, authPolicy) {
+            this._loadPolicyOptions();
             this.tunnelMode = 'edit';
             this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough, ipPolicy: ipPolicy || '', authPolicy: authPolicy || '' };
             this.tunnelOpen = true;
@@ -755,86 +679,6 @@ function dashboard() {
                     this.secret = data;
                     this.secretOpen = true;
                 });
-        },
-
-        // IP allowlist management
-        openIPModal(id) {
-            this.ipTunnel = id;
-            this.ipStatic = [];
-            this.ipGrants = [];
-            this.ipEnrollUrl = '';
-            this.ipOpen = true;
-            this._loadIPs(id);
-        },
-
-        async _loadIPs(id) {
-            this.ipLoading = true;
-            try {
-                const resp = await fetch('/api/tunnels/' + id + '/ips');
-                if (_authExpired(resp)) return;
-                if (!resp.ok) { this.showToast('Failed to load IPs: ' + await resp.text()); return; }
-                const data = await resp.json();
-                this.ipStatic = data.static || [];
-                this.ipGrants = data.grants || [];
-                this.ipEnrollUrl = data.enroll_url || '';
-            } catch (_) {
-                this.showToast('Failed to load IPs');
-            } finally {
-                this.ipLoading = false;
-            }
-        },
-
-        async rotateEnrollLink() {
-            try {
-                const resp = await fetch('/api/tunnels/' + this.ipTunnel + '/enroll-token', { method: 'POST', headers: csrfHeaders() });
-                if (_authExpired(resp)) return;
-                if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
-                const data = await resp.json();
-                this.ipEnrollUrl = data.url || '';
-                this.showToast('Enrollment link updated');
-            } catch (_) { this.showToast('Failed to update link'); }
-        },
-
-        removeEnrollLink() {
-            this.showConfirm('Remove enrollment link',
-                'Remove the enrollment link? Anyone holding it will no longer be able to self-authorize.',
-                'Remove', 'bg-red-600 hover:bg-red-700',
-                async () => {
-                    const resp = await fetch('/api/tunnels/' + this.ipTunnel + '/enroll-token', { method: 'DELETE', headers: csrfHeaders() });
-                    if (_authExpired(resp)) return;
-                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
-                    this.ipEnrollUrl = '';
-                });
-        },
-
-        copyEnrollLink() {
-            navigator.clipboard?.writeText(this.ipEnrollUrl)
-                .then(() => this.showToast('Link copied'))
-                .catch(() => this.showToast('Copy failed'));
-        },
-
-        revokeIP(ip) {
-            this.showConfirm('Revoke IP',
-                'Revoke access for ' + ip + '? It will need to re-authorize.',
-                'Revoke', 'bg-red-600 hover:bg-red-700',
-                async () => {
-                    const resp = await fetch('/api/tunnels/' + this.ipTunnel + '/ips/' + encodeURIComponent(ip),
-                        { method: 'DELETE', headers: csrfHeaders() });
-                    if (_authExpired(resp)) return;
-                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
-                    this._loadIPs(this.ipTunnel);
-                });
-        },
-
-        expiresLabel(iso) {
-            const ms = new Date(iso).getTime() - Date.now();
-            if (isNaN(ms)) return '—';
-            if (ms <= 0) return 'expired';
-            const days = Math.floor(ms / 86400000);
-            if (days >= 1) return 'in ' + days + 'd';
-            const hours = Math.floor(ms / 3600000);
-            if (hours >= 1) return 'in ' + hours + 'h';
-            return 'in ' + Math.max(1, Math.floor(ms / 60000)) + 'm';
         },
 
         // Diagnostic speedtest state

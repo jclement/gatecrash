@@ -437,6 +437,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireCSRF(s.handleRegenerateSecret))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireCSRF(s.handleTunnelTest))
 	// Access policies
+	s.adminMux.HandleFunc("GET /access-policies", s.requireAuth(s.handleAccessPoliciesPage))
 	s.adminMux.HandleFunc("GET /api/ip-policies", s.requireAuthAPI(s.handleListIPPolicies))
 	s.adminMux.HandleFunc("POST /api/ip-policies", s.requireCSRF(s.handleSaveIPPolicy))
 	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}", s.requireCSRF(s.handleDeleteIPPolicy))

@@ -121,6 +121,7 @@ func TestNewHandlers_Production(t *testing.T) {
 		"pages/dashboard.html":      {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
 		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
 		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
 	}
 
 	h, err := NewHandlers("1.0.0", 6*time.Hour, tmplFS)
@@ -134,8 +135,8 @@ func TestNewHandlers_Production(t *testing.T) {
 		t.Fatal("should not be dev mode for version 1.0.0")
 	}
 	// Production mode pre-compiles all pages
-	if len(h.pages) != 6 {
-		t.Fatalf("expected 6 pre-compiled pages, got %d", len(h.pages))
+	if len(h.pages) != 7 {
+		t.Fatalf("expected 7 pre-compiled pages, got %d", len(h.pages))
 	}
 }
 
@@ -165,6 +166,7 @@ func TestRender(t *testing.T) {
 		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
 		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
 		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
 	}
 
 	h, err := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -207,6 +209,7 @@ func TestRender_NilData(t *testing.T) {
 		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
 		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
 		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -226,6 +229,7 @@ func TestRender_UnknownPage(t *testing.T) {
 		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
 		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
 		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -245,6 +249,7 @@ func TestRenderPartial(t *testing.T) {
 		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
 		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
 		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)

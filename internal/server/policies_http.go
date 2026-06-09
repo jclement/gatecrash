@@ -6,9 +6,23 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/jclement/gatecrash/internal/admin"
 	"github.com/jclement/gatecrash/internal/config"
 	"github.com/jclement/gatecrash/internal/token"
 )
+
+// handleAccessPoliciesPage renders the Access Policies admin page.
+func (s *Server) handleAccessPoliciesPage(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.RLock()
+	oidcConfigured := s.cfg.OIDC.IsConfigured()
+	s.cfgMu.RUnlock()
+	s.adminH.Render(w, "pages/access-policies.html", &admin.PageData{
+		Title:          "Access Policies",
+		Active:         "access-policies",
+		OIDCConfigured: oidcConfigured,
+		CSRFToken:      s.sessionMgr.CSRFToken(r),
+	})
+}
 
 // ── IP policies ──────────────────────────────────────────────────────────────
 

@@ -197,6 +197,7 @@ func NewHandlers(version string, checkInterval time.Duration, templateFS fs.FS) 
 			"pages/dashboard.html",
 			"pages/help.html",
 			"pages/auditlog.html",
+			"pages/access-policies.html",
 		} {
 			tmpl, err := h.compilePage(page)
 			if err != nil {
