@@ -434,3 +434,21 @@ bind_addr = "0.0.0.0"
 		t.Fatalf("generated SSH port %d out of expected range [49152, 65535]", cfg.Server.SSHPort)
 	}
 }
+
+func TestValidate_RejectsRequireAuthWithPassthrough(t *testing.T) {
+	c := &Config{Tunnel: []Tunnel{
+		{ID: "ok", Type: "http", RequireAuth: true},
+		{ID: "bad", Type: "http", TLSPassthrough: true, RequireAuth: true},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected require_auth + tls_passthrough to be rejected")
+	}
+
+	// IP allowlist + passthrough is allowed (enforced at the TCP layer).
+	ok := &Config{Tunnel: []Tunnel{
+		{ID: "p", Type: "http", TLSPassthrough: true, IPAllowlist: true, AllowIPs: []string{"10.0.0.0/8"}},
+	}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("ip_allowlist + tls_passthrough should be allowed: %v", err)
+	}
+}

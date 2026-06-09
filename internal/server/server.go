@@ -401,7 +401,8 @@ func (s *Server) setupAdminRoutes() {
 	// Protected routes — require auth
 	s.adminMux.HandleFunc("GET /", s.requireAuth(s.handleAdminDashboard))
 	s.adminMux.HandleFunc("GET /help", s.requireAuth(s.handleHelp))
-	s.adminMux.HandleFunc("GET /authorize-ip", s.requireAuth(s.handleAuthorizeIP))
+	s.adminMux.HandleFunc("GET /authorize-ip", s.requireAuth(s.handleAuthorizeIPPage))
+	s.adminMux.HandleFunc("POST /authorize-ip", s.requireAuth(s.handleAuthorizeIPSubmit))
 	s.adminMux.HandleFunc("GET /passkeys", s.requireAuth(s.handlePasskeys))
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
 	s.adminMux.HandleFunc("GET /api/session/keepalive", s.handleSessionKeepalive)
@@ -804,9 +805,6 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 	}
 	if req.RequireAuth && req.TLSPassthrough {
 		return fmt.Errorf("require_auth is not supported with TLS passthrough (auth is bypassed at the TLS layer)")
-	}
-	if req.IPAllowlist && req.TLSPassthrough {
-		return fmt.Errorf("ip_allowlist is not supported with TLS passthrough (traffic bypasses the HTTP layer)")
 	}
 	for _, entry := range req.AllowIPs {
 		if _, _, err := net.ParseCIDR(entry); err == nil {
@@ -1405,6 +1403,13 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
+	// Reject configs with unenforceable access-control combinations.
+	if err := newCfg.Validate(); err != nil {
+		slog.Error("config reload rejected", "error", err)
+		s.sse.Broadcast("config-error", err.Error())
+		return
+	}
+
 	// Validate that require_auth tunnels still have admin_host configured
 	if newCfg.Server.AdminHost == "" {
 		for _, tc := range newCfg.Tunnel {

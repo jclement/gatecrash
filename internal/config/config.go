@@ -212,7 +212,27 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// Validate checks cross-field tunnel invariants that the TOML schema can't
+// express — in particular access-control combinations that would silently not
+// be enforced, which would be a security footgun if accepted.
+func (c *Config) Validate() error {
+	for _, t := range c.Tunnel {
+		// Passthrough hands raw bytes straight to the backend without an HTTP
+		// layer, so the browser-based require_auth gate is never evaluated. The
+		// IP allowlist, by contrast, IS enforced for passthrough (at the TCP
+		// accept), so that combination is allowed.
+		if t.RequireAuth && t.TLSPassthrough {
+			return fmt.Errorf("tunnel %q: require_auth cannot be combined with tls_passthrough (passthrough traffic never reaches the HTTP auth layer; use the IP allowlist instead)", t.ID)
+		}
+	}
+	return nil
 }
 
 // Save writes the config to disk as self-documenting TOML with comments.
