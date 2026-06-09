@@ -156,6 +156,27 @@
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <h2 class="text-base font-semibold">IP Allowlist</h2>
+        <p class="text-sm text-gray-600">
+            The <strong>IP Allowlist</strong> restricts a tunnel to a set of source IP addresses. It's an <em>independent</em> control from Require Authentication &mdash; a tunnel can use either, both, or neither. Because allowed clients pass through with no cookie or credential, it's ideal for protecting services that can't authenticate themselves, such as MCP servers or other API/tool endpoints. It works on both HTTP and TCP tunnels (including TLS passthrough). Require Authentication, by contrast, only applies to HTTP and is not available with TLS passthrough.
+        </p>
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Adding IPs</p>
+            <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+                <li><strong>Permanent</strong> &mdash; enter IPs or CIDRs (e.g. <code class="bg-gray-100 px-1 rounded text-xs">203.0.113.4</code>, <code class="bg-gray-100 px-1 rounded text-xs">10.0.0.0/8</code>) in the tunnel's IP Allowlist field. IPv4 and IPv6 are both supported.</li>
+                <li><strong>Self-service</strong> &mdash; a blocked visitor to an HTTP tunnel sees an "Authorize this IP" page; after signing in to the admin panel, their current IP is granted for 7 days.</li>
+                <li><strong>Enrollment link</strong> &mdash; from the <strong>IPs</strong> button on a tunnel, create a shareable link. Anyone with the link can authorize their own IP for 7 days <em>without signing in</em> &mdash; useful for sharing access with non-admins, and the only self-service option for TCP tunnels. Treat the link like a password; <strong>Rotate</strong> invalidates old links.</li>
+            </ul>
+        </div>
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Managing grants</p>
+            <p class="text-sm text-gray-600">
+                The <strong>IPs</strong> button lists active self-service grants with who authorized them and when they expire; <strong>Revoke</strong> removes one immediately. Self-service grants expire after 7 days; permanent entries never expire. Because grants are keyed by source IP, everyone sharing the same public IP (NAT/CGNAT, or a rotating IPv6 prefix) shares the same access &mdash; prefer a permanent CIDR for stable IPv6 prefixes.
+            </p>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
         <h2 class="text-base font-semibold">Tips</h2>
         <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
             <li>The client automatically reconnects if the connection drops.</li>

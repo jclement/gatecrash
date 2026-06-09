@@ -16,6 +16,7 @@
   <a href="#how-it-works">How It Works</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
   <a href="#oidc-authentication">OIDC</a> &bull;
+  <a href="#ip-allowlist">IP Allowlist</a> &bull;
   <a href="#docker">Docker</a>
 </p>
 
@@ -196,10 +197,12 @@ The config file is auto-generated on first run with sensible defaults and inline
 |--------|---------|-------------|
 | `preserve_host` | `false` | Pass the original `Host` header to the backend |
 | `tls_passthrough` | `false` | Forward raw TLS without terminating (backend handles TLS) |
-| `require_auth` | `false` | Require OIDC authentication to access this tunnel |
+| `require_auth` | `false` | Require OIDC/passkey authentication to access this tunnel (HTTP only; not available with `tls_passthrough`) |
 | `auth_rule` | | OIDC rule name that must match for access |
 | `auth_header` | `x-Gatecrash-User` | Header name for authenticated user identity |
 | `auth_header_claim` | _(email claim)_ | Which OIDC claim value to put in the auth header |
+| `ip_allowlist` | `false` | Restrict access by source IP (independent of `require_auth`; works on HTTP and TCP, including passthrough) |
+| `allow_ips` | | Permanently allowed IPs/CIDRs, e.g. `["203.0.113.4", "10.0.0.0/8"]` (IPv4 and IPv6) |
 
 Example:
 
@@ -298,6 +301,31 @@ Register this callback URL with your OIDC provider:
 - `https://<admin_host>/oidc/callback`
 
 Both admin login and tunnel "Require Auth" use this single callback URL. There is no need to register per-tunnel callback URLs.
+
+---
+
+## IP Allowlist
+
+The IP allowlist restricts a tunnel to a set of source IP addresses. It is an **independent** control from `require_auth` — a tunnel may use either, both, or neither. Because allowed clients pass through with **no cookie or credential**, it's well suited to protecting services that can't authenticate themselves (MCP servers, API/tool endpoints). Unlike `require_auth`, it works on **both HTTP and TCP** tunnels, including TLS passthrough.
+
+```toml
+[[tunnel]]
+id = "mcp"
+type = "http"
+hostnames = ["mcp.example.com"]
+ip_allowlist = true
+allow_ips = ["203.0.113.4", "10.0.0.0/8"]   # permanent; IPv4 and IPv6 / CIDRs
+```
+
+There are three ways an IP gets allowed:
+
+- **Permanent** — `allow_ips` entries in the config (or the dashboard's IP Allowlist field). Never expire.
+- **Self-service (admin)** — a blocked visitor to an HTTP tunnel is shown an "Authorize this IP" page; after signing in to the admin panel they confirm, and their current IP is granted for 7 days.
+- **Enrollment link** — from the **IPs** button on a tunnel, create a shareable link (`https://<admin_host>/enroll/<token>`). Anyone with the link can authorize their own IP for 7 days **without signing in** — the only self-service option for TCP tunnels, since the link is served on the admin host and the visitor's browser shares the egress IP of their TCP client. The link is a **bearer secret** — treat it like a password and use **Rotate** to invalidate old links.
+
+Active self-service grants are listed (with who authorized them and when they expire) and revocable from the **IPs** button. Grants are keyed by source IP, so everyone sharing a public IP (NAT/CGNAT) shares access; for IPv6 clients with rotating privacy addresses, prefer a permanent CIDR covering the delegated prefix.
+
+> The enrollment link requires `server.admin_host` to be configured (it's served on the admin host).
 
 ---
 
