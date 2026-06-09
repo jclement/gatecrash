@@ -1330,9 +1330,9 @@ func (s *Server) handleSessionKeepalive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"session expired"}`, http.StatusUnauthorized)
 		return
 	}
-	// Re-issue the session cookie to extend its expiry (sliding window).
-	actor := s.sessionMgr.GetActor(r)
-	if err := s.sessionMgr.CreateSession(w, actor); err != nil {
+	// Re-issue the session cookie to extend its expiry (sliding window),
+	// preserving the session identity so the CSRF token stays stable across tabs.
+	if err := s.sessionMgr.RefreshSession(w, r); err != nil {
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}

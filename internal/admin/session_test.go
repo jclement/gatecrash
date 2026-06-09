@@ -35,6 +35,55 @@ func TestSessionManager_CreateAndValidate(t *testing.T) {
 	}
 }
 
+// sessionReq creates a request carrying the session cookie just written to w.
+func sessionReq(t *testing.T, w *httptest.ResponseRecorder) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/", nil)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			req.AddCookie(c)
+			return req
+		}
+	}
+	t.Fatal("session cookie not found")
+	return nil
+}
+
+// TestSessionManager_CSRFStableAcrossRefresh is the regression test for the bug
+// where the sliding-window keepalive re-issued the cookie and invalidated CSRF
+// tokens in other open tabs. After RefreshSession the cookie value changes but
+// the CSRF token (bound to the stable SID) must NOT.
+func TestSessionManager_CSRFStableAcrossRefresh(t *testing.T) {
+	sm := NewSessionManager("test-secret-key-for-jwt")
+
+	w1 := httptest.NewRecorder()
+	if err := sm.CreateSession(w1, "Name <user@example.com>"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	req1 := sessionReq(t, w1)
+	csrf1 := sm.CSRFToken(req1)
+	if csrf1 == "" {
+		t.Fatal("expected a CSRF token")
+	}
+
+	// Simulate the keepalive re-issuing the cookie.
+	w2 := httptest.NewRecorder()
+	if err := sm.RefreshSession(w2, req1); err != nil {
+		t.Fatalf("RefreshSession: %v", err)
+	}
+	req2 := sessionReq(t, w2)
+
+	// The re-issued cookie may differ (new expiry), but the CSRF token must not.
+	csrf2 := sm.CSRFToken(req2)
+	if csrf1 != csrf2 {
+		t.Fatalf("CSRF token changed across refresh: %q -> %q", csrf1, csrf2)
+	}
+	// And the token from the original page still validates against the new session.
+	if !sm.ValidCSRFToken(req2, csrf1) {
+		t.Fatal("original CSRF token should still validate after refresh")
+	}
+}
+
 func TestSessionManager_InvalidSession(t *testing.T) {
 	sm := NewSessionManager("test-secret")
 

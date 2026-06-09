@@ -2,6 +2,7 @@ package admin
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -33,15 +34,24 @@ func NewSessionManager(secret string) *SessionManager {
 	return &SessionManager{secret: DeriveKey(secret, "admin-session")}
 }
 
-// sessionClaims extends RegisteredClaims with an actor identity for audit logging.
+// sessionClaims extends RegisteredClaims with an actor identity for audit logging
+// and a stable per-login session id. The CSRF token binds to the SID (not the
+// signed JWT) so it survives session-cookie re-issues (the sliding-window
+// keepalive), which would otherwise invalidate CSRF tokens in other open tabs.
 type sessionClaims struct {
 	jwt.RegisteredClaims
 	Actor string `json:"actor,omitempty"`
+	SID   string `json:"sid,omitempty"`
 }
 
-// CreateSession sets a session cookie on the response.
-// The actor string identifies who is logging in (e.g. "Admin (passkey)" or "Name <email>").
-func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) error {
+func newSID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// issue signs and sets a session cookie carrying the given actor and stable SID.
+func (sm *SessionManager) issue(w http.ResponseWriter, actor, sid string) error {
 	claims := sessionClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionDuration)),
@@ -49,6 +59,7 @@ func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) err
 			Issuer:    "gatecrash",
 		},
 		Actor: actor,
+		SID:   sid,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -68,6 +79,23 @@ func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) err
 	})
 
 	return nil
+}
+
+// CreateSession starts a new session (fresh SID) for a login.
+// The actor string identifies who is logging in (e.g. "Admin (passkey)" or "Name <email>").
+func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) error {
+	return sm.issue(w, actor, newSID())
+}
+
+// RefreshSession re-issues the current session with a bumped expiry, PRESERVING
+// its actor and SID. Used by the sliding-window keepalive so the CSRF token
+// (bound to the SID) does not change underneath other open tabs.
+func (sm *SessionManager) RefreshSession(w http.ResponseWriter, r *http.Request) error {
+	claims, ok := sm.parseSession(r)
+	if !ok {
+		return fmt.Errorf("no valid session")
+	}
+	return sm.issue(w, claims.Actor, claims.SID)
 }
 
 // ClearSession removes the session cookie.
@@ -93,10 +121,17 @@ func (sm *SessionManager) ValidateSession(r *http.Request) bool {
 // Returns "Admin (passkey)" as default for sessions without an actor field.
 func (sm *SessionManager) GetActor(r *http.Request) string {
 	claims, ok := sm.parseSession(r)
-	if !ok || claims.Actor == "" {
+	if !ok {
 		return "Admin (passkey)"
 	}
-	return claims.Actor
+	return actorOf(claims)
+}
+
+func actorOf(c *sessionClaims) string {
+	if c.Actor == "" {
+		return "Admin (passkey)"
+	}
+	return c.Actor
 }
 
 // parseSession extracts and validates session claims from the request cookie.
@@ -128,15 +163,22 @@ func (sm *SessionManager) parseSession(r *http.Request) (*sessionClaims, bool) {
 	return claims, true
 }
 
-// CSRFToken generates a CSRF token derived from the session cookie.
+// CSRFToken generates a CSRF token bound to the session's stable identity, not
+// the (frequently re-issued) signed cookie value. New sessions bind to the SID;
+// legacy sessions without a SID fall back to the actor. Either way the token is
+// stable across keepalive re-issues, so it stays valid across open tabs.
 // Returns empty string if there is no valid session.
 func (sm *SessionManager) CSRFToken(r *http.Request) string {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
+	claims, ok := sm.parseSession(r)
+	if !ok {
 		return ""
 	}
+	key := claims.SID
+	if key == "" {
+		key = "actor:" + actorOf(claims)
+	}
 	mac := hmac.New(sha256.New, sm.secret)
-	mac.Write([]byte("csrf:" + cookie.Value))
+	mac.Write([]byte("csrf:" + key))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
