@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -188,19 +189,54 @@ func (a *AuditLog) atomicWrite(data []byte) error {
 // Entries returns recent audit entries (newest first) with offset-based
 // pagination, served from the in-memory ring.
 func (a *AuditLog) Entries(limit, offset int) []AuditEntry {
+	entries, _ := a.Query(limit, offset, "", "")
+	return entries
+}
+
+// Query returns recent entries (newest first) matching the optional actor and
+// action filters (empty = any), with offset-based pagination, plus the total
+// number of matching entries in the window (for pagination).
+func (a *AuditLog) Query(limit, offset int, actor, action string) (entries []AuditEntry, total int) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if offset >= len(a.recent) {
-		return nil
+	match := 0
+	for _, e := range a.recent { // newest-first
+		if actor != "" && e.Actor != actor {
+			continue
+		}
+		if action != "" && e.Action != action {
+			continue
+		}
+		if match >= offset && len(entries) < limit {
+			entries = append(entries, e)
+		}
+		match++
 	}
-	end := offset + limit
-	if end > len(a.recent) {
-		end = len(a.recent)
+	return entries, match
+}
+
+// Facets returns the distinct actors and actions present in the window, sorted,
+// for populating filter controls.
+func (a *AuditLog) Facets() (actors, actions []string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	seenActor := map[string]struct{}{}
+	seenAction := map[string]struct{}{}
+	for _, e := range a.recent {
+		if _, ok := seenActor[e.Actor]; !ok {
+			seenActor[e.Actor] = struct{}{}
+			actors = append(actors, e.Actor)
+		}
+		if _, ok := seenAction[e.Action]; !ok {
+			seenAction[e.Action] = struct{}{}
+			actions = append(actions, e.Action)
+		}
 	}
-	result := make([]AuditEntry, end-offset)
-	copy(result, a.recent[offset:end])
-	return result
+	sort.Strings(actors)
+	sort.Strings(actions)
+	return actors, actions
 }
 
 // Count returns the number of recent entries available to the UI.

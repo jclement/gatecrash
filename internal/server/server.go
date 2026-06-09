@@ -1720,8 +1720,11 @@ func (s *Server) handleAPIAuditLog(w http.ResponseWriter, r *http.Request) {
 		limit = 200
 	}
 
-	entries := s.auditLog.Entries(limit, offset)
-	total := s.auditLog.Count()
+	actor := r.URL.Query().Get("actor")
+	action := r.URL.Query().Get("action")
+
+	entries, total := s.auditLog.Query(limit, offset, actor, action)
+	actors, actions := s.auditLog.Facets()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1729,6 +1732,8 @@ func (s *Server) handleAPIAuditLog(w http.ResponseWriter, r *http.Request) {
 		"total":   total,
 		"offset":  offset,
 		"limit":   limit,
+		"actors":  actors,
+		"actions": actions,
 	})
 }
 

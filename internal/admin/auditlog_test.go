@@ -96,3 +96,38 @@ func TestAuditLog_RingCapButDiskKeepsAll(t *testing.T) {
 		t.Fatalf("disk should retain all %d entries, got %d", total, got)
 	}
 }
+
+func TestAuditLog_QueryAndFacets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.json")
+	a, _ := NewAuditLog(path)
+	a.Log("alice", "login", "")
+	a.Log("bob", "tunnel.create", "")
+	a.Log("alice", "tunnel.delete", "")
+
+	// Filter by actor.
+	got, total := a.Query(50, 0, "alice", "")
+	if total != 2 || len(got) != 2 {
+		t.Fatalf("actor filter: total=%d len=%d", total, len(got))
+	}
+	for _, e := range got {
+		if e.Actor != "alice" {
+			t.Fatalf("actor filter leaked %q", e.Actor)
+		}
+	}
+	// Filter by action.
+	if _, total := a.Query(50, 0, "", "login"); total != 1 {
+		t.Fatalf("action filter total=%d, want 1", total)
+	}
+	// Both filters.
+	if _, total := a.Query(50, 0, "alice", "login"); total != 1 {
+		t.Fatalf("combined filter total=%d, want 1", total)
+	}
+	// Facets are distinct + sorted.
+	actors, actions := a.Facets()
+	if len(actors) != 2 || actors[0] != "alice" || actors[1] != "bob" {
+		t.Fatalf("actor facets: %v", actors)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("action facets: %v", actions)
+	}
+}

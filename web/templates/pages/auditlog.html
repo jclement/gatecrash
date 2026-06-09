@@ -2,6 +2,25 @@
 <div x-data="auditLogPage()" x-cloak class="max-w-4xl mx-auto px-4 py-6">
     <h1 class="text-lg font-semibold mb-6">Audit Log</h1>
 
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+        <select x-model="filterActor" @change="applyFilter()"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">All users</option>
+            <template x-for="a in actors" :key="a">
+                <option :value="a" x-text="a"></option>
+            </template>
+        </select>
+        <select x-model="filterAction" @change="applyFilter()"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">All actions</option>
+            <template x-for="a in actions" :key="a">
+                <option :value="a" x-text="a"></option>
+            </template>
+        </select>
+        <button x-show="filterActor || filterAction" @click="filterActor=''; filterAction=''; applyFilter()"
+                class="text-sm text-gray-500 hover:text-gray-700">Clear</button>
+    </div>
+
     <div class="bg-white rounded-lg shadow-sm border border-gray-200">
         <div x-show="entries.length === 0 && !loading" class="text-sm text-gray-500 py-8 text-center">
             No audit log entries.
@@ -47,6 +66,10 @@ function auditLogPage() {
         offset: 0,
         loading: false,
         hasMore: false,
+        actors: [],
+        actions: [],
+        filterActor: '',
+        filterAction: '',
 
         init() {
             this.loadEntries();
@@ -55,16 +78,28 @@ function auditLogPage() {
         async loadEntries() {
             this.loading = true;
             try {
-                const resp = await fetch('/api/auditlog?offset=' + this.offset + '&limit=50');
+                const params = new URLSearchParams({ offset: this.offset, limit: 50 });
+                if (this.filterActor) params.set('actor', this.filterActor);
+                if (this.filterAction) params.set('action', this.filterAction);
+                const resp = await fetch('/api/auditlog?' + params.toString());
                 if (resp.status === 401) { window.location.href = '/login'; return; }
                 if (!resp.ok) return;
                 const data = await resp.json();
                 this.entries = this.entries.concat(data.entries || []);
                 this.total = data.total;
                 this.hasMore = this.entries.length < this.total;
+                // Facets reflect the whole window, so they're stable across pages/filters.
+                this.actors = data.actors || [];
+                this.actions = data.actions || [];
             } finally {
                 this.loading = false;
             }
+        },
+
+        applyFilter() {
+            this.offset = 0;
+            this.entries = [];
+            this.loadEntries();
         },
 
         loadMore() {
