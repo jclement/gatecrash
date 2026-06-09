@@ -1,0 +1,55 @@
+package server
+
+import (
+	"io/fs"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jclement/gatecrash/internal/admin"
+	"github.com/jclement/gatecrash/web"
+)
+
+// TestDashboardRendersWithIPAllowlist renders the real embedded dashboard
+// template against a tunnel view that exercises the new IP allowlist fields,
+// catching template parse/exec errors the stubbed admin tests can't.
+func TestDashboardRendersWithIPAllowlist(t *testing.T) {
+	tmplFS, err := fs.Sub(web.EmbeddedFS, "templates")
+	if err != nil {
+		t.Fatalf("sub fs: %v", err)
+	}
+	h, err := admin.NewHandlers("test", time.Hour, tmplFS)
+	if err != nil {
+		t.Fatalf("NewHandlers (template parse): %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Render(rec, "pages/dashboard.html", &admin.PageData{
+		Title:  "Dashboard",
+		Active: "dashboard",
+		Data: struct {
+			Tunnels   []admin.TunnelView
+			Redirects []RedirectView
+			SSHPort   int
+		}{
+			Tunnels: []admin.TunnelView{{
+				ID:          "mcp",
+				Type:        "http",
+				Hostnames:   []string{"mcp.example.com"},
+				IPAllowlist: true,
+				AllowIPs:    []string{"203.0.113.4", "10.0.0.0/8"},
+			}},
+			SSHPort: 2222,
+		},
+	})
+
+	if rec.Code != 200 {
+		t.Fatalf("render status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The edit button should carry the new args through to openEditTunnel.
+	if !strings.Contains(body, "203.0.113.4, 10.0.0.0/8") {
+		t.Error("expected AllowIPsCSV to render in the dashboard")
+	}
+}
