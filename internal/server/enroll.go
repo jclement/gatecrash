@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/jclement/gatecrash/internal/config"
 )
@@ -112,6 +114,34 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	label := html.EscapeString(tunnelLabel(tunnel))
+	ipStr := html.EscapeString(ip.String())
+	appURL := s.publicURLFor(tunnel)
+	continueBtn := ""
+	if appURL != "" {
+		continueBtn = fmt.Sprintf(`<a class="btn" href="%s">Continue to %s</a>`, html.EscapeString(appURL), label)
+	}
+	authorizeForm := fmt.Sprintf(`<form method="POST" action="/enroll/%s"><button class="btn" type="submit">%%s</button></form>`, html.EscapeString(token))
+
+	var heading, body, actions string
+	switch {
+	case s.staticAllows(tunnel.ID, ip):
+		// Permanently allowlisted in config — no self-service grant needed.
+		heading = "You already have access"
+		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is permanently allowed for <strong>%s</strong>.`, ipStr, label)
+		actions = continueBtn
+	case s.grantRemaining(tunnel.ID, ip) != "":
+		// Already enrolled — offer to extend (re-grant bumps the 7-day clock).
+		heading = "You're already authorized"
+		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> can access <strong>%s</strong> — access expires in %s.`,
+			ipStr, label, html.EscapeString(s.grantRemaining(tunnel.ID, ip)))
+		actions = fmt.Sprintf(authorizeForm, "Extend 7 days") + continueBtn
+	default:
+		heading = "Authorize Access"
+		body = fmt.Sprintf(`You've been invited to access <strong>%s</strong>. Authorize your current IP <span class="ip">%s</span> for 7 days?`, label, ipStr)
+		actions = fmt.Sprintf(authorizeForm, "Authorize my IP")
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
@@ -129,25 +159,59 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
   h1 { font-size: 20px; margin-bottom: 12px; }
   p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 8px; }
   .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .btn { margin-top: 16px; padding: 12px 24px; background: #2563eb; color: white;
-         border: none; cursor: pointer; border-radius: 6px; font-size: 14px; font-weight: 600; }
+  .btn { display: inline-block; margin: 16px 4px 0; padding: 12px 24px; background: #2563eb;
+         color: white; border: none; cursor: pointer; border-radius: 6px; font-size: 14px;
+         font-weight: 600; text-decoration: none; }
   .btn:hover { background: #1d4ed8; }
+  form { display: inline-block; }
   .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>Authorize Access</h1>
-  <p>You've been invited to access <strong>%s</strong>.</p>
-  <p>Authorize your current IP <span class="ip">%s</span> for 7 days?</p>
-  <form method="POST" action="/enroll/%s">
-    <button class="btn" type="submit">Authorize my IP</button>
-  </form>
+  <h1>%s</h1>
+  <p>%s</p>
+  %s
   <div class="footer">Gatecrash</div>
 </div>
 </body>
-</html>`,
-		html.EscapeString(tunnelLabel(tunnel)), html.EscapeString(ip.String()), html.EscapeString(token))
+</html>`, heading, body, actions)
+}
+
+// staticAllows reports whether ip is permanently allowlisted for the tunnel.
+func (s *Server) staticAllows(tunnelID string, ip net.IP) bool {
+	ts := s.registry.FindByID(tunnelID)
+	return ts != nil && ts.StaticIPAllowed(ip)
+}
+
+// grantRemaining returns a human-readable remaining time for a live self-service
+// grant, or "" if the IP has no live grant.
+func (s *Server) grantRemaining(tunnelID string, ip net.IP) string {
+	g, ok := s.ipAllow.GrantFor(tunnelID, ip)
+	if !ok {
+		return ""
+	}
+	return humanizeDuration(time.Until(g.ExpiresAt))
+}
+
+func humanizeDuration(d time.Duration) string {
+	if d <= 0 {
+		return "less than a minute"
+	}
+	if days := int(d.Hours()) / 24; days >= 1 {
+		return plural(days, "day")
+	}
+	if hours := int(d.Hours()); hours >= 1 {
+		return plural(hours, "hour")
+	}
+	return plural(max(1, int(d.Minutes())), "minute")
+}
+
+func plural(n int, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // handleEnrollSubmit (POST /enroll/{token}) records the grant and confirms.

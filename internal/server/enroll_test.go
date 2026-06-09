@@ -23,11 +23,16 @@ func newEnrollTestServer(t *testing.T, tunnels []config.Tunnel) *Server {
 	if err != nil {
 		t.Fatalf("audit log: %v", err)
 	}
+	reg := NewRegistry()
+	for _, tc := range tunnels {
+		reg.Register(newTunnelState(specFromConfig(tc)))
+	}
 	return &Server{
 		cfg: &config.Config{
 			Server: config.ServerConfig{AdminHost: "admin.example.com", HTTPSPort: 443},
 			Tunnel: tunnels,
 		},
+		registry: reg,
 		ipAllow:  ipAllow,
 		auditLog: auditLog,
 	}
@@ -83,5 +88,37 @@ func TestHandleEnrollSubmit_BadToken(t *testing.T) {
 	s.handleEnrollSubmit(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for bad token, got %d", rec.Code)
+	}
+}
+
+func TestHandleEnrollPage_States(t *testing.T) {
+	s := newEnrollTestServer(t, []config.Tunnel{
+		{ID: "mcp", Type: "http", Hostnames: []string{"mcp.example.com"}, IPAllowlist: true, EnrollToken: "tok", AllowIPs: []string{"198.51.100.0/24"}},
+	})
+
+	get := func(remote string) string {
+		req := httptest.NewRequest("GET", "/enroll/tok", nil)
+		req.SetPathValue("token", "tok")
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		s.handleEnrollPage(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("status %d", rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	// New visitor → authorize prompt.
+	if b := get("203.0.113.5:1"); !strings.Contains(b, "Authorize my IP") {
+		t.Error("new visitor should see the authorize prompt")
+	}
+	// Permanently allowlisted (in 198.51.100.0/24) → already-have-access, no form.
+	if b := get("198.51.100.7:1"); !strings.Contains(b, "permanently allowed") || strings.Contains(b, "Authorize my IP") {
+		t.Error("permanent IP should see permanent-access message and no authorize button")
+	}
+	// Already self-enrolled → extend option with remaining time.
+	s.ipAllow.Grant("mcp", "203.0.113.5", "enrollment-link", ipGrantTTL)
+	if b := get("203.0.113.5:1"); !strings.Contains(b, "Extend 7 days") || !strings.Contains(b, "expires in") {
+		t.Error("already-enrolled visitor should see an extend option and remaining time")
 	}
 }

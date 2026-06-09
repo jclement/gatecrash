@@ -118,6 +118,23 @@ func (s *IPAllowStore) IsGranted(tunnelID string, ip net.IP) bool {
 	return false
 }
 
+// GrantFor returns the live grant for a tunnel/IP, or ok=false if none.
+func (s *IPAllowStore) GrantFor(tunnelID string, ip net.IP) (IPGrant, bool) {
+	if ip == nil {
+		return IPGrant{}, false
+	}
+	target := ip.String()
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, g := range s.grants[tunnelID] {
+		if g.IP == target && !g.expired(now) {
+			return g, true
+		}
+	}
+	return IPGrant{}, false
+}
+
 // List returns the live (non-expired) grants for a tunnel, newest first.
 func (s *IPAllowStore) List(tunnelID string) []IPGrant {
 	now := time.Now()
