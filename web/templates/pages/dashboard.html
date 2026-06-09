@@ -168,52 +168,26 @@
                     <span>Preserve original Host header</span>
                 </label>
                 <label class="flex items-center gap-2 text-sm">
-                    <input type="checkbox" x-model="tunnel.tlsPassthrough" @change="if (tunnel.tlsPassthrough) tunnel.requireAuth = false" class="rounded">
+                    <input type="checkbox" x-model="tunnel.tlsPassthrough" class="rounded">
                     <span>TLS Passthrough</span>
                 </label>
             </div>
-            <template x-if="tunnel.type === 'http' && !tunnel.tlsPassthrough">
-                <div class="border-t border-gray-200 pt-3 mt-1 space-y-2">
-                    <label class="flex items-center gap-2 text-sm">
-                        <input type="checkbox" x-model="tunnel.requireAuth" class="rounded">
-                        <span>Require Authentication</span>
-                    </label>
-                    <div x-show="tunnel.requireAuth && oidcConfigured" class="space-y-2 pl-6">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Claim Filter <span class="font-normal text-gray-400">(optional)</span></label>
-                            <div class="grid grid-cols-2 gap-2">
-                                <input type="text" x-model="tunnel.authClaimName" placeholder="claim (e.g. role)"
-                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                                <input type="text" x-model="tunnel.authClaimValue" placeholder="value (e.g. admin)"
-                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">User Header</label>
-                            <div class="grid grid-cols-2 gap-2">
-                                <input type="text" x-model="tunnel.authHeader" placeholder="x-Gatecrash-User"
-                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                                <input type="text" x-model="tunnel.authHeaderClaim" placeholder="email (claim for value)"
-                                       class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                            </div>
-                        </div>
+            <div class="border-t border-gray-200 pt-3 mt-1 space-y-2">
+                <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Access policies</p>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">IP Policy</label>
+                        <input type="text" x-model="tunnel.ipPolicy" placeholder="(none)"
+                               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                    </div>
+                    <div x-show="!(tunnel.type === 'http' && tunnel.tlsPassthrough) && tunnel.type === 'http'">
+                        <label class="block text-xs font-medium text-gray-600 mb-1">Auth Policy</label>
+                        <input type="text" x-model="tunnel.authPolicy" placeholder="(none)"
+                               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
                     </div>
                 </div>
-            </template>
-            <template x-if="!(tunnel.type === 'http' && tunnel.tlsPassthrough)">
-                <div class="border-t border-gray-200 pt-3 mt-1 space-y-2">
-                    <label class="flex items-center gap-2 text-sm">
-                        <input type="checkbox" x-model="tunnel.ipAllowlist" class="rounded">
-                        <span>IP Allowlist</span>
-                    </label>
-                    <div x-show="tunnel.ipAllowlist" class="space-y-1 pl-6">
-                        <label class="block text-xs font-medium text-gray-600 mb-1">Permanent IPs / CIDRs <span class="font-normal text-gray-400">(one per line or comma-separated)</span></label>
-                        <textarea x-model="tunnel.allowIps" rows="3" placeholder="203.0.113.4&#10;10.0.0.0/8"
-                                  class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></textarea>
-                        <p class="text-xs text-gray-400">Other visitors can self-authorize their current IP for 7 days after signing in.</p>
-                    </div>
-                </div>
-            </template>
+                <p class="text-xs text-gray-400">Reference an access policy by ID. Manage policies under Access Policies.</p>
+            </div>
         </div>
         <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
             <button @click="tunnelOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
@@ -497,7 +471,7 @@ function dashboard() {
         // Tunnel modal
         tunnelOpen: false,
         tunnelMode: 'create',
-        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, requireAuth: false, authClaimName: '', authClaimValue: '', authHeader: '', authHeaderClaim: '', ipAllowlist: false, allowIps: '' },
+        tunnel: { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, ipPolicy: '', authPolicy: '' },
         oidcConfigured: {{if .OIDCConfigured}}true{{else}}false{{end}},
 
         // Redirect modal
@@ -712,13 +686,13 @@ function dashboard() {
         // Tunnel CRUD
         openCreateTunnel() {
             this.tunnelMode = 'create';
-            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, requireAuth: false, authClaimName: '', authClaimValue: '', authHeader: '', authHeaderClaim: '', ipAllowlist: false, allowIps: '' };
+            this.tunnel = { id: '', type: 'http', hostnames: '', listenPort: '', preserveHost: false, tlsPassthrough: false, ipPolicy: '', authPolicy: '' };
             this.tunnelOpen = true;
         },
 
-        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough, requireAuth, authClaimName, authClaimValue, authHeader, authHeaderClaim, ipAllowlist, allowIps) {
+        openEditTunnel(id, type, hostnames, listenPort, preserveHost, tlsPassthrough, ipPolicy, authPolicy) {
             this.tunnelMode = 'edit';
-            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough, requireAuth: !!requireAuth, authClaimName: authClaimName || '', authClaimValue: authClaimValue || '', authHeader: authHeader || '', authHeaderClaim: authHeaderClaim || '', ipAllowlist: !!ipAllowlist, allowIps: allowIps || '' };
+            this.tunnel = { id, type, hostnames, listenPort: listenPort || '', preserveHost: !!preserveHost, tlsPassthrough: !!tlsPassthrough, ipPolicy: ipPolicy || '', authPolicy: authPolicy || '' };
             this.tunnelOpen = true;
         },
 
@@ -728,17 +702,14 @@ function dashboard() {
                 body.hostnames = this.tunnel.hostnames.split(',').map(h => h.trim()).filter(h => h);
                 body.preserve_host = this.tunnel.preserveHost;
                 body.tls_passthrough = this.tunnel.tlsPassthrough;
-                body.require_auth = this.tunnel.requireAuth;
-                body.auth_claim_name = this.tunnel.authClaimName;
-                body.auth_claim_value = this.tunnel.authClaimValue;
-                body.auth_header = this.tunnel.authHeader;
-                body.auth_header_claim = this.tunnel.authHeaderClaim;
             } else {
                 body.listen_port = parseInt(this.tunnel.listenPort, 10) || 0;
             }
-            // IP allowlist applies to both HTTP and TCP tunnels.
-            body.ip_allowlist = this.tunnel.ipAllowlist;
-            body.allow_ips = (this.tunnel.allowIps || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+            // Access policies (reference by ID).
+            body.ip_policy = (this.tunnel.ipPolicy || '').trim();
+            if (this.tunnel.type === 'http' && !this.tunnel.tlsPassthrough) {
+                body.auth_policy = (this.tunnel.authPolicy || '').trim();
+            }
 
             const url = this.tunnelMode === 'create' ? '/api/tunnels' : '/api/tunnels/' + this.tunnel.id;
             const method = this.tunnelMode === 'create' ? 'POST' : 'PUT';
@@ -1173,9 +1144,10 @@ function dashboard() {
     <td class="px-3 py-2" data-label="Status"><span class="status-dot {{if .Connected}}connected{{else}}disconnected{{end}}"></span></td>
     <td class="px-3 py-2 font-semibold" data-label="Tunnel">{{.ID}}</td>
     <td class="px-3 py-2" data-label="Type">
-        {{if eq .Type "http"}}{{if .RequireAuth}}<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700" title="Requires authentication">http <svg class="inline w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg></span>
-        {{else}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">http</span>{{end}}
+        {{if eq .Type "http"}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">http</span>
         {{else}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">tcp</span>{{end}}
+        {{if .IPPolicy}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700" title="IP policy">{{.IPPolicy}}</span>{{end}}
+        {{if .AuthPolicy}}<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700" title="Auth policy">{{.AuthPolicy}}</span>{{end}}
     </td>
     <td class="px-3 py-2" data-label="Routes">
         {{if eq .Type "http"}}{{if .TLSPassthrough}}{{range .Hostnames}}<div class="flex items-center gap-1.5">
@@ -1196,9 +1168,7 @@ function dashboard() {
         <div class="flex items-center justify-end gap-1">
             {{if .Connected}}<button @click="testTunnel('{{.ID}}')"
                     class="text-xs bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 rounded font-medium transition-colors">Test</button>{{end}}
-            {{if .IPAllowlist}}<button @click="openIPModal('{{.ID}}')"
-                    class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium transition-colors">IPs</button>{{end}}
-            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}}, {{.RequireAuth}}, '{{.AuthClaimName}}', '{{.AuthClaimValue}}', '{{.AuthHeader}}', '{{.AuthHeaderClaim}}', {{.IPAllowlist}}, '{{.AllowIPsCSV}}')"
+            <button @click="openEditTunnel('{{.ID}}', '{{.Type}}', '{{.HostnamesCSV}}', {{.ListenPort}}, {{.PreserveHost}}, {{.TLSPassthrough}}, '{{.IPPolicy}}', '{{.AuthPolicy}}')"
                     class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
             <button @click="regenerateSecret('{{.ID}}')"
                     class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">New Secret</button>

@@ -108,13 +108,14 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	// below don't block forever reading from a dead socket.
 	setTCPKeepAlive(conn, 30*time.Second)
 
-	// IP allowlist gate. TCP tunnels can't present an authorization page, so a
+	// IP policy gate. TCP tunnels can't present an authorization page, so a
 	// blocked client is simply dropped; IPs are enrolled out-of-band via the
-	// admin panel (the browser's egress IP matches the TCP client's).
-	if tunnel.IPAllowlist {
+	// admin panel or enrollment link (the browser's egress IP matches the
+	// TCP client's).
+	if pol := s.registry.FindIPPolicy(tunnel.IPPolicyID); pol != nil {
 		ip := tcpRemoteIP(conn)
-		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
-			slog.Debug("ip allowlist blocked TCP conn", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
+		if !pol.Allows(ip) && !s.ipAllow.IsGranted(pol.ID, ip) {
+			slog.Debug("ip policy blocked TCP conn", "tunnel", tunnel.ID, "policy", pol.ID, "remote", conn.RemoteAddr())
 			return
 		}
 	}

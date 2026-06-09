@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/jclement/gatecrash/internal/config"
 )
 
 func TestIPAllowStore_GrantIsGrantedRevoke(t *testing.T) {
@@ -69,10 +71,13 @@ func TestIPAllowStore_PersistsAcrossReload(t *testing.T) {
 	}
 }
 
-func TestStaticIPAllowed(t *testing.T) {
-	tun := newTunnelState(TunnelSpec{
-		ID:       "t1",
-		AllowIPs: []string{"203.0.113.5", "10.0.0.0/8", "garbage", "2001:db8::/32"},
+func TestIPPolicyAllows(t *testing.T) {
+	pol := newIPPolicyState(config.IPPolicy{
+		ID: "t1",
+		Ranges: []config.IPRange{
+			{CIDR: "203.0.113.5"}, {CIDR: "10.0.0.0/8"},
+			{CIDR: "garbage"}, {CIDR: "2001:db8::/32"},
+		},
 	})
 
 	cases := []struct {
@@ -87,9 +92,9 @@ func TestStaticIPAllowed(t *testing.T) {
 		{"2001:dba::1", false}, // outside v6 CIDR
 	}
 	for _, c := range cases {
-		got := tun.StaticIPAllowed(net.ParseIP(c.ip))
+		got := pol.Allows(net.ParseIP(c.ip))
 		if got != c.want {
-			t.Errorf("StaticIPAllowed(%s) = %v, want %v", c.ip, got, c.want)
+			t.Errorf("Allows(%s) = %v, want %v", c.ip, got, c.want)
 		}
 	}
 }

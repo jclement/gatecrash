@@ -35,13 +35,8 @@ type TunnelView struct {
 	ListenPort      int
 	PreserveHost    bool
 	TLSPassthrough  bool
-	RequireAuth     bool
-	AuthClaimName   string
-	AuthClaimValue  string
-	AuthHeader      string
-	AuthHeaderClaim string
-	IPAllowlist     bool
-	AllowIPs        []string
+	IPPolicy        string
+	AuthPolicy      string
 	Connected       bool
 	ClientCount     int
 	Clients         []ClientView
@@ -56,9 +51,6 @@ type TunnelView struct {
 
 // HostnamesCSV returns hostnames as a comma-separated string.
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
-
-// AllowIPsCSV returns the permanent IP allowlist entries as a comma-separated string.
-func (t TunnelView) AllowIPsCSV() string { return strings.Join(t.AllowIPs, ", ") }
 
 // ClientSummary returns a tooltip-friendly summary of all clients with uptime and version.
 // The output is sorted by address for a stable, deterministic tooltip.

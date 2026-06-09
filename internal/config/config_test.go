@@ -435,20 +435,47 @@ bind_addr = "0.0.0.0"
 	}
 }
 
-func TestValidate_RejectsRequireAuthWithPassthrough(t *testing.T) {
-	c := &Config{Tunnel: []Tunnel{
-		{ID: "ok", Type: "http", RequireAuth: true},
-		{ID: "bad", Type: "http", TLSPassthrough: true, RequireAuth: true},
-	}}
-	if err := c.Validate(); err == nil {
-		t.Fatal("expected require_auth + tls_passthrough to be rejected")
+func TestValidate_AuthPolicyConstraints(t *testing.T) {
+	base := ServerConfig{AdminHost: "admin.example.com"}
+
+	// auth_policy + tls_passthrough is rejected.
+	bad := &Config{
+		Server:     base,
+		AuthPolicy: []AuthPolicy{{ID: "a", Methods: []string{AuthMethodSystem}}},
+		Tunnel:     []Tunnel{{ID: "t", Type: "http", TLSPassthrough: true, AuthPolicy: "a"}},
+	}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("expected auth_policy + tls_passthrough to be rejected")
 	}
 
-	// IP allowlist + passthrough is allowed (enforced at the TCP layer).
-	ok := &Config{Tunnel: []Tunnel{
-		{ID: "p", Type: "http", TLSPassthrough: true, IPAllowlist: true, AllowIPs: []string{"10.0.0.0/8"}},
-	}}
+	// auth_policy on a TCP tunnel is rejected.
+	badTCP := &Config{
+		Server:     base,
+		AuthPolicy: []AuthPolicy{{ID: "a", Methods: []string{AuthMethodSystem}}},
+		Tunnel:     []Tunnel{{ID: "t", Type: "tcp", ListenPort: 22, AuthPolicy: "a"}},
+	}
+	if err := badTCP.Validate(); err == nil {
+		t.Fatal("expected auth_policy on a TCP tunnel to be rejected")
+	}
+
+	// Unknown policy reference is rejected.
+	unknown := &Config{Tunnel: []Tunnel{{ID: "t", Type: "http", IPPolicy: "nope"}}}
+	if err := unknown.Validate(); err == nil {
+		t.Fatal("expected unknown ip_policy reference to be rejected")
+	}
+
+	// password method requires a password.
+	noPass := &Config{AuthPolicy: []AuthPolicy{{ID: "a", Methods: []string{AuthMethodPassword}}}}
+	if err := noPass.Validate(); err == nil {
+		t.Fatal("expected password method without a password to be rejected")
+	}
+
+	// IP policy + passthrough is fine (IP gate works at the TCP layer).
+	ok := &Config{
+		IPPolicy: []IPPolicy{{ID: "ip", Ranges: []IPRange{{CIDR: "10.0.0.0/8"}}}},
+		Tunnel:   []Tunnel{{ID: "t", Type: "http", TLSPassthrough: true, IPPolicy: "ip"}},
+	}
 	if err := ok.Validate(); err != nil {
-		t.Fatalf("ip_allowlist + tls_passthrough should be allowed: %v", err)
+		t.Fatalf("ip_policy + tls_passthrough should be allowed: %v", err)
 	}
 }

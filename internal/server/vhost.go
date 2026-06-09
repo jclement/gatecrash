@@ -76,60 +76,83 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3.5 IP allowlist gate (independent of require_auth). Clients whose source
-	// IP is permanently allowed or holds a live self-service grant pass through;
-	// everyone else is shown a page to authorize their current IP.
-	if tunnel.IPAllowlist {
+	// Strip any inbound trusted-identity header to prevent spoofing. The auth
+	// policy re-injects it after a successful authentication.
+	r.Header.Del("x-Gatecrash-User")
+
+	// IP policy gate. Clients in a permanent range or holding a live self-service
+	// grant pass; everyone else is shown a page to authorize their current IP.
+	if pol := s.registry.FindIPPolicy(tunnel.IPPolicyID); pol != nil {
 		ip := clientIP(r)
-		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
-			slog.Debug("ip allowlist blocked", "tunnel", tunnel.ID, "ip", ip, "host", host)
+		if !pol.Allows(ip) && !s.ipAllow.IsGranted(pol.ID, ip) {
+			slog.Debug("ip policy blocked", "tunnel", tunnel.ID, "policy", pol.ID, "ip", ip, "host", host)
 			s.serveIPAuthorizePage(w, r, tunnel, host, adminHost, httpsPort)
 			return
 		}
 	}
 
-	// Strip the trusted identity header to prevent spoofing from external clients
-	r.Header.Del("x-Gatecrash-User")
-
-	// 4. Check tunnel auth requirement
-	if tunnel.RequireAuth {
-		if s.oidcProvider != nil && s.tunnelAuth != nil {
-			// OIDC mode: require OIDC authentication
-			claims, ok := s.tunnelAuth.ValidateSession(r, host)
-			if !ok {
-				s.initiateTunnelAuth(w, r, host)
-				return
-			}
-
-			// Evaluate optional claim filter
-			if !admin.MatchesClaim(claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
-				s.serveErrorPage(w, r, http.StatusForbidden,
-					"Access Denied",
-					fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)),
-				)
-				return
-			}
-
-			// Inject user identity header
-			headerName := tunnel.AuthHeader
-			if headerName == "" {
-				headerName = "x-Gatecrash-User"
-			}
-			headerValue := claims.GetClaimValue(tunnel.AuthHeaderClaim)
-			if headerValue == "" {
-				headerValue = claims.Email
-			}
-			r.Header.Set(headerName, headerValue)
-		} else {
-			// Passkey mode: require passkey tunnel session on this hostname
-			if !s.passkeyTunnelAuth.ValidateSession(r, host) {
-				s.initiateTunnelPasskeyAuth(w, r, host)
-				return
-			}
+	// Auth policy gate (any enabled method satisfies it).
+	if pol := s.registry.FindAuthPolicy(tunnel.AuthPolicyID); pol != nil {
+		if !s.enforceAuthPolicy(w, r, host, pol) {
+			return // enforceAuthPolicy already wrote a response (challenge/deny)
 		}
 	}
 
 	s.proxyHTTP(w, r, tunnel)
+}
+
+// enforceAuthPolicy authenticates a request against an auth policy. Methods are
+// OR'd. Returns true to proceed; false means it already wrote a response (a
+// challenge redirect, a 401, or a 403).
+func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host string, pol *AuthPolicyState) bool {
+	r.Header.Del(pol.headerName())
+
+	// 1. HTTP Basic (static password), if provided.
+	if pol.usesPassword() {
+		if user, ok := s.checkBasic(r, pol); ok {
+			r.Header.Set(pol.headerName(), user)
+			return true
+		}
+	}
+
+	// 2. System session (OIDC or passkey, per global config).
+	if pol.usesSystem() {
+		if s.oidcProvider != nil && s.tunnelAuth != nil {
+			if claims, ok := s.tunnelAuth.ValidateSession(r, host); ok {
+				if !admin.MatchesClaim(claims.Raw, pol.ClaimName, pol.ClaimValue) {
+					s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
+						fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)))
+					return false
+				}
+				val := claims.GetClaimValue(pol.HeaderClaim)
+				if val == "" {
+					val = claims.Email
+				}
+				r.Header.Set(pol.headerName(), val)
+				return true
+			}
+		} else if s.passkeyTunnelAuth.ValidateSession(r, host) {
+			return true
+		}
+	}
+
+	// 3. No method satisfied — challenge. Prefer the browser system flow; fall
+	// back to a Basic challenge for password-only policies.
+	if pol.usesSystem() {
+		if s.oidcProvider != nil && s.tunnelAuth != nil {
+			s.initiateTunnelAuth(w, r, host)
+		} else {
+			s.initiateTunnelPasskeyAuth(w, r, host)
+		}
+		return false
+	}
+	if pol.usesPassword() {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, host))
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return false
+	}
+	s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied", "No authentication method available.")
+	return false
 }
 
 func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status int, title, message string) {
@@ -308,13 +331,15 @@ func (s *Server) handleTunnelOIDCComplete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Evaluate optional claim filter
-	tunnel := s.registry.FindByHostname(hostname)
-	if tunnel != nil && !admin.MatchesClaim(result.claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
-		s.serveErrorPage(w, r, http.StatusForbidden,
-			"Access Denied",
-			fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(hostname)))
-		return
+	// Evaluate the optional claim filter from the tunnel's auth policy.
+	if tunnel := s.registry.FindByHostname(hostname); tunnel != nil {
+		if pol := s.registry.FindAuthPolicy(tunnel.AuthPolicyID); pol != nil &&
+			!admin.MatchesClaim(result.claims.Raw, pol.ClaimName, pol.ClaimValue) {
+			s.serveErrorPage(w, r, http.StatusForbidden,
+				"Access Denied",
+				fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(hostname)))
+			return
+		}
 	}
 
 	// Create tunnel auth session cookie on this hostname

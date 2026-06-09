@@ -1,9 +1,7 @@
 package server
 
 import (
-	"log/slog"
 	"math/rand/v2"
-	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -31,20 +29,14 @@ type clientConn struct {
 
 // TunnelState holds the runtime state for a configured tunnel.
 type TunnelState struct {
-	ID              string
-	Type            string // "http" or "tcp"
-	Hostnames       []string
-	ListenPort      int
-	PreserveHost    bool
-	TLSPassthrough  bool
-	RequireAuth     bool
-	AuthClaimName   string
-	AuthClaimValue  string
-	AuthHeader      string
-	AuthHeaderClaim string
-	IPAllowlist     bool
-	AllowIPs        []string     // raw permanent entries (IPs/CIDRs), for display
-	allowNets       []*net.IPNet // parsed permanent entries, for matching
+	ID             string
+	Type           string // "http" or "tcp"
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
+	IPPolicyID     string // referenced ip_policy, or ""
+	AuthPolicyID   string // referenced auth_policy, or ""
 
 	mu      sync.RWMutex
 	clients map[ssh.Conn]clientConn
@@ -52,41 +44,27 @@ type TunnelState struct {
 }
 
 // TunnelSpec is the config-derived subset of a tunnel that the registry needs.
-// Using a named type (rather than a repeated anonymous struct) keeps the Reload
-// call sites readable and makes adding fields a one-line change.
 type TunnelSpec struct {
-	ID              string
-	Type            string
-	Hostnames       []string
-	ListenPort      int
-	PreserveHost    bool
-	TLSPassthrough  bool
-	RequireAuth     bool
-	AuthClaimName   string
-	AuthClaimValue  string
-	AuthHeader      string
-	AuthHeaderClaim string
-	IPAllowlist     bool
-	AllowIPs        []string
+	ID             string
+	Type           string
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
+	IPPolicyID     string
+	AuthPolicyID   string
 }
 
-// applySpec copies config-derived fields onto the tunnel, parsing the permanent
-// IP allowlist entries into matchable networks. Connection state and metrics are
-// left untouched so a live tunnel survives a reload.
+// applySpec copies config-derived fields onto the tunnel. Connection state and
+// metrics are left untouched so a live tunnel survives a reload.
 func (t *TunnelState) applySpec(spec TunnelSpec) {
 	t.Type = spec.Type
 	t.Hostnames = spec.Hostnames
 	t.ListenPort = spec.ListenPort
 	t.PreserveHost = spec.PreserveHost
 	t.TLSPassthrough = spec.TLSPassthrough
-	t.RequireAuth = spec.RequireAuth
-	t.AuthClaimName = spec.AuthClaimName
-	t.AuthClaimValue = spec.AuthClaimValue
-	t.AuthHeader = spec.AuthHeader
-	t.AuthHeaderClaim = spec.AuthHeaderClaim
-	t.IPAllowlist = spec.IPAllowlist
-	t.AllowIPs = spec.AllowIPs
-	t.allowNets = parseAllowIPs(spec.ID, spec.AllowIPs)
+	t.IPPolicyID = spec.IPPolicyID
+	t.AuthPolicyID = spec.AuthPolicyID
 }
 
 // newTunnelState builds a tunnel from a spec.
@@ -94,43 +72,6 @@ func newTunnelState(spec TunnelSpec) *TunnelState {
 	t := &TunnelState{ID: spec.ID}
 	t.applySpec(spec)
 	return t
-}
-
-// StaticIPAllowed reports whether ip matches a permanent allowlist entry.
-// Self-service (TTL'd) grants are checked separately via the IPAllowStore.
-func (t *TunnelState) StaticIPAllowed(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	for _, n := range t.allowNets {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// parseAllowIPs converts allowlist entries (bare IPs or CIDRs) into networks,
-// skipping (and logging) any that don't parse so one bad entry can't break the
-// whole tunnel.
-func parseAllowIPs(tunnelID string, entries []string) []*net.IPNet {
-	var nets []*net.IPNet
-	for _, e := range entries {
-		if _, n, err := net.ParseCIDR(e); err == nil {
-			nets = append(nets, n)
-			continue
-		}
-		if ip := net.ParseIP(e); ip != nil {
-			bits := 32
-			if ip.To4() == nil {
-				bits = 128
-			}
-			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
-			continue
-		}
-		slog.Warn("ignoring invalid allow_ips entry", "tunnel", tunnelID, "entry", e)
-	}
-	return nets
 }
 
 func (t *TunnelState) IsConnected() bool {
@@ -215,18 +156,79 @@ func (t *TunnelState) SetClientVersion(conn ssh.Conn, version string) {
 
 // Registry holds all configured tunnels and provides lookups.
 type Registry struct {
-	mu     sync.RWMutex
-	byID   map[string]*TunnelState
-	byHost map[string]*TunnelState
-	byPort map[int]*TunnelState
+	mu           sync.RWMutex
+	byID         map[string]*TunnelState
+	byHost       map[string]*TunnelState
+	byPort       map[int]*TunnelState
+	ipPolicies   map[string]*IPPolicyState
+	authPolicies map[string]*AuthPolicyState
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byID:   make(map[string]*TunnelState),
-		byHost: make(map[string]*TunnelState),
-		byPort: make(map[int]*TunnelState),
+		byID:         make(map[string]*TunnelState),
+		byHost:       make(map[string]*TunnelState),
+		byPort:       make(map[int]*TunnelState),
+		ipPolicies:   make(map[string]*IPPolicyState),
+		authPolicies: make(map[string]*AuthPolicyState),
 	}
+}
+
+// SetPolicies replaces the registry's access policies (called at startup and on
+// config reload).
+func (r *Registry) SetPolicies(ip []*IPPolicyState, auth []*AuthPolicyState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ipPolicies = make(map[string]*IPPolicyState, len(ip))
+	for _, p := range ip {
+		r.ipPolicies[p.ID] = p
+	}
+	r.authPolicies = make(map[string]*AuthPolicyState, len(auth))
+	for _, p := range auth {
+		r.authPolicies[p.ID] = p
+	}
+}
+
+func (r *Registry) FindIPPolicy(id string) *IPPolicyState {
+	if id == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ipPolicies[id]
+}
+
+func (r *Registry) FindAuthPolicy(id string) *AuthPolicyState {
+	if id == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.authPolicies[id]
+}
+
+// AllIPPolicies returns all IP policies, sorted by ID.
+func (r *Registry) AllIPPolicies() []*IPPolicyState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*IPPolicyState, 0, len(r.ipPolicies))
+	for _, p := range r.ipPolicies {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// AllAuthPolicies returns all auth policies, sorted by ID.
+func (r *Registry) AllAuthPolicies() []*AuthPolicyState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*AuthPolicyState, 0, len(r.authPolicies))
+	for _, p := range r.authPolicies {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (r *Registry) Register(t *TunnelState) {

@@ -34,11 +34,11 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 			SSHPort   int
 		}{
 			Tunnels: []admin.TunnelView{{
-				ID:          "mcp",
-				Type:        "http",
-				Hostnames:   []string{"mcp.example.com"},
-				IPAllowlist: true,
-				AllowIPs:    []string{"203.0.113.4", "10.0.0.0/8"},
+				ID:         "mcp",
+				Type:       "http",
+				Hostnames:  []string{"mcp.example.com"},
+				IPPolicy:   "internal",
+				AuthPolicy: "staff",
 			}},
 			SSHPort: 2222,
 		},
@@ -48,13 +48,13 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 		t.Fatalf("render status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	// The edit button should carry the new args through to openEditTunnel.
-	if !strings.Contains(body, "203.0.113.4, 10.0.0.0/8") {
-		t.Error("expected AllowIPsCSV to render in the dashboard")
+	// The grid should show the policy badges and the edit button should carry
+	// the policy refs through to openEditTunnel.
+	if !strings.Contains(body, ">internal<") || !strings.Contains(body, ">staff<") {
+		t.Error("expected ip/auth policy badges in the dashboard")
 	}
-	// An allowlist tunnel should expose the IPs management button.
-	if !strings.Contains(body, "openIPModal('mcp')") {
-		t.Error("expected IPs button for an ip_allowlist tunnel")
+	if !strings.Contains(body, "'internal', 'staff')") {
+		t.Error("expected openEditTunnel to receive the policy refs")
 	}
 }
 

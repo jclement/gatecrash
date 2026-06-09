@@ -114,20 +114,28 @@ func (s *Server) runIPAllowCleanup(ctx context.Context) {
 // specFromConfig maps a config tunnel into the registry's TunnelSpec.
 func specFromConfig(tc config.Tunnel) TunnelSpec {
 	return TunnelSpec{
-		ID:              tc.ID,
-		Type:            tc.Type,
-		Hostnames:       tc.Hostnames,
-		ListenPort:      tc.ListenPort,
-		PreserveHost:    tc.PreserveHost,
-		TLSPassthrough:  tc.TLSPassthrough,
-		RequireAuth:     tc.RequireAuth,
-		AuthClaimName:   tc.AuthClaimName,
-		AuthClaimValue:  tc.AuthClaimValue,
-		AuthHeader:      tc.AuthHeader,
-		AuthHeaderClaim: tc.AuthHeaderClaim,
-		IPAllowlist:     tc.IPAllowlist,
-		AllowIPs:        tc.AllowIPs,
+		ID:             tc.ID,
+		Type:           tc.Type,
+		Hostnames:      tc.Hostnames,
+		ListenPort:     tc.ListenPort,
+		PreserveHost:   tc.PreserveHost,
+		TLSPassthrough: tc.TLSPassthrough,
+		IPPolicyID:     tc.IPPolicy,
+		AuthPolicyID:   tc.AuthPolicy,
 	}
+}
+
+// policiesFromConfig builds runtime policy states from config.
+func policiesFromConfig(cfg *config.Config) ([]*IPPolicyState, []*AuthPolicyState) {
+	ip := make([]*IPPolicyState, 0, len(cfg.IPPolicy))
+	for _, p := range cfg.IPPolicy {
+		ip = append(ip, newIPPolicyState(p))
+	}
+	auth := make([]*AuthPolicyState, 0, len(cfg.AuthPolicy))
+	for _, p := range cfg.AuthPolicy {
+		auth = append(auth, newAuthPolicyState(p))
+	}
+	return ip, auth
 }
 
 // New creates a new server instance.
@@ -162,6 +170,9 @@ func (s *Server) Run(ctx context.Context) error {
 	s.ipAllow = ipAllow
 	go s.runIPAllowCleanup(ctx)
 
+	// Load access policies into the registry.
+	s.registry.SetPolicies(policiesFromConfig(s.cfg))
+
 	// Build tunnel registry from config
 	for _, tc := range s.cfg.Tunnel {
 		s.registry.Register(newTunnelState(specFromConfig(tc)))
@@ -181,13 +192,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.sshServer = sshSrv
 
-	// Validate that require_auth tunnels have admin_host configured
-	if s.cfg.Server.AdminHost == "" {
-		for _, tc := range s.cfg.Tunnel {
-			if tc.RequireAuth {
-				return fmt.Errorf("tunnel %q has require_auth=true but server.admin_host is not configured — authentication requires the admin panel", tc.ID)
-			}
-		}
+	// Reject configs with unenforceable access-control combinations.
+	if err := s.cfg.Validate(); err != nil {
+		return err
 	}
 
 	// Setup admin panel — enabled only when admin_host is configured
@@ -429,10 +436,17 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireCSRF(s.handleDeleteTunnel))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireCSRF(s.handleRegenerateSecret))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireCSRF(s.handleTunnelTest))
-	s.adminMux.HandleFunc("GET /api/tunnels/{id}/ips", s.requireAuthAPI(s.handleListTunnelIPs))
-	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}/ips/{ip}", s.requireCSRF(s.handleRevokeTunnelIP))
-	s.adminMux.HandleFunc("POST /api/tunnels/{id}/enroll-token", s.requireCSRF(s.handleRotateEnrollToken))
-	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}/enroll-token", s.requireCSRF(s.handleDeleteEnrollToken))
+	// Access policies
+	s.adminMux.HandleFunc("GET /api/ip-policies", s.requireAuthAPI(s.handleListIPPolicies))
+	s.adminMux.HandleFunc("POST /api/ip-policies", s.requireCSRF(s.handleSaveIPPolicy))
+	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}", s.requireCSRF(s.handleDeleteIPPolicy))
+	s.adminMux.HandleFunc("GET /api/ip-policies/{id}/ips", s.requireAuthAPI(s.handleListPolicyIPs))
+	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/ips/{ip}", s.requireCSRF(s.handleRevokePolicyIP))
+	s.adminMux.HandleFunc("POST /api/ip-policies/{id}/enroll-token", s.requireCSRF(s.handleRotateEnrollToken))
+	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/enroll-token", s.requireCSRF(s.handleDeleteEnrollToken))
+	s.adminMux.HandleFunc("GET /api/auth-policies", s.requireAuthAPI(s.handleListAuthPolicies))
+	s.adminMux.HandleFunc("POST /api/auth-policies", s.requireCSRF(s.handleSaveAuthPolicy))
+	s.adminMux.HandleFunc("DELETE /api/auth-policies/{id}", s.requireCSRF(s.handleDeleteAuthPolicy))
 	// Public, unauthenticated, rate-limited self-service enrollment link.
 	s.adminMux.HandleFunc("GET /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollPage))
 	s.adminMux.HandleFunc("POST /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollSubmit))
@@ -723,28 +737,23 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			hostCerts = append(hostCerts, hc)
 		}
 		views[i] = admin.TunnelView{
-			ID:              t.ID,
-			Type:            t.Type,
-			Hostnames:       t.Hostnames,
-			ListenPort:      t.ListenPort,
-			PreserveHost:    t.PreserveHost,
-			TLSPassthrough:  t.TLSPassthrough,
-			RequireAuth:     t.RequireAuth,
-			AuthClaimName:   t.AuthClaimName,
-			AuthClaimValue:  t.AuthClaimValue,
-			AuthHeader:      t.AuthHeader,
-			AuthHeaderClaim: t.AuthHeaderClaim,
-			IPAllowlist:     t.IPAllowlist,
-			AllowIPs:        t.AllowIPs,
-			Connected:       t.IsConnected(),
-			ClientCount:     t.ClientCount(),
-			Clients:         buildClientViews(t),
-			Requests:        t.Metrics.RequestCount.Load(),
-			BytesIn:         t.Metrics.BytesIn.Load(),
-			BytesOut:        t.Metrics.BytesOut.Load(),
-			ActiveConns:     int32(t.Metrics.ActiveConns.Load()),
-			HostCerts:       hostCerts,
-			ServerVersion:   strings.TrimPrefix(s.version, "v"),
+			ID:             t.ID,
+			Type:           t.Type,
+			Hostnames:      t.Hostnames,
+			ListenPort:     t.ListenPort,
+			PreserveHost:   t.PreserveHost,
+			TLSPassthrough: t.TLSPassthrough,
+			IPPolicy:       t.IPPolicyID,
+			AuthPolicy:     t.AuthPolicyID,
+			Connected:      t.IsConnected(),
+			ClientCount:    t.ClientCount(),
+			Clients:        buildClientViews(t),
+			Requests:       t.Metrics.RequestCount.Load(),
+			BytesIn:        t.Metrics.BytesIn.Load(),
+			BytesOut:       t.Metrics.BytesOut.Load(),
+			ActiveConns:    int32(t.Metrics.ActiveConns.Load()),
+			HostCerts:      hostCerts,
+			ServerVersion:  strings.TrimPrefix(s.version, "v"),
 		}
 	}
 	return views
@@ -791,19 +800,14 @@ func (s *Server) buildRedirectViews() []RedirectView {
 var tunnelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 type tunnelRequest struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type"`
-	Hostnames       []string `json:"hostnames"`
-	ListenPort      int      `json:"listen_port"`
-	PreserveHost    bool     `json:"preserve_host"`
-	TLSPassthrough  bool     `json:"tls_passthrough"`
-	RequireAuth     bool     `json:"require_auth"`
-	AuthClaimName   string   `json:"auth_claim_name"`
-	AuthClaimValue  string   `json:"auth_claim_value"`
-	AuthHeader      string   `json:"auth_header"`
-	AuthHeaderClaim string   `json:"auth_header_claim"`
-	IPAllowlist     bool     `json:"ip_allowlist"`
-	AllowIPs        []string `json:"allow_ips"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Hostnames      []string `json:"hostnames"`
+	ListenPort     int      `json:"listen_port"`
+	PreserveHost   bool     `json:"preserve_host"`
+	TLSPassthrough bool     `json:"tls_passthrough"`
+	IPPolicy       string   `json:"ip_policy"`
+	AuthPolicy     string   `json:"auth_policy"`
 }
 
 func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
@@ -819,18 +823,18 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 	if req.Type == "tcp" && req.ListenPort <= 0 {
 		return fmt.Errorf("TCP tunnels require a listen_port > 0")
 	}
-	if req.RequireAuth && req.Type == "tcp" {
-		return fmt.Errorf("require_auth is not supported on TCP tunnels")
+	if req.IPPolicy != "" && s.registry.FindIPPolicy(req.IPPolicy) == nil {
+		return fmt.Errorf("unknown ip_policy %q", req.IPPolicy)
 	}
-	if req.RequireAuth && req.TLSPassthrough {
-		return fmt.Errorf("require_auth is not supported with TLS passthrough (auth is bypassed at the TLS layer)")
-	}
-	for _, entry := range req.AllowIPs {
-		if _, _, err := net.ParseCIDR(entry); err == nil {
-			continue
+	if req.AuthPolicy != "" {
+		if s.registry.FindAuthPolicy(req.AuthPolicy) == nil {
+			return fmt.Errorf("unknown auth_policy %q", req.AuthPolicy)
 		}
-		if net.ParseIP(entry) == nil {
-			return fmt.Errorf("invalid allow_ips entry %q: must be an IP or CIDR", entry)
+		if req.Type == "tcp" {
+			return fmt.Errorf("auth_policy is not supported on TCP tunnels")
+		}
+		if req.TLSPassthrough {
+			return fmt.Errorf("auth_policy is not supported with TLS passthrough (auth is bypassed at the TLS layer)")
 		}
 	}
 
@@ -916,20 +920,15 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cfg.Tunnel = append(s.cfg.Tunnel, config.Tunnel{
-		ID:              req.ID,
-		Type:            req.Type,
-		Hostnames:       req.Hostnames,
-		ListenPort:      req.ListenPort,
-		SecretHash:      hash,
-		PreserveHost:    req.PreserveHost,
-		TLSPassthrough:  req.TLSPassthrough,
-		RequireAuth:     req.RequireAuth,
-		AuthClaimName:   req.AuthClaimName,
-		AuthClaimValue:  req.AuthClaimValue,
-		AuthHeader:      req.AuthHeader,
-		AuthHeaderClaim: req.AuthHeaderClaim,
-		IPAllowlist:     req.IPAllowlist,
-		AllowIPs:        req.AllowIPs,
+		ID:             req.ID,
+		Type:           req.Type,
+		Hostnames:      req.Hostnames,
+		ListenPort:     req.ListenPort,
+		SecretHash:     hash,
+		PreserveHost:   req.PreserveHost,
+		TLSPassthrough: req.TLSPassthrough,
+		IPPolicy:       req.IPPolicy,
+		AuthPolicy:     req.AuthPolicy,
 	})
 	if err := s.cfg.Save(s.configPath); err != nil {
 		slog.Error("failed to save config", "error", err)
@@ -973,13 +972,8 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tunnel[i].ListenPort = req.ListenPort
 			s.cfg.Tunnel[i].PreserveHost = req.PreserveHost
 			s.cfg.Tunnel[i].TLSPassthrough = req.TLSPassthrough
-			s.cfg.Tunnel[i].RequireAuth = req.RequireAuth
-			s.cfg.Tunnel[i].AuthClaimName = req.AuthClaimName
-			s.cfg.Tunnel[i].AuthClaimValue = req.AuthClaimValue
-			s.cfg.Tunnel[i].AuthHeader = req.AuthHeader
-			s.cfg.Tunnel[i].AuthHeaderClaim = req.AuthHeaderClaim
-			s.cfg.Tunnel[i].IPAllowlist = req.IPAllowlist
-			s.cfg.Tunnel[i].AllowIPs = req.AllowIPs
+			s.cfg.Tunnel[i].IPPolicy = req.IPPolicy
+			s.cfg.Tunnel[i].AuthPolicy = req.AuthPolicy
 			found = true
 			break
 		}
@@ -1422,29 +1416,19 @@ func (s *Server) handlePostUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigReload applies a new config, updating the tunnel registry and config reference.
 func (s *Server) handleConfigReload(newCfg *config.Config) {
-	// Reject configs with unenforceable access-control combinations.
+	// Reject configs with unenforceable access-control combinations or bad
+	// policy references.
 	if err := newCfg.Validate(); err != nil {
 		slog.Error("config reload rejected", "error", err)
 		s.sse.Broadcast("config-error", err.Error())
 		return
 	}
 
-	// Validate that require_auth tunnels still have admin_host configured
-	if newCfg.Server.AdminHost == "" {
-		for _, tc := range newCfg.Tunnel {
-			if tc.RequireAuth {
-				slog.Error("config reload rejected: tunnel has require_auth=true but server.admin_host is not configured",
-					"tunnel", tc.ID)
-				s.sse.Broadcast("config-error", fmt.Sprintf("tunnel %q has require_auth=true but admin_host is not set", tc.ID))
-				return
-			}
-		}
-	}
-
 	tunnels := make([]TunnelSpec, len(newCfg.Tunnel))
 	for i, tc := range newCfg.Tunnel {
 		tunnels[i] = specFromConfig(tc)
 	}
+	s.registry.SetPolicies(policiesFromConfig(newCfg))
 	s.registry.Reload(tunnels)
 
 	s.cfgMu.Lock()
@@ -1698,6 +1682,7 @@ func (s *Server) handleAuditLogPage(w http.ResponseWriter, r *http.Request) {
 	s.adminH.Render(w, "pages/auditlog.html", &admin.PageData{
 		Title:          "Audit Log",
 		Active:         "auditlog",
+		CSRFToken:      s.sessionMgr.CSRFToken(r),
 		OIDCConfigured: oidcConfigured,
 	})
 }
