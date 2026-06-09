@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,8 +58,15 @@ type Server struct {
 	// Bandwidth history
 	bwTracker *bandwidthTracker
 
-	// Rate limiter for auth endpoints
+	// Rate limiter for HTTP auth endpoints
 	authLimiter *ipRateLimiter
+
+	// SSH auth abuse protection: a per-IP attempt limiter plus a semaphore that
+	// bounds concurrent bcrypt evaluations (each tunnel-token check is a cost-12
+	// bcrypt), so a flood of attempts can't pin every core.
+	sshAuthLimiter        *ipRateLimiter
+	bcryptSem             chan struct{}
+	sshAuthAcquireTimeout time.Duration
 
 	// Auth components
 	passkeyStore *admin.PasskeyStore
@@ -134,6 +142,12 @@ func New(cfg *config.Config, configPath, version string) *Server {
 		pendingTunnelAuth: make(map[string]*pendingTunnelAuthResult),
 		bwTracker:   newBandwidthTracker(120), // ~4 min at 2s intervals
 		authLimiter: newIPRateLimiter(20, time.Minute),
+
+		// Per-IP cap is generous (legit clients behind one NAT may reconnect
+		// together); the semaphore is what actually bounds CPU.
+		sshAuthLimiter:        newIPRateLimiter(30, time.Minute),
+		bcryptSem:             make(chan struct{}, max(2, runtime.NumCPU())),
+		sshAuthAcquireTimeout: 3 * time.Second,
 	}
 }
 

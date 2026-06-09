@@ -31,6 +31,15 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 		Addr:        fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, s.cfg.Server.SSHPort),
 		IdleTimeout: 90 * time.Second, // Client sends heartbeats every 30s; 3 missed = dead
 		PasswordHandler: func(ctx ssh.Context, password string) bool {
+			// Throttle before the expensive bcrypt check so a flood of auth
+			// attempts can't exhaust CPU (each token check is a cost-12 bcrypt).
+			proceed, release := s.sshAuthGate(stripPort(ctx.RemoteAddr().String()))
+			if !proceed {
+				slog.Warn("SSH auth throttled", "remote", ctx.RemoteAddr())
+				return false
+			}
+			defer release()
+
 			tunnelID, valid := token.Validate(password, s.cfg.LookupSecretHash)
 			if !valid {
 				slog.Warn("SSH auth failed", "remote", ctx.RemoteAddr())

@@ -23,6 +23,23 @@ const (
 	channelOpenTimeout = 15 * time.Second
 )
 
+// sshAuthGate applies per-IP rate limiting and bounds concurrent bcrypt work
+// for SSH authentication. It returns proceed=false to reject the attempt cheaply
+// (rate-limited, or overloaded). On proceed=true the caller MUST call release()
+// when the bcrypt check is done, to free the concurrency slot.
+func (s *Server) sshAuthGate(remoteIP string) (proceed bool, release func()) {
+	if !s.sshAuthLimiter.allow(remoteIP) {
+		return false, nil
+	}
+	select {
+	case s.bcryptSem <- struct{}{}:
+		return true, func() { <-s.bcryptSem }
+	case <-time.After(s.sshAuthAcquireTimeout):
+		// All bcrypt slots busy long enough that this is likely a flood; shed it.
+		return false, nil
+	}
+}
+
 // pingConn sends an SSH keepalive global request and reports whether the peer
 // answered within timeout. Any reply (even a rejection) proves the link is
 // alive in both directions — this matches OpenSSH keepalive semantics. The
