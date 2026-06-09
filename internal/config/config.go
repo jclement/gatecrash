@@ -85,6 +85,11 @@ type Tunnel struct {
 	// or neither.
 	IPAllowlist bool     `toml:"ip_allowlist,omitempty"`
 	AllowIPs    []string `toml:"allow_ips,omitempty"` // permanent IPs or CIDRs
+	// EnrollToken, when set, enables a shareable self-service enrollment link
+	// (/enroll/<token> on the admin host) that lets anyone with the link
+	// authorize their own source IP without signing in. Bearer secret — rotate
+	// to invalidate old links.
+	EnrollToken string `toml:"enroll_token,omitempty"`
 }
 
 type Redirect struct {
@@ -456,6 +461,9 @@ func (c *Config) Save(path string) error {
 			}
 			if len(t.AllowIPs) > 0 {
 				fmt.Fprintf(&b, "allow_ips = [%s]\n", formatStringSlice(t.AllowIPs))
+			}
+			if t.EnrollToken != "" {
+				fmt.Fprintf(&b, "enroll_token = %q\n", t.EnrollToken)
 			}
 			b.WriteString("\n")
 		}

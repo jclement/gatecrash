@@ -312,6 +312,31 @@
                     </tbody>
                 </table>
             </div>
+            <!-- Shareable enrollment link -->
+            <div class="border-t border-gray-200 pt-3">
+                <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Enrollment link</h4>
+                <p class="text-xs text-gray-400 mb-2">Anyone with this link can authorize their own IP for 7 days <strong>without signing in</strong>. Treat it like a password; rotate to invalidate old links.</p>
+                <template x-if="!ipEnrollUrl">
+                    <button @click="rotateEnrollLink()"
+                            class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded font-medium transition-colors">Create enrollment link</button>
+                </template>
+                <template x-if="ipEnrollUrl">
+                    <div class="space-y-2">
+                        <div class="flex items-center gap-1.5">
+                            <input type="text" readonly :value="ipEnrollUrl" @focus="$event.target.select()"
+                                   class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-xs font-mono bg-gray-50">
+                            <button @click="copyEnrollLink()"
+                                    class="text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 px-2 py-1.5 rounded font-medium transition-colors">Copy</button>
+                        </div>
+                        <div class="flex gap-1.5">
+                            <button @click="rotateEnrollLink()"
+                                    class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium transition-colors">Rotate</button>
+                            <button @click="removeEnrollLink()"
+                                    class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Remove</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
         </div>
         <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
             <button @click="ipOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Close</button>
@@ -466,6 +491,7 @@ function dashboard() {
         ipTunnel: '',
         ipStatic: [],
         ipGrants: [],
+        ipEnrollUrl: '',
         ipLoading: false,
 
         // Tunnel modal
@@ -765,6 +791,7 @@ function dashboard() {
             this.ipTunnel = id;
             this.ipStatic = [];
             this.ipGrants = [];
+            this.ipEnrollUrl = '';
             this.ipOpen = true;
             this._loadIPs(id);
         },
@@ -778,11 +805,41 @@ function dashboard() {
                 const data = await resp.json();
                 this.ipStatic = data.static || [];
                 this.ipGrants = data.grants || [];
+                this.ipEnrollUrl = data.enroll_url || '';
             } catch (_) {
                 this.showToast('Failed to load IPs');
             } finally {
                 this.ipLoading = false;
             }
+        },
+
+        async rotateEnrollLink() {
+            try {
+                const resp = await fetch('/api/tunnels/' + this.ipTunnel + '/enroll-token', { method: 'POST', headers: csrfHeaders() });
+                if (_authExpired(resp)) return;
+                if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
+                const data = await resp.json();
+                this.ipEnrollUrl = data.url || '';
+                this.showToast('Enrollment link updated');
+            } catch (_) { this.showToast('Failed to update link'); }
+        },
+
+        removeEnrollLink() {
+            this.showConfirm('Remove enrollment link',
+                'Remove the enrollment link? Anyone holding it will no longer be able to self-authorize.',
+                'Remove', 'bg-red-600 hover:bg-red-700',
+                async () => {
+                    const resp = await fetch('/api/tunnels/' + this.ipTunnel + '/enroll-token', { method: 'DELETE', headers: csrfHeaders() });
+                    if (_authExpired(resp)) return;
+                    if (!resp.ok) { this.showToast('Failed: ' + await resp.text()); return; }
+                    this.ipEnrollUrl = '';
+                });
+        },
+
+        copyEnrollLink() {
+            navigator.clipboard?.writeText(this.ipEnrollUrl)
+                .then(() => this.showToast('Link copied'))
+                .catch(() => this.showToast('Copy failed'));
         },
 
         revokeIP(ip) {

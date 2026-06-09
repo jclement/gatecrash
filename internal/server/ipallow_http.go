@@ -189,10 +189,12 @@ func (s *Server) handleListTunnelIPs(w http.ResponseWriter, r *http.Request) {
 		IPAllowlist bool      `json:"ip_allowlist"`
 		Static      []string  `json:"static"`
 		Grants      []IPGrant `json:"grants"`
+		EnrollURL   string    `json:"enroll_url"`
 	}{
 		IPAllowlist: tunnel.IPAllowlist,
 		Static:      tunnel.AllowIPs,
 		Grants:      s.ipAllow.List(id),
+		EnrollURL:   s.enrollURL(s.enrollTokenFor(id)),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

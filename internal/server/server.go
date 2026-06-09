@@ -417,6 +417,11 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireCSRF(s.handleTunnelTest))
 	s.adminMux.HandleFunc("GET /api/tunnels/{id}/ips", s.requireAuthAPI(s.handleListTunnelIPs))
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}/ips/{ip}", s.requireCSRF(s.handleRevokeTunnelIP))
+	s.adminMux.HandleFunc("POST /api/tunnels/{id}/enroll-token", s.requireCSRF(s.handleRotateEnrollToken))
+	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}/enroll-token", s.requireCSRF(s.handleDeleteEnrollToken))
+	// Public, unauthenticated, rate-limited self-service enrollment link.
+	s.adminMux.HandleFunc("GET /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollPage))
+	s.adminMux.HandleFunc("POST /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollSubmit))
 	s.adminMux.HandleFunc("POST /api/redirects", s.requireCSRF(s.handleCreateRedirect))
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireCSRF(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
