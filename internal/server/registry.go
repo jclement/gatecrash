@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,7 +235,7 @@ func (r *Registry) Register(t *TunnelState) {
 
 	r.byID[t.ID] = t
 	for _, h := range t.Hostnames {
-		r.byHost[h] = t
+		r.byHost[strings.ToLower(h)] = t
 	}
 	if t.ListenPort > 0 {
 		r.byPort[t.ListenPort] = t
@@ -250,7 +251,7 @@ func (r *Registry) FindByID(id string) *TunnelState {
 func (r *Registry) FindByHostname(host string) *TunnelState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.byHost[host]
+	return r.byHost[strings.ToLower(host)] // hostnames are case-insensitive (DNS)
 }
 
 func (r *Registry) FindByPort(port int) *TunnelState {
@@ -294,7 +295,7 @@ func (r *Registry) Reload(specs []TunnelSpec) {
 		}
 		newByID[spec.ID] = t
 		for _, h := range spec.Hostnames {
-			newByHost[h] = t
+			newByHost[strings.ToLower(h)] = t
 		}
 		if spec.ListenPort > 0 {
 			newByPort[spec.ListenPort] = t

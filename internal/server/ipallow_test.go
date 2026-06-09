@@ -113,3 +113,23 @@ func TestSafeTunnelReturnURL(t *testing.T) {
 		}
 	}
 }
+
+func TestIPAllowStore_GrantCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ip_allowlist.json")
+	store, _ := NewIPAllowStore(path)
+	// Grant more than the cap from distinct IPs.
+	for i := 0; i < maxGrantsPerTunnel+50; i++ {
+		ip := net.IPv4(10, 0, byte(i/256), byte(i%256)).String()
+		if err := store.Grant("t", ip, "x", time.Hour); err != nil {
+			t.Fatalf("grant: %v", err)
+		}
+	}
+	if got := len(store.List("t")); got != maxGrantsPerTunnel {
+		t.Fatalf("expected store capped at %d, got %d", maxGrantsPerTunnel, got)
+	}
+	// The most recent IP must still be present (oldest are evicted, not newest).
+	last := net.IPv4(10, 0, byte((maxGrantsPerTunnel+49)/256), byte((maxGrantsPerTunnel+49)%256))
+	if !store.IsGranted("t", last) {
+		t.Fatal("most recent grant should survive the cap")
+	}
+}

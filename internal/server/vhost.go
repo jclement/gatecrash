@@ -26,7 +26,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Check redirects before tunnel lookup
 	for _, redir := range redirects {
-		if host == redir.From {
+		if strings.EqualFold(host, redir.From) {
 			target := redir.To
 			if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 				target = "https://" + target
@@ -41,7 +41,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Admin panel — served at admin_host's root
-	if adminHost != "" && host == adminHost {
+	if adminHost != "" && strings.EqualFold(host, adminHost) {
 		s.serveAdmin(w, r)
 		return
 	}

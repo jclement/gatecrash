@@ -22,6 +22,11 @@ type IPGrant struct {
 
 func (g IPGrant) expired(now time.Time) bool { return now.After(g.ExpiresAt) }
 
+// maxGrantsPerTunnel bounds the live self-service grants kept for one tunnel, so
+// a flapping/rotating source IP can't grow the store without limit. When
+// exceeded, the oldest grants are evicted.
+const maxGrantsPerTunnel = 256
+
 // IPAllowStore persists per-tunnel self-service IP grants to a JSON file. It is
 // safe for concurrent use. Permanent allowlist entries live in the tunnel config
 // (AllowIPs); this store holds only the dynamic, TTL'd grants.
@@ -87,6 +92,11 @@ func (s *IPAllowStore) Grant(tunnelID, ip, by string, ttl time.Duration) error {
 		GrantedAt: now,
 		ExpiresAt: now.Add(ttl),
 	})
+	// Bound the per-tunnel grant count, evicting the oldest.
+	if len(kept) > maxGrantsPerTunnel {
+		sort.Slice(kept, func(i, j int) bool { return kept[i].GrantedAt.Before(kept[j].GrantedAt) })
+		kept = kept[len(kept)-maxGrantsPerTunnel:]
+	}
 	s.grants[tunnelID] = kept
 	return s.save()
 }
