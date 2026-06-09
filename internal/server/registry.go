@@ -1,7 +1,9 @@
 package server
 
 import (
+	"log/slog"
 	"math/rand/v2"
+	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -39,10 +41,95 @@ type TunnelState struct {
 	AuthClaimValue  string
 	AuthHeader      string
 	AuthHeaderClaim string
+	IPAllowlist     bool
+	AllowIPs        []string     // raw permanent entries (IPs/CIDRs), for display
+	allowNets       []*net.IPNet // parsed permanent entries, for matching
 
 	mu      sync.RWMutex
 	clients map[ssh.Conn]clientConn
 	Metrics TunnelMetrics
+}
+
+// TunnelSpec is the config-derived subset of a tunnel that the registry needs.
+// Using a named type (rather than a repeated anonymous struct) keeps the Reload
+// call sites readable and makes adding fields a one-line change.
+type TunnelSpec struct {
+	ID              string
+	Type            string
+	Hostnames       []string
+	ListenPort      int
+	PreserveHost    bool
+	TLSPassthrough  bool
+	RequireAuth     bool
+	AuthClaimName   string
+	AuthClaimValue  string
+	AuthHeader      string
+	AuthHeaderClaim string
+	IPAllowlist     bool
+	AllowIPs        []string
+}
+
+// applySpec copies config-derived fields onto the tunnel, parsing the permanent
+// IP allowlist entries into matchable networks. Connection state and metrics are
+// left untouched so a live tunnel survives a reload.
+func (t *TunnelState) applySpec(spec TunnelSpec) {
+	t.Type = spec.Type
+	t.Hostnames = spec.Hostnames
+	t.ListenPort = spec.ListenPort
+	t.PreserveHost = spec.PreserveHost
+	t.TLSPassthrough = spec.TLSPassthrough
+	t.RequireAuth = spec.RequireAuth
+	t.AuthClaimName = spec.AuthClaimName
+	t.AuthClaimValue = spec.AuthClaimValue
+	t.AuthHeader = spec.AuthHeader
+	t.AuthHeaderClaim = spec.AuthHeaderClaim
+	t.IPAllowlist = spec.IPAllowlist
+	t.AllowIPs = spec.AllowIPs
+	t.allowNets = parseAllowIPs(spec.ID, spec.AllowIPs)
+}
+
+// newTunnelState builds a tunnel from a spec.
+func newTunnelState(spec TunnelSpec) *TunnelState {
+	t := &TunnelState{ID: spec.ID}
+	t.applySpec(spec)
+	return t
+}
+
+// StaticIPAllowed reports whether ip matches a permanent allowlist entry.
+// Self-service (TTL'd) grants are checked separately via the IPAllowStore.
+func (t *TunnelState) StaticIPAllowed(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range t.allowNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseAllowIPs converts allowlist entries (bare IPs or CIDRs) into networks,
+// skipping (and logging) any that don't parse so one bad entry can't break the
+// whole tunnel.
+func parseAllowIPs(tunnelID string, entries []string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, e := range entries {
+		if _, n, err := net.ParseCIDR(e); err == nil {
+			nets = append(nets, n)
+			continue
+		}
+		if ip := net.ParseIP(e); ip != nil {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		slog.Warn("ignoring invalid allow_ips entry", "tunnel", tunnelID, "entry", e)
+	}
+	return nets
 }
 
 func (t *TunnelState) IsConnected() bool {
@@ -185,67 +272,32 @@ func (r *Registry) AllTunnels() []*TunnelState {
 	return tunnels
 }
 
-// Reload updates the registry with new tunnel configs.
+// Reload updates the registry with new tunnel specs.
 // Existing tunnels keep their connection state and metrics.
 // New tunnels are added, removed tunnels are dropped (connections will be closed by SSH).
-func (r *Registry) Reload(tunnels []struct {
-	ID              string
-	Type            string
-	Hostnames       []string
-	ListenPort      int
-	PreserveHost    bool
-	TLSPassthrough  bool
-	RequireAuth     bool
-	AuthClaimName   string
-	AuthClaimValue  string
-	AuthHeader      string
-	AuthHeaderClaim string
-}) {
+func (r *Registry) Reload(specs []TunnelSpec) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Build new maps, preserving existing tunnel state where IDs match
-	newByID := make(map[string]*TunnelState, len(tunnels))
+	newByID := make(map[string]*TunnelState, len(specs))
 	newByHost := make(map[string]*TunnelState)
 	newByPort := make(map[int]*TunnelState)
 
-	for _, tc := range tunnels {
-		var t *TunnelState
-		if existing, ok := r.byID[tc.ID]; ok {
+	for _, spec := range specs {
+		t, ok := r.byID[spec.ID]
+		if ok {
 			// Preserve existing tunnel state (connection, metrics)
-			t = existing
-			t.Type = tc.Type
-			t.Hostnames = tc.Hostnames
-			t.ListenPort = tc.ListenPort
-			t.PreserveHost = tc.PreserveHost
-			t.TLSPassthrough = tc.TLSPassthrough
-			t.RequireAuth = tc.RequireAuth
-			t.AuthClaimName = tc.AuthClaimName
-			t.AuthClaimValue = tc.AuthClaimValue
-			t.AuthHeader = tc.AuthHeader
-			t.AuthHeaderClaim = tc.AuthHeaderClaim
+			t.applySpec(spec)
 		} else {
-			// New tunnel
-			t = &TunnelState{
-				ID:              tc.ID,
-				Type:            tc.Type,
-				Hostnames:       tc.Hostnames,
-				ListenPort:      tc.ListenPort,
-				PreserveHost:    tc.PreserveHost,
-				TLSPassthrough:  tc.TLSPassthrough,
-				RequireAuth:     tc.RequireAuth,
-				AuthClaimName:   tc.AuthClaimName,
-				AuthClaimValue:  tc.AuthClaimValue,
-				AuthHeader:      tc.AuthHeader,
-				AuthHeaderClaim: tc.AuthHeaderClaim,
-			}
+			t = newTunnelState(spec)
 		}
-		newByID[tc.ID] = t
-		for _, h := range tc.Hostnames {
+		newByID[spec.ID] = t
+		for _, h := range spec.Hostnames {
 			newByHost[h] = t
 		}
-		if tc.ListenPort > 0 {
-			newByPort[tc.ListenPort] = t
+		if spec.ListenPort > 0 {
+			newByPort[spec.ListenPort] = t
 		}
 	}
 

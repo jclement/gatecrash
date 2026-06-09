@@ -108,6 +108,17 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	// below don't block forever reading from a dead socket.
 	setTCPKeepAlive(conn, 30*time.Second)
 
+	// IP allowlist gate. TCP tunnels can't present an authorization page, so a
+	// blocked client is simply dropped; IPs are enrolled out-of-band via the
+	// admin panel (the browser's egress IP matches the TCP client's).
+	if tunnel.IPAllowlist {
+		ip := tcpRemoteIP(conn)
+		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
+			slog.Debug("ip allowlist blocked TCP conn", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
+			return
+		}
+	}
+
 	sshConn := tunnel.PickConn()
 	if sshConn == nil {
 		slog.Debug("TCP forward: tunnel offline", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
@@ -162,6 +173,18 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	}()
 	<-done
 	<-done
+}
+
+// tcpRemoteIP returns the source IP of a forwarded TCP connection.
+func tcpRemoteIP(conn net.Conn) net.IP {
+	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		return ta.IP
+	}
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		host = conn.RemoteAddr().String()
+	}
+	return net.ParseIP(host)
 }
 
 func parseAddr(addr string) (string, uint32) {

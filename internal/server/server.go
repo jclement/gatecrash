@@ -70,6 +70,9 @@ type Server struct {
 	tunnelAuth        *admin.TunnelAuthSession
 	passkeyTunnelAuth *admin.PasskeyTunnelSession
 
+	// Self-service IP allowlist grants (TTL'd), persisted to ip_allowlist.json.
+	ipAllow *IPAllowStore
+
 	// Pending tunnel auth results, keyed by one-time token.
 	// After OIDC exchange on the admin host, results are parked here
 	// and the browser is redirected to the tunnel hostname to pick them up.
@@ -84,6 +87,39 @@ type pendingTunnelAuthResult struct {
 	hostname  string
 	returnURL string
 	expires   time.Time
+}
+
+// runIPAllowCleanup periodically prunes expired self-service IP grants.
+func (s *Server) runIPAllowCleanup(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.ipAllow.pruneExpired()
+		}
+	}
+}
+
+// specFromConfig maps a config tunnel into the registry's TunnelSpec.
+func specFromConfig(tc config.Tunnel) TunnelSpec {
+	return TunnelSpec{
+		ID:              tc.ID,
+		Type:            tc.Type,
+		Hostnames:       tc.Hostnames,
+		ListenPort:      tc.ListenPort,
+		PreserveHost:    tc.PreserveHost,
+		TLSPassthrough:  tc.TLSPassthrough,
+		RequireAuth:     tc.RequireAuth,
+		AuthClaimName:   tc.AuthClaimName,
+		AuthClaimValue:  tc.AuthClaimValue,
+		AuthHeader:      tc.AuthHeader,
+		AuthHeaderClaim: tc.AuthHeaderClaim,
+		IPAllowlist:     tc.IPAllowlist,
+		AllowIPs:        tc.AllowIPs,
+	}
 }
 
 // New creates a new server instance.
@@ -103,22 +139,18 @@ func New(cfg *config.Config, configPath, version string) *Server {
 
 // Run starts all server components and blocks until shutdown.
 func (s *Server) Run(ctx context.Context) error {
+	// IP allowlist grant store (used for enforcement on HTTP and TCP tunnels;
+	// always initialized so enforcement works even without the admin panel).
+	ipAllow, err := NewIPAllowStore(filepath.Join(filepath.Dir(s.configPath), "ip_allowlist.json"))
+	if err != nil {
+		return fmt.Errorf("ip allowlist store: %w", err)
+	}
+	s.ipAllow = ipAllow
+	go s.runIPAllowCleanup(ctx)
+
 	// Build tunnel registry from config
 	for _, tc := range s.cfg.Tunnel {
-		t := &TunnelState{
-			ID:              tc.ID,
-			Type:            tc.Type,
-			Hostnames:       tc.Hostnames,
-			ListenPort:      tc.ListenPort,
-			PreserveHost:    tc.PreserveHost,
-			TLSPassthrough:  tc.TLSPassthrough,
-			RequireAuth:     tc.RequireAuth,
-			AuthClaimName:   tc.AuthClaimName,
-			AuthClaimValue:  tc.AuthClaimValue,
-			AuthHeader:      tc.AuthHeader,
-			AuthHeaderClaim: tc.AuthHeaderClaim,
-		}
-		s.registry.Register(t)
+		s.registry.Register(newTunnelState(specFromConfig(tc)))
 
 		hasSecret := tc.SecretHash != ""
 		slog.Info("registered tunnel",
@@ -369,6 +401,7 @@ func (s *Server) setupAdminRoutes() {
 	// Protected routes — require auth
 	s.adminMux.HandleFunc("GET /", s.requireAuth(s.handleAdminDashboard))
 	s.adminMux.HandleFunc("GET /help", s.requireAuth(s.handleHelp))
+	s.adminMux.HandleFunc("GET /authorize-ip", s.requireAuth(s.handleAuthorizeIP))
 	s.adminMux.HandleFunc("GET /passkeys", s.requireAuth(s.handlePasskeys))
 	s.adminMux.HandleFunc("POST /passkeys/delete", s.requireAuth(s.handleDeletePasskey))
 	s.adminMux.HandleFunc("GET /api/session/keepalive", s.handleSessionKeepalive)
@@ -381,6 +414,8 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireCSRF(s.handleDeleteTunnel))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireCSRF(s.handleRegenerateSecret))
 	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireCSRF(s.handleTunnelTest))
+	s.adminMux.HandleFunc("GET /api/tunnels/{id}/ips", s.requireAuthAPI(s.handleListTunnelIPs))
+	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}/ips/{ip}", s.requireCSRF(s.handleRevokeTunnelIP))
 	s.adminMux.HandleFunc("POST /api/redirects", s.requireCSRF(s.handleCreateRedirect))
 	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireCSRF(s.handleEditRedirect))
 	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireCSRF(s.handleDeleteRedirect))
@@ -660,6 +695,8 @@ func (s *Server) buildTunnelViews() []admin.TunnelView {
 			AuthClaimValue:  t.AuthClaimValue,
 			AuthHeader:      t.AuthHeader,
 			AuthHeaderClaim: t.AuthHeaderClaim,
+			IPAllowlist:     t.IPAllowlist,
+			AllowIPs:        t.AllowIPs,
 			Connected:       t.IsConnected(),
 			ClientCount:     t.ClientCount(),
 			Clients:         buildClientViews(t),
@@ -726,6 +763,8 @@ type tunnelRequest struct {
 	AuthClaimValue  string   `json:"auth_claim_value"`
 	AuthHeader      string   `json:"auth_header"`
 	AuthHeaderClaim string   `json:"auth_header_claim"`
+	IPAllowlist     bool     `json:"ip_allowlist"`
+	AllowIPs        []string `json:"allow_ips"`
 }
 
 func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
@@ -746,6 +785,17 @@ func (s *Server) validateTunnel(req tunnelRequest, excludeID string) error {
 	}
 	if req.RequireAuth && req.TLSPassthrough {
 		return fmt.Errorf("require_auth is not supported with TLS passthrough (auth is bypassed at the TLS layer)")
+	}
+	if req.IPAllowlist && req.TLSPassthrough {
+		return fmt.Errorf("ip_allowlist is not supported with TLS passthrough (traffic bypasses the HTTP layer)")
+	}
+	for _, entry := range req.AllowIPs {
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			continue
+		}
+		if net.ParseIP(entry) == nil {
+			return fmt.Errorf("invalid allow_ips entry %q: must be an IP or CIDR", entry)
+		}
 	}
 
 	// Check for conflicts
@@ -842,6 +892,8 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		AuthClaimValue:  req.AuthClaimValue,
 		AuthHeader:      req.AuthHeader,
 		AuthHeaderClaim: req.AuthHeaderClaim,
+		IPAllowlist:     req.IPAllowlist,
+		AllowIPs:        req.AllowIPs,
 	})
 	if err := s.cfg.Save(s.configPath); err != nil {
 		slog.Error("failed to save config", "error", err)
@@ -890,6 +942,8 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tunnel[i].AuthClaimValue = req.AuthClaimValue
 			s.cfg.Tunnel[i].AuthHeader = req.AuthHeader
 			s.cfg.Tunnel[i].AuthHeaderClaim = req.AuthHeaderClaim
+			s.cfg.Tunnel[i].IPAllowlist = req.IPAllowlist
+			s.cfg.Tunnel[i].AllowIPs = req.AllowIPs
 			found = true
 			break
 		}
@@ -1344,45 +1398,9 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 		}
 	}
 
-	tunnels := make([]struct {
-		ID              string
-		Type            string
-		Hostnames       []string
-		ListenPort      int
-		PreserveHost    bool
-		TLSPassthrough  bool
-		RequireAuth     bool
-		AuthClaimName   string
-		AuthClaimValue  string
-		AuthHeader      string
-		AuthHeaderClaim string
-	}, len(newCfg.Tunnel))
+	tunnels := make([]TunnelSpec, len(newCfg.Tunnel))
 	for i, tc := range newCfg.Tunnel {
-		tunnels[i] = struct {
-			ID              string
-			Type            string
-			Hostnames       []string
-			ListenPort      int
-			PreserveHost    bool
-			TLSPassthrough  bool
-			RequireAuth     bool
-			AuthClaimName   string
-			AuthClaimValue  string
-			AuthHeader      string
-			AuthHeaderClaim string
-		}{
-			ID:              tc.ID,
-			Type:            tc.Type,
-			Hostnames:       tc.Hostnames,
-			ListenPort:      tc.ListenPort,
-			PreserveHost:    tc.PreserveHost,
-			TLSPassthrough:  tc.TLSPassthrough,
-			RequireAuth:     tc.RequireAuth,
-			AuthClaimName:   tc.AuthClaimName,
-			AuthClaimValue:  tc.AuthClaimValue,
-			AuthHeader:      tc.AuthHeader,
-			AuthHeaderClaim: tc.AuthHeaderClaim,
-		}
+		tunnels[i] = specFromConfig(tc)
 	}
 	s.registry.Reload(tunnels)
 

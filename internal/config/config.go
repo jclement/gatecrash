@@ -79,6 +79,12 @@ type Tunnel struct {
 	AuthClaimValue  string   `toml:"auth_claim_value,omitempty"`
 	AuthHeader      string   `toml:"auth_header,omitempty"`
 	AuthHeaderClaim string   `toml:"auth_header_claim,omitempty"`
+	// IPAllowlist, when true, restricts access to clients whose source IP is in
+	// AllowIPs (permanent) or has been granted a temporary self-service grant.
+	// It is an independent gate from RequireAuth — a tunnel may use either, both,
+	// or neither.
+	IPAllowlist bool     `toml:"ip_allowlist,omitempty"`
+	AllowIPs    []string `toml:"allow_ips,omitempty"` // permanent IPs or CIDRs
 }
 
 type Redirect struct {
@@ -382,6 +388,8 @@ func (c *Config) Save(path string) error {
 		b.WriteString("# auth_claim_value = \"engineering\"   # claim value that must match\n")
 		b.WriteString("# auth_header = \"x-Gatecrash-User\"   # header injected into proxied requests\n")
 		b.WriteString("# auth_header_claim = \"email\"        # claim value to put in the header\n")
+		b.WriteString("# ip_allowlist = true                # restrict access by source IP (independent of require_auth)\n")
+		b.WriteString("# allow_ips = [\"203.0.113.4\", \"10.0.0.0/8\"]  # permanently allowed IPs/CIDRs; others can self-authorize\n")
 		b.WriteString("#\n")
 		b.WriteString("# [[tunnel]]\n")
 		b.WriteString("# id = \"example-tcp\"\n")
@@ -422,6 +430,12 @@ func (c *Config) Save(path string) error {
 				if t.AuthHeaderClaim != "" {
 					fmt.Fprintf(&b, "auth_header_claim = %q\n", t.AuthHeaderClaim)
 				}
+			}
+			if t.IPAllowlist {
+				b.WriteString("ip_allowlist = true\n")
+			}
+			if len(t.AllowIPs) > 0 {
+				fmt.Fprintf(&b, "allow_ips = [%s]\n", formatStringSlice(t.AllowIPs))
 			}
 			b.WriteString("\n")
 		}

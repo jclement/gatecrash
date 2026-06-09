@@ -21,6 +21,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RLock()
 	redirects := s.cfg.Redirect
 	adminHost := s.cfg.Server.AdminHost
+	httpsPort := s.cfg.Server.HTTPSPort
 	s.cfgMu.RUnlock()
 
 	// 1. Check redirects before tunnel lookup
@@ -73,6 +74,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("The service at <strong>%s</strong> is currently offline.", html.EscapeString(host)),
 		)
 		return
+	}
+
+	// 3.5 IP allowlist gate (independent of require_auth). Clients whose source
+	// IP is permanently allowed or holds a live self-service grant pass through;
+	// everyone else is shown a page to authorize their current IP.
+	if tunnel.IPAllowlist {
+		ip := clientIP(r)
+		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
+			slog.Debug("ip allowlist blocked", "tunnel", tunnel.ID, "ip", ip, "host", host)
+			s.serveIPAuthorizePage(w, r, tunnel, host, adminHost, httpsPort)
+			return
+		}
 	}
 
 	// Strip the trusted identity header to prevent spoofing from external clients
@@ -155,6 +168,83 @@ func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status i
 // isSafeReturnURL validates that a return URL is a relative path (not an open redirect).
 func isSafeReturnURL(u string) bool {
 	return len(u) > 0 && u[0] == '/' && (len(u) == 1 || u[1] != '/')
+}
+
+// clientIP extracts the source IP of a request. The gatecrash server is the
+// public edge, so RemoteAddr is the real client address.
+func clientIP(r *http.Request) net.IP {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return net.ParseIP(host)
+}
+
+func ipString(ip net.IP) string {
+	if ip == nil {
+		return "unknown"
+	}
+	return ip.String()
+}
+
+// serveIPAuthorizePage is shown to a client whose IP is not on a tunnel's
+// allowlist. It offers a one-click flow to authorize the current IP, which runs
+// through the admin host's authenticated /authorize-ip endpoint.
+func (s *Server) serveIPAuthorizePage(w http.ResponseWriter, r *http.Request, tunnel *TunnelState, host, adminHost string, httpsPort int) {
+	ip := ipString(clientIP(r))
+
+	// Without an admin host there is no authenticated enrollment endpoint, so we
+	// can only report the denial.
+	if adminHost == "" {
+		s.serveErrorPage(w, r, http.StatusForbidden, "Access Restricted",
+			fmt.Sprintf("Access to <strong>%s</strong> is restricted by IP. Your address <strong>%s</strong> is not allowed.",
+				html.EscapeString(host), html.EscapeString(ip)))
+		return
+	}
+
+	base := "https://" + adminHost
+	if httpsPort != 443 {
+		base = fmt.Sprintf("https://%s:%d", adminHost, httpsPort)
+	}
+	returnURL := fmt.Sprintf("https://%s%s", host, r.URL.RequestURI())
+	authorizeURL := fmt.Sprintf("%s/authorize-ip?tunnel=%s&return=%s",
+		base, url.QueryEscape(tunnel.ID), url.QueryEscape(returnURL))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access Restricted — Gatecrash</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #f5f5f5; color: #333; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; }
+  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
+          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  h1 { font-size: 20px; margin-bottom: 12px; }
+  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 12px; }
+  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
+  .btn { display: inline-block; margin-top: 16px; padding: 12px 24px; background: #2563eb;
+         color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; }
+  .btn:hover { background: #1d4ed8; }
+  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Access Restricted</h1>
+  <p>Access to <strong>%s</strong> is limited to authorized IP addresses.</p>
+  <p>Your current address is <span class="ip">%s</span>.</p>
+  <a class="btn" href="%s">Authorize this IP</a>
+  <p style="margin-top:16px;font-size:12px;color:#999;">You'll be asked to sign in to authorize. The grant lasts 7 days.</p>
+  <div class="footer">Gatecrash</div>
+</div>
+</body>
+</html>`, html.EscapeString(host), html.EscapeString(ip), html.EscapeString(authorizeURL))
 }
 
 func stripPort(host string) string {
