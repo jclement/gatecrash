@@ -148,6 +148,7 @@ type PageData struct {
 	Data              any
 	OIDCConfigured    bool
 	OIDCProviderName  string
+	OIDCLoginURL      string // OIDC sign-in URL, carries an optional return path
 }
 
 // PasskeyView represents a passkey for display in templates.

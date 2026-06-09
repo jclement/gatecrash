@@ -6,7 +6,7 @@
         <p class="text-sm text-gray-500 mb-6">Authenticate to continue.</p>
 
         {{if .OIDCConfigured}}
-        <a href="/oidc/login"
+        <a href="{{if .OIDCLoginURL}}{{.OIDCLoginURL}}{{else}}/oidc/login{{end}}"
            class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded transition-colors">
             Sign in with {{if .OIDCProviderName}}{{.OIDCProviderName}}{{else}}OIDC{{end}}
         </a>
@@ -23,9 +23,9 @@
 
 {{if .OIDCConfigured}}
 <script>
-    // Auto-redirect to OIDC provider
+    // Auto-redirect to OIDC provider (preserving any return path)
     window.addEventListener('load', () => {
-        setTimeout(() => { window.location.href = '/oidc/login'; }, 500);
+        setTimeout(() => { window.location.href = '{{if .OIDCLoginURL}}{{.OIDCLoginURL}}{{else}}/oidc/login{{end}}'; }, 500);
     });
 </script>
 {{else}}

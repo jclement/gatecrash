@@ -461,7 +461,13 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		if !s.sessionMgr.ValidateSession(r) {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			// Preserve where the user was headed so login can return them there
+			// (e.g. the /authorize-ip IP-enrollment flow).
+			loginURL := "/login"
+			if ret := r.URL.RequestURI(); ret != "/" && isSafeReturnURL(ret) {
+				loginURL = "/login?return=" + url.QueryEscape(ret)
+			}
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
 			return
 		}
 		next(w, r)
@@ -521,10 +527,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	oidcName := s.cfg.OIDC.ProviderName
 	s.cfgMu.RUnlock()
 
+	// Carry a safe return URL through both login methods. The passkey flow reads
+	// it from window.location.search; the OIDC flow needs it baked into the link
+	// (the page auto-redirects to the provider).
+	ret := r.URL.Query().Get("return")
+	if ret != "" && !isSafeReturnURL(ret) {
+		ret = ""
+	}
+	oidcLoginURL := "/oidc/login"
+	if ret != "" {
+		oidcLoginURL += "?return=" + url.QueryEscape(ret)
+	}
+
 	s.adminH.Render(w, "pages/login.html", &admin.PageData{
 		Title:            "Login",
 		OIDCConfigured:   oidcEnabled,
 		OIDCProviderName: oidcName,
+		OIDCLoginURL:     oidcLoginURL,
 	})
 }
 
@@ -1451,7 +1470,12 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authURL, _, err := s.oidcProvider.AuthURL("admin", "/", "")
+	returnURL := "/"
+	if ret := r.URL.Query().Get("return"); ret != "" && isSafeReturnURL(ret) {
+		returnURL = ret
+	}
+
+	authURL, _, err := s.oidcProvider.AuthURL("admin", returnURL, "")
 	if err != nil {
 		slog.Error("failed to generate OIDC auth URL", "error", err)
 		http.Error(w, "failed to initiate OIDC login", http.StatusInternalServerError)
@@ -1483,7 +1507,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	switch st.Purpose() {
 	case "admin":
-		s.completeAdminOIDCLogin(w, r, claims)
+		s.completeAdminOIDCLogin(w, r, claims, st)
 	case "tunnel":
 		s.completeTunnelOIDCExchange(w, r, claims, st)
 	default:
@@ -1492,7 +1516,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // completeAdminOIDCLogin finishes an admin OIDC login after a successful exchange.
-func (s *Server) completeAdminOIDCLogin(w http.ResponseWriter, r *http.Request, claims *admin.OIDCClaims) {
+func (s *Server) completeAdminOIDCLogin(w http.ResponseWriter, r *http.Request, claims *admin.OIDCClaims, st *admin.OIDCState) {
 	s.cfgMu.RLock()
 	adminClaimName := s.cfg.OIDC.AdminClaimName
 	adminClaimValue := s.cfg.OIDC.AdminClaimValue
@@ -1513,7 +1537,14 @@ func (s *Server) completeAdminOIDCLogin(w http.ResponseWriter, r *http.Request, 
 
 	s.auditLog.Log(actor, "admin.login.oidc", "Logged in via OIDC")
 	slog.Info("OIDC admin login", "actor", actor)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+
+	// Return the user to where they were headed before login (validated to a
+	// safe same-origin path), e.g. the /authorize-ip IP-enrollment flow.
+	dest := "/"
+	if st != nil && isSafeReturnURL(st.ReturnURL) {
+		dest = st.ReturnURL
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
 // completeTunnelOIDCExchange parks the OIDC result in memory and redirects the browser

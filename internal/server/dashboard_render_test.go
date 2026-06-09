@@ -57,3 +57,29 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 		t.Error("expected IPs button for an ip_allowlist tunnel")
 	}
 }
+
+// TestLoginRendersReturnURL renders the real login template with an OIDC login
+// URL that carries a return path, confirming the template compiles (JS-context
+// escaping of OIDCLoginURL included) and threads the return through.
+func TestLoginRendersReturnURL(t *testing.T) {
+	tmplFS, err := fs.Sub(web.EmbeddedFS, "templates")
+	if err != nil {
+		t.Fatalf("sub fs: %v", err)
+	}
+	h, err := admin.NewHandlers("test", time.Hour, tmplFS)
+	if err != nil {
+		t.Fatalf("NewHandlers (template parse): %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.Render(rec, "pages/login.html", &admin.PageData{
+		Title:          "Login",
+		OIDCConfigured: true,
+		OIDCLoginURL:   "/oidc/login?return=%2Fauthorize-ip%3Ftunnel%3Dmcp",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("render status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "/oidc/login?return=") {
+		t.Error("expected OIDC login URL with return param in rendered login page")
+	}
+}
