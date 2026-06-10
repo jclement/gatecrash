@@ -97,9 +97,12 @@ func TestHandleEnrollPage_States(t *testing.T) {
 		return rec.Body.String()
 	}
 
-	// New visitor → authorize prompt.
+	// New visitor → authorize prompt. The public page must NOT disclose the
+	// internal policy ID ("internal") to whoever holds the enrollment link.
 	if b := get("203.0.113.5:1"); !strings.Contains(b, "Authorize my IP") {
 		t.Error("new visitor should see the authorize prompt")
+	} else if strings.Contains(b, "internal") {
+		t.Error("enroll page must not disclose the internal policy ID")
 	}
 	// Permanently allowed (in 198.51.100.0/24) → already-have-access, no form.
 	if b := get("198.51.100.7:1"); !strings.Contains(b, "permanently allowed") || strings.Contains(b, "Authorize my IP") {

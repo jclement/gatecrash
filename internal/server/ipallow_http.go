@@ -20,13 +20,11 @@ const ipGrantTTL = 7 * 24 * time.Hour
 // CSRF-protected POST (handleAuthorizeIPSubmit) — a state change must not be
 // drivable by a cross-site GET navigation.
 func (s *Server) handleAuthorizeIPPage(w http.ResponseWriter, r *http.Request) {
-	tunnelID := r.URL.Query().Get("tunnel")
 	returnURL := r.URL.Query().Get("return")
-
-	tunnel := s.registry.FindByID(tunnelID)
+	tunnel := s.tunnelFromReturnURL(returnURL)
 	if tunnel == nil {
-		s.serveErrorPage(w, r, http.StatusNotFound, "Unknown Tunnel",
-			"There is no tunnel with that ID.")
+		s.serveErrorPage(w, r, http.StatusBadRequest, "Authorization Failed",
+			"This authorization link is invalid.")
 		return
 	}
 	ip := clientIP(r)
@@ -36,20 +34,32 @@ func (s *Server) handleAuthorizeIPPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := tunnelID
+	name := ""
 	if hosts := tunnel.HostnameList(); len(hosts) > 0 {
 		name = hosts[0]
 	}
-	csrf := s.sessionMgr.CSRFToken(r)
 
 	s.renderStandalonePage(w, http.StatusOK, "ip-authorize", ipAuthorizePageData{
 		Title:     "Authorize IP",
 		IP:        ip.String(),
 		Name:      name,
-		TunnelID:  tunnelID,
 		ReturnURL: returnURL,
-		CSRF:      csrf,
+		CSRF:      s.sessionMgr.CSRFToken(r),
 	})
+}
+
+// tunnelFromReturnURL resolves the tunnel for an authorize-ip flow from the
+// service return URL's hostname. Keying off the hostname (instead of an explicit
+// tunnel ID in the link) keeps internal IDs out of anything a visitor can see.
+func (s *Server) tunnelFromReturnURL(raw string) *TunnelState {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return nil
+	}
+	return s.registry.FindByHostname(u.Hostname())
 }
 
 // handleAuthorizeIPSubmit (POST) performs the grant after validating CSRF.
@@ -60,13 +70,11 @@ func (s *Server) handleAuthorizeIPSubmit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tunnelID := r.FormValue("tunnel")
 	returnURL := r.FormValue("return")
-
-	tunnel := s.registry.FindByID(tunnelID)
+	tunnel := s.tunnelFromReturnURL(returnURL)
 	if tunnel == nil {
-		s.serveErrorPage(w, r, http.StatusNotFound, "Unknown Tunnel",
-			"There is no tunnel with that ID.")
+		s.serveErrorPage(w, r, http.StatusBadRequest, "Authorization Failed",
+			"This authorization link is invalid.")
 		return
 	}
 	ip := clientIP(r)
@@ -99,7 +107,13 @@ func (s *Server) handleAuthorizeIPSubmit(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, u, http.StatusSeeOther)
 		return
 	}
-	s.serveIPAuthorizedPage(w, r, tunnelID, ip.String())
+	// Show the hostname (which the admin already sees in the URL), not the
+	// internal tunnel ID. TCP tunnels have no hostname → generic confirmation.
+	name := ""
+	if hosts := tunnel.HostnameList(); len(hosts) > 0 {
+		name = hosts[0]
+	}
+	s.serveIPAuthorizedPage(w, r, name, ip.String())
 }
 
 // safeTunnelReturnURL returns the URL if it is an https URL whose host is one of
@@ -120,12 +134,14 @@ func safeTunnelReturnURL(raw string, tunnel *TunnelState) string {
 	return ""
 }
 
-func (s *Server) serveIPAuthorizedPage(w http.ResponseWriter, _ *http.Request, tunnelID, ip string) {
+// serveIPAuthorizedPage confirms a grant. name is a display label (a hostname)
+// or "" for a generic message — never an internal tunnel/policy ID.
+func (s *Server) serveIPAuthorizedPage(w http.ResponseWriter, _ *http.Request, name, ip string) {
 	s.renderStandalonePage(w, http.StatusOK, "ip-authorized", ipAuthorizedPageData{
 		Title:   "IP Authorized",
 		Heading: "IP Authorized",
 		IP:      ip,
-		Name:    tunnelID,
+		Name:    name,
 	})
 }
 

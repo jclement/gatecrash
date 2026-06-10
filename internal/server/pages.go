@@ -43,22 +43,24 @@ type errorPageData struct {
 
 // enrollPageData renders the self-service enrollment page. Mode is one of
 // "static" (already permanently allowed), "extend" (already granted), or "" (new).
+// It deliberately carries no policy/tunnel identifier: the enrollment link is
+// public, so internal IDs must not be disclosed to whoever holds it.
 type enrollPageData struct {
 	Title     string
 	Heading   string
 	IP        string
-	Label     string
 	Remaining string
 	Mode      string
 	Token     string
 }
 
-// ipAuthorizePageData renders the logged-in "authorize this IP" form.
+// ipAuthorizePageData renders the logged-in "authorize this IP" form. It carries
+// the service hostname (Name) and the return URL, but no internal tunnel/policy
+// ID — the admin host resolves the tunnel from the return URL's hostname.
 type ipAuthorizePageData struct {
 	Title     string
 	IP        string
 	Name      string
-	TunnelID  string
 	ReturnURL string
 	CSRF      string
 }
@@ -128,17 +130,16 @@ const standalonePagesTmpl = `
 {{template "foot" .}}{{end}}
 
 {{define "enroll"}}{{template "head" .}}  <h1>{{.Heading}}</h1>
-{{if eq .Mode "static"}}  <p>Your IP <span class="ip">{{.IP}}</span> is permanently allowed by <strong>{{.Label}}</strong>.</p>
-{{else if eq .Mode "extend"}}  <p>Your IP <span class="ip">{{.IP}}</span> is authorized by <strong>{{.Label}}</strong> — access expires in {{.Remaining}}.</p>
+{{if eq .Mode "static"}}  <p>Your IP <span class="ip">{{.IP}}</span> is already permanently allowed.</p>
+{{else if eq .Mode "extend"}}  <p>Your IP <span class="ip">{{.IP}}</span> is authorized &mdash; access expires in {{.Remaining}}.</p>
   <form method="POST" action="/enroll/{{.Token}}"><button class="btn" type="submit">Extend 7 days</button></form>
-{{else}}  <p>You've been invited to access services protected by <strong>{{.Label}}</strong>. Authorize your current IP <span class="ip">{{.IP}}</span> for 7 days?</p>
+{{else}}  <p>You've been invited to access a protected service. Authorize your current IP <span class="ip">{{.IP}}</span> for 7 days?</p>
   <form method="POST" action="/enroll/{{.Token}}"><button class="btn" type="submit">Authorize my IP</button></form>
 {{end}}{{template "foot" .}}{{end}}
 
 {{define "ip-authorize"}}{{template "head" .}}  <h1>Authorize this IP</h1>
   <p>Grant <span class="ip">{{.IP}}</span> access to <strong>{{.Name}}</strong> for 7 days?</p>
   <form method="POST" action="/authorize-ip">
-    <input type="hidden" name="tunnel" value="{{.TunnelID}}">
     <input type="hidden" name="return" value="{{.ReturnURL}}">
     <input type="hidden" name="csrf_token" value="{{.CSRF}}">
     <button class="btn" type="submit">Authorize this IP</button>
@@ -146,8 +147,9 @@ const standalonePagesTmpl = `
 {{template "foot" .}}{{end}}
 
 {{define "ip-authorized"}}{{template "head" .}}  <h1 class="success">&#10003; {{.Heading}}</h1>
-  <p>Your IP <span class="ip">{{.IP}}</span> may now access <strong>{{.Name}}</strong> for the next 7 days.</p>
-  <p>You can close this page.</p>
+{{if .Name}}  <p>Your IP <span class="ip">{{.IP}}</span> may now access <strong>{{.Name}}</strong> for the next 7 days.</p>
+{{else}}  <p>Your IP <span class="ip">{{.IP}}</span> is now authorized for the next 7 days.</p>
+{{end}}  <p>You can close this page.</p>
 {{template "foot" .}}{{end}}
 
 {{define "ip-restricted"}}{{template "head" .}}  <h1>Access Restricted</h1>

@@ -83,7 +83,6 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 	data := enrollPageData{
 		Title: "Authorize Access",
 		IP:    ip.String(),
-		Label: policyLabel(pol),
 		Token: token,
 	}
 	switch {
@@ -102,8 +101,6 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderStandalonePage(w, http.StatusOK, "enroll", data)
 }
-
-func policyLabel(p config.IPPolicy) string { return p.ID }
 
 // staticAllows reports whether ip is permanently allowed by the IP policy.
 func (s *Server) staticAllows(policyID string, ip net.IP) bool {
@@ -167,11 +164,12 @@ func (s *Server) handleEnrollSubmit(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Self-enrolled IP %s for ip_policy %q via link (7 days)", ip, pol.ID))
 	slog.Info("ip self-enrolled via link", "policy", pol.ID, "ip", ip)
 
+	// No policy/tunnel identifier here — this page is reached via the public
+	// enrollment link, so internal IDs must not be disclosed.
 	s.renderStandalonePage(w, http.StatusOK, "ip-authorized", ipAuthorizedPageData{
 		Title:   "Access Authorized",
 		Heading: "Access Authorized",
 		IP:      ip.String(),
-		Name:    policyLabel(pol),
 	})
 }
 

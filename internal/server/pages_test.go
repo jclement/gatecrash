@@ -18,9 +18,9 @@ func TestStandalonePages_RenderAndEscape(t *testing.T) {
 		data any
 	}{
 		{"error", errorPageData{Title: "Oops", Status: 403, Heading: "Denied", Message: "plain message"}},
-		{"enroll", enrollPageData{Title: "Authorize", Heading: "Authorize Access", IP: evil, Label: evil, Mode: "", Token: evil}},
-		{"enroll", enrollPageData{Title: "Authorize", Heading: "Extend", IP: "1.2.3.4", Label: "lan", Mode: "extend", Remaining: "3 days", Token: "tok"}},
-		{"ip-authorize", ipAuthorizePageData{Title: "Authorize IP", IP: evil, Name: evil, TunnelID: evil, ReturnURL: evil, CSRF: evil}},
+		{"enroll", enrollPageData{Title: "Authorize", Heading: "Authorize Access", IP: evil, Mode: "", Token: evil}},
+		{"enroll", enrollPageData{Title: "Authorize", Heading: "Extend", IP: "1.2.3.4", Mode: "extend", Remaining: "3 days", Token: "tok"}},
+		{"ip-authorize", ipAuthorizePageData{Title: "Authorize IP", IP: evil, Name: evil, ReturnURL: evil, CSRF: evil}},
 		{"ip-authorized", ipAuthorizedPageData{Title: "Done", Heading: "Authorized", IP: evil, Name: evil}},
 		{"ip-restricted", ipRestrictedPageData{Title: "Restricted", Host: evil, IP: evil, AuthorizeURL: "https://admin/x"}},
 	}

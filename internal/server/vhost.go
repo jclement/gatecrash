@@ -218,9 +218,10 @@ func (s *Server) serveIPAuthorizePage(w http.ResponseWriter, r *http.Request, tu
 	if httpsPort != 443 {
 		base = fmt.Sprintf("https://%s:%d", adminHost, httpsPort)
 	}
+	// The authorize link carries only the return URL — the admin host resolves the
+	// tunnel from its hostname, so no internal tunnel ID is exposed to the visitor.
 	returnURL := fmt.Sprintf("https://%s%s", host, r.URL.RequestURI())
-	authorizeURL := fmt.Sprintf("%s/authorize-ip?tunnel=%s&return=%s",
-		base, url.QueryEscape(tunnel.ID), url.QueryEscape(returnURL))
+	authorizeURL := fmt.Sprintf("%s/authorize-ip?return=%s", base, url.QueryEscape(returnURL))
 
 	s.renderStandalonePage(w, http.StatusForbidden, "ip-restricted", ipRestrictedPageData{
 		Title:        "Access Restricted",
