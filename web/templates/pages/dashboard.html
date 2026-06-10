@@ -123,7 +123,9 @@
                 </div>
             </template>
         </div>
-        <div class="px-5 py-3 border-t border-gray-200 flex justify-end">
+        <div class="px-5 py-3 border-t border-gray-200 flex justify-between items-center">
+            <button @click="downloadConfig()" x-show="secret.config"
+                    class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2.5 py-1.5 rounded font-medium transition-colors">Download client.toml</button>
             <button @click="secretOpen = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50 transition-colors">Done</button>
         </div>
     </div>
@@ -375,7 +377,7 @@ function dashboard() {
 
         // Secret modal
         secretOpen: false,
-        secret: { token: '', command: '', docker: '' },
+        secret: { token: '', command: '', docker: '', config: '' },
 
 
         // Tunnel modal
@@ -679,6 +681,20 @@ function dashboard() {
                     this.secret = data;
                     this.secretOpen = true;
                 });
+        },
+
+        downloadConfig() {
+            if (!this.secret.config) return;
+            const id = (this.secret.token || 'gatecrash').split(':')[0] || 'gatecrash';
+            const blob = new Blob([this.secret.config], { type: 'application/toml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = id + '-client.toml';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
         },
 
         // Diagnostic speedtest state

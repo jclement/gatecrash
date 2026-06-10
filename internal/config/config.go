@@ -79,15 +79,18 @@ type IPPolicy struct {
 
 // AuthPolicy is a reusable authentication requirement that tunnels can share.
 // A request authenticates if it is a logged-in user in Users, OR (optionally) it
-// presents the static HTTP Basic password.
+// presents the machine-generated service secret via HTTP Basic.
 type AuthPolicy struct {
 	ID    string   `toml:"id"`
 	Users []string `toml:"users,omitempty"` // allowed user IDs (passkey login)
 	// Header overrides the identity header name (default x-Gatecrash-User).
 	Header string `toml:"header,omitempty"`
-	// Optional static HTTP Basic credential for non-interactive clients.
-	Username     string `toml:"username,omitempty"`
-	PasswordHash string `toml:"password_hash,omitempty"`
+	// SecretHash is the bcrypt hash of a machine-generated service secret for
+	// non-interactive clients (CI, scripts, webhooks). It is generated server-side
+	// and shown once. Clients send it as the HTTP Basic password — by convention
+	// with the username "service" (the username is not checked). A service secret
+	// grants access INDEPENDENT of the Users list, so it is for trusted automation.
+	SecretHash string `toml:"secret_hash,omitempty"`
 }
 
 type Redirect struct {
@@ -251,8 +254,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate auth_policy id %q", p.ID)
 		}
 		authIDs[p.ID] = true
-		if len(p.Users) == 0 && p.PasswordHash == "" {
-			return fmt.Errorf("auth_policy %q: must allow at least one user or set a static password", p.ID)
+		if len(p.Users) == 0 && p.SecretHash == "" {
+			return fmt.Errorf("auth_policy %q: must allow at least one user or have a service secret", p.ID)
 		}
 		// User login is established via the admin host's cross-host handoff.
 		if len(p.Users) > 0 && c.Server.AdminHost == "" {
@@ -464,11 +467,8 @@ func (c *Config) Save(path string) error {
 			if p.Header != "" {
 				fmt.Fprintf(&b, "header = %q\n", p.Header)
 			}
-			if p.Username != "" {
-				fmt.Fprintf(&b, "username = %q\n", p.Username)
-			}
-			if p.PasswordHash != "" {
-				fmt.Fprintf(&b, "password_hash = %q\n", p.PasswordHash)
+			if p.SecretHash != "" {
+				fmt.Fprintf(&b, "secret_hash = %q\n", p.SecretHash)
 			}
 			b.WriteString("\n")
 		}

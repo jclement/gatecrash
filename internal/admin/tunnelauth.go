@@ -20,17 +20,33 @@ type tunnelClaims struct {
 	jwt.RegisteredClaims
 	UserID string `json:"uid,omitempty"`
 	Role   string `json:"role,omitempty"`
+	Epoch  int    `json:"ep,omitempty"` // revocation epoch at mint time
 }
 
 // TunnelSession manages per-hostname authenticated sessions for protected
 // tunnels, established via the cross-host handoff from the admin login.
 type TunnelSession struct {
-	secret []byte
+	secret  []byte
+	epochOf EpochFunc
 }
 
 // NewTunnelSession creates a tunnel session manager with a purpose-derived key.
 func NewTunnelSession(secret string) *TunnelSession {
 	return &TunnelSession{secret: DeriveKey(secret, "tunnel-session")}
+}
+
+// SetEpochSource wires the revocation-epoch lookup (typically UserStore.Epoch),
+// so logout / passkey reset / role change / deletion also kill tunnel sessions.
+func (t *TunnelSession) SetEpochSource(fn EpochFunc) {
+	t.epochOf = fn
+}
+
+func (t *TunnelSession) currentEpoch(userID string) int {
+	if t.epochOf == nil {
+		return 0
+	}
+	ep, _ := t.epochOf(userID)
+	return ep
 }
 
 // CreateSession sets a tunnel session cookie scoped to the hostname, recording
@@ -45,6 +61,7 @@ func (t *TunnelSession) CreateSession(w http.ResponseWriter, hostname, userID, r
 		},
 		UserID: userID,
 		Role:   role,
+		Epoch:  t.currentEpoch(userID),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(t.secret)
@@ -80,6 +97,9 @@ func (t *TunnelSession) ValidateSession(r *http.Request, hostname string) (userI
 	}
 	claims, valid := token.Claims.(*tunnelClaims)
 	if !valid || !token.Valid || claims.Issuer != "gatecrash-tunnel" || claims.Subject != hostname {
+		return "", "", false
+	}
+	if !epochValid(t.epochOf, claims.UserID, claims.Epoch) {
 		return "", "", false
 	}
 	return claims.UserID, claims.Role, true

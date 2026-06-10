@@ -241,20 +241,29 @@ Gatecrash authenticates with **passkeys** — phishing-resistant credentials bou
 
 On the **Users** page an admin adds a user (name + role), which produces a one-time **invite link** (`https://<admin_host>/invite/<token>`); opening it registers the user's passkey. **Rename** changes the label freely; **Reset** clears a user's passkeys and issues a fresh invite. Everyone manages their own passkeys (and names them) from the **Passkeys** page. Users live in `<config_dir>/users.json`.
 
+Sessions are revocable server-side: **logging out, resetting a user's passkeys, changing their role, or deleting them immediately invalidates all of that user's existing sessions on every device** (not just the current browser) — a captured session cookie stops working at once. Passkey login also **requires user verification** (biometric/PIN), so an unlocked-but-unattended authenticator isn't enough.
+
 ### Access policies
 
 Policies are reusable and assigned to tunnels by ID. The two are **independent gates** — a tunnel may use either, both (AND), or neither.
 
-**Auth policy** — a set of allowed users (signed in with a passkey), plus an optional static HTTP Basic password for non-interactive clients. HTTP-only; not available with `tls_passthrough`. Visitors are sent to the admin host to sign in and bounced back to the tunnel. On success the backend receives the user's name on `x-Gatecrash-User` (header name configurable), the stable id on `X-Gatecrash-Id`, and the role on `X-Gatecrash-Role`. The whole `X-Gatecrash-*` namespace is stripped from inbound requests, so these headers can't be spoofed.
+**Auth policy** — a set of allowed users (signed in with a passkey), plus an optional **service secret** for non-interactive clients. HTTP-only; not available with `tls_passthrough`. Visitors are sent to the admin host to sign in and bounced back to the tunnel. On success the backend receives the user's name on `x-Gatecrash-User` (header name configurable), the stable id on `X-Gatecrash-Id`, and the role on `X-Gatecrash-Role`. The whole `X-Gatecrash-*` namespace is stripped from inbound requests, so these headers can't be spoofed.
 
 ```toml
 [[auth_policy]]
 id = "staff"
 users = ["u_1a2b3c4d5e6f7080", "u_90ab..."]  # allowed user IDs (opaque; pick by name in the UI)
 # header = "x-Gatecrash-User"   # optional: override the identity (name) header
-# username = "ci"               # optional static HTTP Basic credential
-# password_hash = "$2a$12$..."  #   (set/rotated from the admin UI)
+# secret_hash = "$2a$12$..."    # bcrypt of a machine-generated service secret (generated in the UI)
 ```
+
+**Service secret (for machines/CI/webhooks).** Instead of a human password, generate a strong random **service secret** from the policy editor — it's shown **once** and stored only as a bcrypt hash. Non-interactive clients send it as the HTTP Basic password (username `service`; the username isn't checked):
+
+```bash
+curl -u service:<SERVICE_SECRET> https://app.example.com/
+```
+
+> **A service secret grants access independent of the `users` list** — it's a shared bearer credential, so use it only for trusted automation. Requests authenticated by it arrive as role `service`. Remove or regenerate it from the policy editor to revoke.
 
 **IP policy** — a source-IP allowlist (with optional comments), reusable across tunnels. Works on HTTP and TCP (including passthrough). Because allowed clients pass through with **no credential**, it suits services that can't authenticate (MCP servers, API/tool endpoints).
 
@@ -269,6 +278,8 @@ comment = "office LAN"
 An IP gets allowed three ways: a **permanent** range; **self-service** (a blocked HTTP visitor signs in and grants their IP for 7 days); or a shareable **enrollment link** (`/enroll/<token>`) that lets anyone authorize their own IP for 7 days **without signing in** — the only self-service option for TCP tunnels. Grants are listed and revocable from the policy's **IPs & Link** panel, and are keyed by source IP (everyone behind one public IP shares access; prefer a permanent CIDR for rotating IPv6 prefixes). Treat enrollment links like passwords; **Rotate** invalidates old ones.
 
 > User login and enrollment links require `server.admin_host` to be configured.
+
+> **Run Gatecrash as the public edge — do not put it behind a reverse proxy, load balancer, or CDN.** IP policies (and per-client source-IP logic) trust the connection's real source address and deliberately **ignore** `X-Forwarded-For`, so a spoofed header can never bypass an allowlist. If another proxy fronts Gatecrash, every visitor appears to come from that proxy's IP — collapsing IP policies to "allow everyone or no one." Terminate the public connection on Gatecrash itself.
 
 ---
 
@@ -316,12 +327,36 @@ gatecrash help          Show help
 
 | Flag | Env Var | Required | Default | Description |
 |------|---------|----------|---------|-------------|
+| `-c`, `--config` | | No | `/etc/gatecrash/client.toml` | Load settings from a TOML file (see below) |
 | `--server` | `GATECRASH_SERVER` | **Yes** | | Server SSH address (`host:port`) |
 | `--token` | `GATECRASH_TOKEN` | **Yes** | | Tunnel token (`tunnel_id:secret`) |
 | `--target` | `GATECRASH_TARGET` | **Yes** | | Target address (repeatable, see below) |
 | `--host-key` | `GATECRASH_HOST_KEY` | **Yes** | | Server SSH fingerprint (`SHA256:...`) |
 | `--count` | `GATECRASH_COUNT` | No | `1` | Parallel tunnel connections (1-10) |
-| `--debug` | | No | `false` | Enable debug logging |
+| `--debug` | `GATECRASH_DEBUG` | No | `false` | Enable debug logging |
+
+"Required" means it must be supplied **somehow** — flag, env var, or config file.
+
+#### Config File
+
+Instead of a long flag string, the client reads a TOML file — ideal for running as a service. It loads `/etc/gatecrash/client.toml` automatically if present, or pass `-c /path/to/client.toml`. **Generate one from the admin panel:** open a tunnel's secret dialog and click **Download client.toml** (it's pre-filled with the server, host key, and token — just set your target).
+
+```toml
+# /etc/gatecrash/client.toml
+server   = "tunnel.example.com:51234"
+host_key = "SHA256:abc..."
+token    = "web-app:YOUR_SECRET"
+
+targets = [
+  "127.0.0.1:8000",                  # default target (TCP, or unmatched HTTP)
+  "git.example.com=127.0.0.1:3000",  # route an HTTP hostname to a backend
+]
+
+# count = 1     # parallel connections for redundancy (1-10)
+# debug = false
+```
+
+Precedence is **flag > environment variable > config file > built-in default**, so you can keep a base file and override a single value on the command line. Then just run `gatecrash` (or `gatecrash -c ...`).
 
 #### Multi-Target Routing
 

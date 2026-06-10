@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -11,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -44,12 +42,21 @@ type Server struct {
 	staticFS        fs.FS  // embedded or disk-based static assets
 	hostFingerprint string // SSH host key fingerprint (SHA256)
 
+	// fallbackLogged dedups the self-signed-fallback warning to once per hostname
+	// (TLS handshakes retry rapidly). Cleared for a hostname once its real cert
+	// becomes available, so a later regression logs again.
+	fallbackLogged sync.Map
+
 	// Config mutation lock — protects s.cfg reads/writes from admin API and config reload
 	cfgMu sync.RWMutex
 
 	// TCP listener management
 	tcpMu        sync.Mutex
 	tcpListeners map[int]net.Listener // port → listener
+
+	// HTTP server handles, retained so they can be drained on shutdown.
+	httpSrvMu   sync.Mutex
+	httpServers []*http.Server
 
 	// Update state
 	updateMu     sync.RWMutex
@@ -93,15 +100,65 @@ type Server struct {
 	pendingTunnelAuth   map[string]*pendingTunnelAuthResult
 }
 
-// pendingTunnelAuthResult holds an authenticated user's identity for a one-time
-// cross-host login handoff.
-type pendingTunnelAuthResult struct {
-	userID    string
-	role      string
-	hostname  string
-	returnURL string
-	expires   time.Time
+// cfgSnapshot returns the current config pointer under the read lock. The config
+// is treated as immutable after a reload swaps the pointer (see handleConfigReload),
+// so callers may read the returned value without further locking. This is the safe
+// way to read s.cfg from goroutines that run concurrently with config reloads
+// (SSH auth, TCP listener setup, etc.).
+func (s *Server) cfgSnapshot() *config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
 }
+
+// registerHTTPServer records an http.Server so drain() can shut it down.
+func (s *Server) registerHTTPServer(srv *http.Server) {
+	s.httpSrvMu.Lock()
+	s.httpServers = append(s.httpServers, srv)
+	s.httpSrvMu.Unlock()
+}
+
+// drain gracefully shuts the server down within a bounded window: it stops the
+// SSH server, drains in-flight HTTP requests on every listener, closes TCP
+// forward listeners, and stops the rate-limiter cleanup goroutines.
+func (s *Server) drain() {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	if s.sshServer != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.sshServer.Shutdown(shutdownCtx) }()
+	}
+
+	s.httpSrvMu.Lock()
+	servers := append([]*http.Server(nil), s.httpServers...)
+	s.httpSrvMu.Unlock()
+	for _, srv := range servers {
+		wg.Add(1)
+		go func(srv *http.Server) { defer wg.Done(); srv.Shutdown(shutdownCtx) }(srv)
+	}
+
+	// Close TCP forward listeners (no graceful drain — these are raw byte pumps).
+	s.tcpMu.Lock()
+	for port, ln := range s.tcpListeners {
+		ln.Close()
+		delete(s.tcpListeners, port)
+	}
+	s.tcpMu.Unlock()
+
+	wg.Wait()
+
+	for _, rl := range []*ipRateLimiter{s.authLimiter, s.sshAuthLimiter, s.tunnelAuthLimiter} {
+		if rl != nil {
+			rl.Close()
+		}
+	}
+}
+
+// The cross-host tunnel-login handoff (pendingTunnelAuthResult and its handlers)
+// lives in tunnellogin.go. The backing map remains a field on Server above.
 
 // runIPAllowCleanup periodically prunes expired self-service IP grants.
 func (s *Server) runIPAllowCleanup(ctx context.Context) {
@@ -238,7 +295,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Start periodic update checker
 	if s.cfg.Update.Enabled && s.version != "dev" && !update.IsDocker() {
-		go s.runUpdateChecker(s.cfg.Update.GitHubRepo, s.cfg.CheckIntervalDuration())
+		go s.runUpdateChecker(ctx, s.cfg.Update.GitHubRepo, s.cfg.CheckIntervalDuration())
 	}
 
 	// Start bandwidth sampler
@@ -286,6 +343,7 @@ func (s *Server) Run(ctx context.Context) error {
 			ReadHeaderTimeout: 20 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
+		s.registerHTTPServer(srv)
 		errCh <- srv.Serve(listener)
 	}()
 
@@ -300,6 +358,7 @@ func (s *Server) Run(ctx context.Context) error {
 				ReadHeaderTimeout: 20 * time.Second,
 				IdleTimeout:       120 * time.Second,
 			}
+			s.registerHTTPServer(redirectSrv)
 			errCh <- redirectSrv.ListenAndServe()
 		}()
 	}
@@ -312,17 +371,13 @@ func (s *Server) Run(ctx context.Context) error {
 		select {
 		case sig := <-sigCh:
 			slog.Info("received signal, shutting down", "signal", sig)
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			s.sshServer.Shutdown(shutdownCtx)
+			s.drain()
 			return nil
 		case err := <-errCh:
 			return fmt.Errorf("server error: %w", err)
 		case <-ctx.Done():
 			slog.Info("context cancelled, shutting down")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			s.sshServer.Shutdown(shutdownCtx)
+			s.drain()
 			return nil
 		case newCfg := <-watcher.OnChange():
 			s.handleConfigReload(newCfg)
@@ -344,8 +399,10 @@ func (s *Server) initAdmin() error {
 	}
 	s.users = users
 
-	// Session manager
+	// Session manager. Wire the revocation-epoch source so logout, passkey reset,
+	// role change, and deletion immediately invalidate outstanding sessions.
 	s.sessionMgr = admin.NewSessionManager(s.cfg.Server.Secret)
+	s.sessionMgr.SetEpochSource(users.Epoch)
 
 	// Audit log
 	auditLog, err := admin.NewAuditLog(filepath.Join(dataDir, "audit.json"))
@@ -354,8 +411,10 @@ func (s *Server) initAdmin() error {
 	}
 	s.auditLog = auditLog
 
-	// Per-hostname tunnel session manager (cross-host login handoff)
+	// Per-hostname tunnel session manager (cross-host login handoff). Same
+	// revocation source so tunnel sessions die with the user's admin sessions.
 	s.tunnelSession = admin.NewTunnelSession(s.cfg.Server.Secret)
+	s.tunnelSession.SetEpochSource(users.Epoch)
 
 	// WebAuthn - determine rpID and origin from admin_host
 	rpID := s.cfg.Server.AdminHost
@@ -445,175 +504,7 @@ func (s *Server) actorName(r *http.Request) string {
 	return s.sessionMgr.GetActor(r)
 }
 
-// setupAdminRoutes registers the admin panel HTTP handlers.
-func (s *Server) setupAdminRoutes() {
-	// Static files — always public
-	s.adminMux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.staticFS)))
-
-	// Health check — always public
-	s.adminMux.HandleFunc("GET /health", s.handleHealth)
-
-	// Auth pages — public
-	s.adminMux.HandleFunc("GET /login", s.handleLogin)
-	// Login ceremony (usernameless/discoverable) — public
-	s.adminMux.HandleFunc("POST /auth/login/begin", rateLimit(s.authLimiter, s.handleLoginBegin))
-	s.adminMux.HandleFunc("POST /auth/login/finish", rateLimit(s.authLimiter, s.handleLoginFinish))
-	// The first admin is bootstrapped via an invite link printed to the logs /
-	// config file at startup (see writeBootstrapInvite) — there is no open
-	// first-login page to race. Invite-based passkey registration — token-gated.
-	s.adminMux.HandleFunc("GET /invite/{token}", s.handleInvitePage)
-	s.adminMux.HandleFunc("POST /invite/{token}/begin", rateLimit(s.authLimiter, s.handleInviteBegin))
-	s.adminMux.HandleFunc("POST /invite/{token}/finish", rateLimit(s.authLimiter, s.handleInviteFinish))
-	// Add a passkey to your own account (logged-in)
-	s.adminMux.HandleFunc("POST /auth/register/begin", rateLimit(s.authLimiter, s.requireAuth(s.handleRegisterBegin)))
-	s.adminMux.HandleFunc("POST /auth/register/finish", rateLimit(s.authLimiter, s.requireAuth(s.handleRegisterFinish)))
-	// Cross-host tunnel login handoff (any logged-in user)
-	s.adminMux.HandleFunc("GET /tunnel-login", s.requireAuth(s.handleTunnelLogin))
-	s.adminMux.HandleFunc("POST /logout", s.handleLogout)
-
-	// Any logged-in user
-	s.adminMux.HandleFunc("GET /passkeys", s.requireAuth(s.handlePasskeys))
-	s.adminMux.HandleFunc("POST /api/passkeys/delete", s.requireCSRF(s.handleDeletePasskey))
-	s.adminMux.HandleFunc("GET /api/session/keepalive", s.handleSessionKeepalive)
-
-	// Admin only
-	s.adminMux.HandleFunc("GET /", s.requireAuth(s.handleRoot))
-	s.adminMux.HandleFunc("GET /help", s.requireAdmin(s.handleHelp))
-	s.adminMux.HandleFunc("GET /authorize-ip", s.requireAdmin(s.handleAuthorizeIPPage))
-	s.adminMux.HandleFunc("POST /authorize-ip", s.requireAdmin(s.handleAuthorizeIPSubmit))
-	s.adminMux.HandleFunc("GET /api/bandwidth", s.requireAdminAPI(s.handleAPIBandwidth))
-	s.adminMux.HandleFunc("GET /api/tunnels", s.requireAdminAPI(s.handleAPITunnels))
-	s.adminMux.HandleFunc("GET /api/tunnels/html", s.requireAdminAPI(s.handleAPITunnelsHTML))
-	s.adminMux.HandleFunc("GET /api/redirects/html", s.requireAdminAPI(s.handleAPIRedirectsHTML))
-	s.adminMux.HandleFunc("POST /api/tunnels", s.requireAdminCSRF(s.handleCreateTunnel))
-	s.adminMux.HandleFunc("PUT /api/tunnels/{id}", s.requireAdminCSRF(s.handleEditTunnel))
-	s.adminMux.HandleFunc("DELETE /api/tunnels/{id}", s.requireAdminCSRF(s.handleDeleteTunnel))
-	s.adminMux.HandleFunc("POST /api/tunnels/{id}/regenerate", s.requireAdminCSRF(s.handleRegenerateSecret))
-	s.adminMux.HandleFunc("POST /api/tunnels/{id}/test", s.requireAdminCSRF(s.handleTunnelTest))
-	// Users (admin)
-	s.adminMux.HandleFunc("GET /users", s.requireAdmin(s.handleUsersPage))
-	s.adminMux.HandleFunc("GET /api/users", s.requireAdminAPI(s.handleListUsers))
-	s.adminMux.HandleFunc("POST /api/users", s.requireAdminCSRF(s.handleCreateUser))
-	s.adminMux.HandleFunc("DELETE /api/users/{id}", s.requireAdminCSRF(s.handleDeleteUser))
-	s.adminMux.HandleFunc("POST /api/users/{id}/reset", s.requireAdminCSRF(s.handleResetUser))
-	s.adminMux.HandleFunc("POST /api/users/{id}/role", s.requireAdminCSRF(s.handleSetUserRole))
-	s.adminMux.HandleFunc("POST /api/users/{id}/rename", s.requireAdminCSRF(s.handleRenameUser))
-	// Access policies (admin)
-	s.adminMux.HandleFunc("GET /access-policies", s.requireAdmin(s.handleAccessPoliciesPage))
-	s.adminMux.HandleFunc("GET /api/ip-policies", s.requireAdminAPI(s.handleListIPPolicies))
-	s.adminMux.HandleFunc("POST /api/ip-policies", s.requireAdminCSRF(s.handleSaveIPPolicy))
-	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}", s.requireAdminCSRF(s.handleDeleteIPPolicy))
-	s.adminMux.HandleFunc("GET /api/ip-policies/{id}/ips", s.requireAdminAPI(s.handleListPolicyIPs))
-	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/ips/{ip}", s.requireAdminCSRF(s.handleRevokePolicyIP))
-	s.adminMux.HandleFunc("POST /api/ip-policies/{id}/enroll-token", s.requireAdminCSRF(s.handleRotateEnrollToken))
-	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/enroll-token", s.requireAdminCSRF(s.handleDeleteEnrollToken))
-	s.adminMux.HandleFunc("GET /api/auth-policies", s.requireAdminAPI(s.handleListAuthPolicies))
-	s.adminMux.HandleFunc("POST /api/auth-policies", s.requireAdminCSRF(s.handleSaveAuthPolicy))
-	s.adminMux.HandleFunc("DELETE /api/auth-policies/{id}", s.requireAdminCSRF(s.handleDeleteAuthPolicy))
-	// Public, unauthenticated, rate-limited self-service enrollment link.
-	s.adminMux.HandleFunc("GET /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollPage))
-	s.adminMux.HandleFunc("POST /enroll/{token}", rateLimit(s.authLimiter, s.handleEnrollSubmit))
-	s.adminMux.HandleFunc("POST /api/redirects", s.requireAdminCSRF(s.handleCreateRedirect))
-	s.adminMux.HandleFunc("PUT /api/redirects/{from}", s.requireAdminCSRF(s.handleEditRedirect))
-	s.adminMux.HandleFunc("DELETE /api/redirects/{from}", s.requireAdminCSRF(s.handleDeleteRedirect))
-	// Audit log (admin)
-	s.adminMux.HandleFunc("GET /auditlog", s.requireAdmin(s.handleAuditLogPage))
-	s.adminMux.HandleFunc("GET /api/auditlog", s.requireAdminAPI(s.handleAPIAuditLog))
-
-	s.adminMux.HandleFunc("GET /api/update", s.requireAdminAPI(s.handleGetUpdate))
-	s.adminMux.HandleFunc("POST /api/update", s.requireAdminCSRF(s.handlePostUpdate))
-	s.adminMux.HandleFunc("GET /api/events", s.requireAdminAPI(s.sse.ServeHTTP))
-}
-
-// sessionUser returns the live directory record for the request's session, or
-// nil if there's no valid session or the user no longer exists. Looking the user
-// up (rather than trusting the JWT) makes deletes and role changes take effect
-// immediately, not at session expiry.
-func (s *Server) sessionUser(r *http.Request) *admin.User {
-	if !s.sessionMgr.ValidateSession(r) {
-		return nil
-	}
-	return s.users.Get(s.sessionMgr.UserID(r))
-}
-
-// requireAuth wraps a page handler: any logged-in user. On first boot (no admin
-// yet) it shows the not-initialized notice; otherwise it redirects to login,
-// preserving the destination.
-func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.webauthn.NeedsSetup() {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		if s.sessionUser(r) == nil {
-			s.sessionMgr.ClearSession(w)
-			loginURL := "/login"
-			if ret := r.URL.RequestURI(); ret != "/" && isSafeReturnURL(ret) {
-				loginURL = "/login?return=" + url.QueryEscape(ret)
-			}
-			http.Redirect(w, r, loginURL, http.StatusSeeOther)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// requireAdmin wraps a page handler: must be a logged-in admin (verified live).
-func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		if u := s.sessionUser(r); u == nil || !u.IsAdmin() {
-			s.serveErrorPage(w, r, http.StatusForbidden, "Admin Only",
-				"You don't have access to this page.")
-			return
-		}
-		next(w, r)
-	})
-}
-
-// requireAuthAPI wraps an API handler: any logged-in user, 401 JSON otherwise.
-func (s *Server) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.sessionUser(r) == nil {
-			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"error":"session expired"}`, http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// requireAdminAPI wraps an API handler: must be a logged-in admin (verified live).
-func (s *Server) requireAdminAPI(next http.HandlerFunc) http.HandlerFunc {
-	return s.requireAuthAPI(func(w http.ResponseWriter, r *http.Request) {
-		if u := s.sessionUser(r); u == nil || !u.IsAdmin() {
-			http.Error(w, `{"error":"admin only"}`, http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	})
-}
-
-// requireCSRF wraps a mutating API handler: logged-in user + valid CSRF token.
-func (s *Server) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
-	return s.requireAuthAPI(func(w http.ResponseWriter, r *http.Request) {
-		if !s.sessionMgr.ValidCSRFToken(r, r.Header.Get("X-CSRF-Token")) {
-			http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	})
-}
-
-// requireAdminCSRF wraps a mutating admin API handler: admin (verified live) + CSRF.
-func (s *Server) requireAdminCSRF(next http.HandlerFunc) http.HandlerFunc {
-	return s.requireCSRF(func(w http.ResponseWriter, r *http.Request) {
-		if u := s.sessionUser(r); u == nil || !u.IsAdmin() {
-			http.Error(w, `{"error":"admin only"}`, http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	})
-}
+// setupAdminRoutes is defined in routes.go.
 
 // handleLogin renders the usernameless passkey login page. Before the first
 // admin exists it shows a not-initialized notice instead (the operator claims
@@ -704,6 +595,14 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid CSRF token", http.StatusForbidden)
 		return
 	}
+	// Bump the user's revocation epoch so the session is killed server-side, not
+	// just in the browser — a captured cookie stops working immediately. This logs
+	// the user out of every device.
+	if uid := s.sessionMgr.UserID(r); uid != "" {
+		if err := s.users.BumpEpoch(uid); err != nil {
+			slog.Error("failed to revoke sessions on logout", "user", uid, "error", err)
+		}
+	}
 	s.sessionMgr.ClearSession(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -724,10 +623,11 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 	sshAddr := fmt.Sprintf("%s:%d", adminHost, s.cfg.Server.SSHPort)
 	s.cfgMu.RUnlock()
 	s.adminH.Render(w, "pages/help.html", &admin.PageData{
-		Title:   "Help",
-		Active:  "help",
-		UserID:  s.sessionMgr.UserID(r),
-		IsAdmin: true,
+		Title:     "Help",
+		Active:    "help",
+		UserID:    s.sessionMgr.UserID(r),
+		IsAdmin:   true,
+		CSRFToken: s.sessionMgr.CSRFToken(r), // needed for the shared update banner's POST
 		Data: struct {
 			SSHAddr     string
 			Fingerprint string
@@ -955,7 +855,30 @@ func (s *Server) secretResponse(tunnelID, plaintext string) map[string]string {
 		"token":    tok,
 		"command":  fmt.Sprintf("gatecrash --server %s --host-key %s --token %s --target 127.0.0.1:8000", sshAddr, s.hostFingerprint, tok),
 		"docker":   fmt.Sprintf("docker run -e GATECRASH_SERVER=%s -e GATECRASH_HOST_KEY=%s -e GATECRASH_TOKEN=%s -e GATECRASH_TARGET=app:8000 ghcr.io/jclement/gatecrash:latest", sshAddr, s.hostFingerprint, tok),
+		"config":   clientConfigTOML(sshAddr, s.hostFingerprint, tok),
 	}
+}
+
+// clientConfigTOML renders a ready-to-use client.toml for a tunnel, served by the
+// "Download client.toml" button in the secret modal. The user fills in their
+// target(s); everything else is pre-populated.
+func clientConfigTOML(sshAddr, hostKey, tok string) string {
+	return fmt.Sprintf(`# Gatecrash client configuration
+# Save as /etc/gatecrash/client.toml and run: gatecrash
+# (or: gatecrash -c /path/to/client.toml)
+
+server   = %q
+host_key = %q
+token    = %q
+
+# One or more targets. Forms:
+#   "127.0.0.1:8000"               default target (TCP, or unmatched HTTP)
+#   "app.example.com=127.0.0.1:80" route an HTTP hostname to a backend
+targets = ["127.0.0.1:8000"]
+
+# count = 1     # parallel connections for redundancy (1-10)
+# debug = false
+`, sshAddr, hostKey, tok)
 }
 
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
@@ -1507,12 +1430,17 @@ func (s *Server) handleConfigReload(newCfg *config.Config) {
 	s.sse.Broadcast("config-reload", "ok")
 }
 
-func (s *Server) runUpdateChecker(repo string, interval time.Duration) {
+func (s *Server) runUpdateChecker(ctx context.Context, repo string, interval time.Duration) {
 	s.checkForUpdate(repo)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for range ticker.C {
-		s.checkForUpdate(repo)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.checkForUpdate(repo)
+		}
 	}
 }
 
@@ -1532,70 +1460,7 @@ func (s *Server) checkForUpdate(repo string) {
 }
 
 // cleanupPendingTunnelAuth periodically removes expired pending tunnel auth tokens.
-func (s *Server) cleanupPendingTunnelAuth(ctx context.Context) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			now := time.Now()
-			s.pendingTunnelAuthMu.Lock()
-			for k, v := range s.pendingTunnelAuth {
-				if now.After(v.expires) {
-					delete(s.pendingTunnelAuth, k)
-				}
-			}
-			s.pendingTunnelAuthMu.Unlock()
-		}
-	}
-}
-
-// handleTunnelLogin runs on the admin host for a logged-in user. It parks a
-// one-time token carrying the user's identity and redirects to the tunnel
-// hostname to establish its session. requireAuth ensures the user is signed in
-// (redirecting through /login first if not).
-func (s *Server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
-	hostname := r.URL.Query().Get("hostname")
-	if hostname == "" || s.registry.FindByHostname(hostname) == nil {
-		http.Error(w, "unknown tunnel hostname", http.StatusBadRequest)
-		return
-	}
-
-	returnURL := r.URL.Query().Get("return")
-	if returnURL != "" {
-		if u, err := url.Parse(returnURL); err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), hostname) {
-			returnURL = ""
-		}
-	}
-
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	oneTimeToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
-
-	s.pendingTunnelAuthMu.Lock()
-	s.pendingTunnelAuth[oneTimeToken] = &pendingTunnelAuthResult{
-		userID:    s.sessionMgr.UserID(r),
-		role:      s.sessionMgr.Role(r),
-		hostname:  hostname,
-		returnURL: returnURL,
-		expires:   time.Now().Add(60 * time.Second),
-	}
-	s.pendingTunnelAuthMu.Unlock()
-
-	s.cfgMu.RLock()
-	httpsPort := s.cfg.Server.HTTPSPort
-	s.cfgMu.RUnlock()
-	completeURL := fmt.Sprintf("https://%s/.gatecrash/auth/complete?token=%s", hostname, oneTimeToken)
-	if httpsPort != 443 {
-		completeURL = fmt.Sprintf("https://%s:%d/.gatecrash/auth/complete?token=%s", hostname, httpsPort, oneTimeToken)
-	}
-	http.Redirect(w, r, completeURL, http.StatusFound)
-}
+// cleanupPendingTunnelAuth and handleTunnelLogin live in tunnellogin.go.
 
 // --- Audit Log Handlers ---
 

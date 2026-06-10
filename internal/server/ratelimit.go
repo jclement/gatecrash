@@ -13,6 +13,7 @@ type ipRateLimiter struct {
 	entries map[string]*rlEntry
 	limit   int
 	window  time.Duration
+	done    chan struct{}
 }
 
 type rlEntry struct {
@@ -25,9 +26,15 @@ func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
 		entries: make(map[string]*rlEntry),
 		limit:   limit,
 		window:  window,
+		done:    make(chan struct{}),
 	}
 	go rl.cleanup()
 	return rl
+}
+
+// Close stops the background cleanup goroutine. Safe to call once.
+func (rl *ipRateLimiter) Close() {
+	close(rl.done)
 }
 
 func (rl *ipRateLimiter) allow(ip string) bool {
@@ -47,15 +54,20 @@ func (rl *ipRateLimiter) allow(ip string) bool {
 func (rl *ipRateLimiter) cleanup() {
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for ip, e := range rl.entries {
-			if now.After(e.resetAt) {
-				delete(rl.entries, ip)
+	for {
+		select {
+		case <-rl.done:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, e := range rl.entries {
+				if now.After(e.resetAt) {
+					delete(rl.entries, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }
 

@@ -50,6 +50,26 @@ printf "${BOLD}  Gatecrash Installer${RESET}\n"
 printf "${DIM}  ─────────────────────────────────────${RESET}\n"
 printf "\n"
 
+# ── Acquire root up front ───────────────────────────────────────────
+# This installer needs root (privileged ports, system user, systemd unit).
+# Prompt for sudo ONCE here so the password prompt doesn't surface mid-install
+# fighting the piped stdin from `curl | sh`. After this, cached sudo is silent.
+if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        err "This installer needs root. Re-run as root, or install sudo."
+        exit 1
+    fi
+    info "Administrator access is required — you may be prompted for your password."
+    if ! sudo -v < /dev/tty; then
+        err "Could not acquire sudo privileges."
+        exit 1
+    fi
+    # Keep the sudo timestamp fresh for the duration of the install.
+    ( while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) 2>/dev/null &
+    SUDO_KEEPALIVE_PID=$!
+    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT
+fi
+
 # ── Check for existing install ──────────────────────────────────────
 
 CURRENT_VERSION=""
@@ -234,8 +254,11 @@ sudo systemctl enable "$SERVICE_NAME"
 info "Starting ${SERVICE_NAME}..."
 sudo systemctl start "$SERVICE_NAME"
 
-# Wait briefly for startup
+# Wait briefly for startup (and for the first-admin invite to be written)
 sleep 2
+
+# Discover the chosen SSH port from the generated config.
+SSH_PORT=$(sudo grep -oP '(?<=^ssh_port = )\d+' "${CONFIG_DIR}/gatecrash.toml" 2>/dev/null || true)
 
 # ── Print summary ──────────────────────────────────────────────────
 
@@ -245,11 +268,49 @@ printf "\n"
 dim "Config:  ${CONFIG_DIR}/gatecrash.toml"
 dim "Logs:    sudo journalctl -u ${SERVICE_NAME} -f"
 dim "Status:  sudo systemctl status ${SERVICE_NAME}"
-if [ -n "$ADMIN_HOST" ]; then
-    dim "Admin:   https://${ADMIN_HOST}"
-else
-    dim "Admin:   disabled (edit config to set admin_host)"
+printf "\n"
+
+# ── Firewall / ports ───────────────────────────────────────────────
+info "Open these inbound ports on your firewall and cloud security group:"
+dim "80/tcp    — HTTP (Let's Encrypt challenges + redirect to HTTPS)"
+dim "443/tcp   — HTTPS (tunnel traffic + admin panel)"
+if [ -n "$SSH_PORT" ]; then
+    dim "${SSH_PORT}/tcp  — tunnel clients connect here (your generated SSH port)"
+fi
+if command -v ufw >/dev/null 2>&1; then
+    printf "\n"
+    dim "With ufw:"
+    dim "  sudo ufw allow 80,443/tcp"
+    [ -n "$SSH_PORT" ] && dim "  sudo ufw allow ${SSH_PORT}/tcp"
+elif command -v firewall-cmd >/dev/null 2>&1; then
+    printf "\n"
+    dim "With firewalld:"
+    dim "  sudo firewall-cmd --permanent --add-port=80/tcp --add-port=443/tcp"
+    [ -n "$SSH_PORT" ] && dim "  sudo firewall-cmd --permanent --add-port=${SSH_PORT}/tcp"
+    dim "  sudo firewall-cmd --reload"
 fi
 printf "\n"
-dim "Edit ${CONFIG_DIR}/gatecrash.toml to add tunnels."
+
+# ── Admin panel / first-admin setup link ───────────────────────────
+if [ -n "$ADMIN_HOST" ]; then
+    ok "Admin panel: https://${ADMIN_HOST}"
+    dim "Point DNS for ${ADMIN_HOST} at this server. The first HTTPS certificate"
+    dim "can take ~30s once DNS resolves and ports 80+443 are reachable."
+    printf "\n"
+    INVITE_FILE="${CONFIG_DIR}/bootstrap-invite.txt"
+    SETUP_URL=$(sudo grep -oE 'https://[^ ]+/invite/[A-Za-z0-9_-]+' "$INVITE_FILE" 2>/dev/null | head -n1 || true)
+    if [ -n "$SETUP_URL" ]; then
+        info "Create your first admin — open this one-time setup link now:"
+        printf "    ${BOLD}${GREEN}%s${RESET}\n" "$SETUP_URL"
+        dim "(also saved to ${INVITE_FILE}; it is removed once used)"
+    else
+        warn "First-admin setup link not found yet. Retrieve it with:"
+        dim "  sudo cat ${INVITE_FILE}"
+        dim "  (or: sudo journalctl -u ${SERVICE_NAME} | grep 'ADMIN SETUP')"
+    fi
+else
+    dim "Admin panel: disabled (re-run with an admin hostname, or set admin_host in the config)."
+fi
+printf "\n"
+dim "Edit ${CONFIG_DIR}/gatecrash.toml to add tunnels, then: sudo systemctl restart ${SERVICE_NAME}"
 printf "\n"

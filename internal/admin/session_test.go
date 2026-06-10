@@ -35,6 +35,46 @@ func TestSessionManager_CreateAndValidate(t *testing.T) {
 	}
 }
 
+// TestSessionManager_EpochRevocation verifies that bumping a user's epoch (logout,
+// passkey reset, role change, deletion) invalidates already-issued sessions —
+// the fix that makes logout actually revoke a captured cookie.
+func TestSessionManager_EpochRevocation(t *testing.T) {
+	epoch := map[string]int{"u_alice": 0}
+	exists := map[string]bool{"u_alice": true}
+	sm := NewSessionManager("test-secret-key-for-jwt")
+	sm.SetEpochSource(func(id string) (int, bool) { return epoch[id], exists[id] })
+
+	w := httptest.NewRecorder()
+	if err := sm.CreateSession(w, "u_alice", "admin"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if !sm.ValidateSession(sessionReq(t, w)) {
+		t.Fatal("freshly issued session should be valid")
+	}
+
+	// Bump epoch (simulates logout / reset / role change).
+	epoch["u_alice"] = 1
+	if sm.ValidateSession(sessionReq(t, w)) {
+		t.Fatal("session should be revoked after epoch bump")
+	}
+
+	// A new session minted at the new epoch is valid again.
+	w2 := httptest.NewRecorder()
+	if err := sm.CreateSession(w2, "u_alice", "admin"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if !sm.ValidateSession(sessionReq(t, w2)) {
+		t.Fatal("re-issued session should be valid")
+	}
+
+	// Deleting the user (exists=false) revokes even a current-epoch session.
+	exists["u_alice"] = false
+	if sm.ValidateSession(sessionReq(t, w2)) {
+		t.Fatal("session for a deleted user should be invalid")
+	}
+}
+
 // sessionReq creates a request carrying the session cookie just written to w.
 func sessionReq(t *testing.T, w *httptest.ResponseRecorder) *http.Request {
 	t.Helper()

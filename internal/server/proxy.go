@@ -147,12 +147,53 @@ func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel,
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(clientConn, chReader) // tunnel → public client (use buffered reader)
-		clientConn.Close()            // unblock the other goroutine
+		// tunnel → public client. Use a write deadline so a public peer that stops
+		// reading (slow-reader / slowloris on the response) can't pin this goroutine
+		// and the underlying SSH channel forever.
+		copyWithWriteTimeout(clientConn, chReader, streamWriteIdleTimeout)
+		clientConn.Close() // unblock the other goroutine
 		done <- struct{}{}
 	}()
 	<-done
 	<-done
+}
+
+// streamWriteIdleTimeout bounds how long a single write to a hijacked/streamed
+// public connection may block before we give up on a stalled reader. It is a
+// per-write idle bound, not a session cap: a quiet-but-healthy stream (e.g. an
+// idle WebSocket with no data to send) is unaffected because the deadline is
+// only armed immediately before each write.
+const streamWriteIdleTimeout = 60 * time.Second
+
+// copyWithWriteTimeout is io.Copy with an idle write deadline applied to dst when
+// it supports SetWriteDeadline. If the peer stops draining its socket, the blocked
+// write fails after `idle` instead of leaking the goroutine and its SSH channel.
+func copyWithWriteTimeout(dst io.Writer, src io.Reader, idle time.Duration) (int64, error) {
+	wc, _ := dst.(interface{ SetWriteDeadline(time.Time) error })
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			if wc != nil {
+				wc.SetWriteDeadline(time.Now().Add(idle))
+			}
+			nw, ew := dst.Write(buf[:nr])
+			total += int64(nw)
+			if ew != nil {
+				return total, ew
+			}
+			if nw < nr {
+				return total, io.ErrShortWrite
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				return total, nil
+			}
+			return total, er
+		}
+	}
 }
 
 // isUpgradeRequest checks whether the request asks for a protocol upgrade

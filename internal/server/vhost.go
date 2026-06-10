@@ -3,12 +3,12 @@ package server
 import (
 	"fmt"
 	"html"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // ServeHTTP routes requests based on Host header.
@@ -114,18 +114,20 @@ func stripTrustedHeaders(h http.Header) {
 const trustedHeaderPrefix = "X-Gatecrash-"
 
 // enforceAuthPolicy authenticates a request against an auth policy: a logged-in
-// user in the allowed set, OR the static password. Returns true to proceed;
+// user in the allowed set, OR the service secret. Returns true to proceed;
 // false means it already wrote a response (a login redirect, a 401, or a 403).
 // On success it injects the identity headers.
 func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host string, pol *AuthPolicyState) bool {
 	r.Header.Del(pol.headerName())
 	r.Header.Del("X-Gatecrash-Role")
+	r.Header.Del("X-Gatecrash-Id")
 
-	// 1. Static password (HTTP Basic), if provided.
-	if pol.usesPassword() {
-		if user, ok := s.checkBasic(r, pol); ok {
-			r.Header.Set(pol.headerName(), user)
-			r.Header.Set("X-Gatecrash-Role", "basic")
+	// 1. Service secret (HTTP Basic), for non-interactive clients.
+	if pol.usesSecret() {
+		if s.checkServiceSecret(r, pol) {
+			r.Header.Set(pol.headerName(), ServiceAuthUsername)
+			r.Header.Set("X-Gatecrash-Id", ServiceAuthUsername)
+			r.Header.Set("X-Gatecrash-Role", "service")
 			return true
 		}
 	}
@@ -153,8 +155,8 @@ func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host 
 		return false
 	}
 
-	// 3. Password-only policy with no/invalid credentials → Basic challenge.
-	if pol.usesPassword() {
+	// 3. Secret-only policy with no/invalid credentials → Basic challenge.
+	if pol.usesSecret() {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, host))
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return false
@@ -163,37 +165,16 @@ func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host 
 	return false
 }
 
+// serveErrorPage renders a generic error/notice. message is trusted HTML so
+// callers may include markup like <strong> — they must html.EscapeString any
+// dynamic values they interpolate into it (unchanged from the previous contract).
 func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status int, title, message string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%d — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  .code { font-size: 72px; font-weight: 700; color: #ccc; margin-bottom: 8px; }
-  h1 { font-size: 20px; margin-bottom: 12px; }
-  p { color: #666; line-height: 1.6; font-size: 14px; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="code">%d</div>
-  <h1>%s</h1>
-  <p>%s</p>
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`, status, status, title, message)
+	s.renderStandalonePage(w, status, "error", errorPageData{
+		Title:   title,
+		Status:  status,
+		Heading: title,
+		Message: template.HTML(message),
+	})
 }
 
 // isSafeReturnURL validates that a return URL is a relative path (not an open redirect).
@@ -241,41 +222,12 @@ func (s *Server) serveIPAuthorizePage(w http.ResponseWriter, r *http.Request, tu
 	authorizeURL := fmt.Sprintf("%s/authorize-ip?tunnel=%s&return=%s",
 		base, url.QueryEscape(tunnel.ID), url.QueryEscape(returnURL))
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Access Restricted — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin-bottom: 12px; }
-  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 12px; }
-  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .btn { display: inline-block; margin-top: 16px; padding: 12px 24px; background: #2563eb;
-         color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; }
-  .btn:hover { background: #1d4ed8; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>Access Restricted</h1>
-  <p>Access to <strong>%s</strong> is limited to authorized IP addresses.</p>
-  <p>Your current address is <span class="ip">%s</span>.</p>
-  <a class="btn" href="%s">Authorize this IP</a>
-  <p style="margin-top:16px;font-size:12px;color:#999;">You'll be asked to sign in to authorize. The grant lasts 7 days.</p>
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`, html.EscapeString(host), html.EscapeString(ip), html.EscapeString(authorizeURL))
+	s.renderStandalonePage(w, http.StatusForbidden, "ip-restricted", ipRestrictedPageData{
+		Title:        "Access Restricted",
+		Host:         host,
+		IP:           ip,
+		AuthorizeURL: authorizeURL,
+	})
 }
 
 func stripPort(host string) string {
@@ -289,63 +241,7 @@ func stripPort(host string) string {
 // initiateTunnelLogin redirects an unauthenticated visitor of a protected tunnel
 // to the admin host, which (once they're signed in) hands a one-time token back
 // to this hostname to establish a tunnel session.
-func (s *Server) initiateTunnelLogin(w http.ResponseWriter, r *http.Request, hostname string) {
-	s.cfgMu.RLock()
-	adminHost := s.cfg.Server.AdminHost
-	httpsPort := s.cfg.Server.HTTPSPort
-	s.cfgMu.RUnlock()
-
-	if adminHost == "" {
-		s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
-			"This service requires authentication, but no admin host is configured.")
-		return
-	}
-	returnURL := fmt.Sprintf("https://%s%s", hostname, r.URL.RequestURI())
-	base := "https://" + adminHost
-	if httpsPort != 443 {
-		base = fmt.Sprintf("https://%s:%d", adminHost, httpsPort)
-	}
-	http.Redirect(w, r, fmt.Sprintf("%s/tunnel-login?hostname=%s&return=%s",
-		base, url.QueryEscape(hostname), url.QueryEscape(returnURL)), http.StatusFound)
-}
-
-// handleTunnelLoginComplete consumes the one-time handoff token and sets the
-// tunnel session cookie for the authenticated user on this hostname.
-func (s *Server) handleTunnelLoginComplete(w http.ResponseWriter, r *http.Request, hostname string) {
-	oneTimeToken := r.URL.Query().Get("token")
-	if oneTimeToken == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
-		return
-	}
-	s.pendingTunnelAuthMu.Lock()
-	result, ok := s.pendingTunnelAuth[oneTimeToken]
-	if ok {
-		delete(s.pendingTunnelAuth, oneTimeToken)
-	}
-	s.pendingTunnelAuthMu.Unlock()
-
-	if !ok || time.Now().After(result.expires) {
-		s.serveErrorPage(w, r, http.StatusForbidden, "Authentication Failed",
-			"Login token is invalid or expired. Please try again.")
-		return
-	}
-	if result.hostname != hostname {
-		http.Error(w, "hostname mismatch", http.StatusBadRequest)
-		return
-	}
-	if err := s.tunnelSession.CreateSession(w, hostname, result.userID, result.role); err != nil {
-		slog.Error("failed to create tunnel session", "error", err)
-		http.Error(w, "session creation failed", http.StatusInternalServerError)
-		return
-	}
-	dest := "/"
-	if result.returnURL != "" {
-		if u, err := url.Parse(result.returnURL); err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), hostname) {
-			dest = result.returnURL
-		}
-	}
-	http.Redirect(w, r, dest, http.StatusFound)
-}
+// initiateTunnelLogin and handleTunnelLoginComplete live in tunnellogin.go.
 
 // serveAdmin applies security headers and delegates to the admin mux.
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {

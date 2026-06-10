@@ -10,15 +10,20 @@ import (
 	"github.com/jclement/gatecrash/internal/config"
 )
 
+// ServiceAuthUsername is the conventional HTTP Basic username for the
+// machine-generated service secret. The username is not actually checked (all
+// the entropy is in the secret); it exists so client configs and docs have a
+// stable principal to show, and so the injected identity header has a value.
+const ServiceAuthUsername = "service"
+
 // AuthPolicyState is the runtime form of a config AuthPolicy. A request passes
-// if it is a logged-in user in Users, or (optionally) presents the static
-// password.
+// if it is a logged-in user in Users, or (optionally) presents the service
+// secret via HTTP Basic.
 type AuthPolicyState struct {
-	ID           string
-	Users        map[string]bool // allowed user IDs
-	Header       string
-	Username     string
-	PasswordHash string
+	ID         string
+	Users      map[string]bool // allowed user IDs
+	Header     string
+	SecretHash string
 }
 
 func newAuthPolicyState(p config.AuthPolicy) *AuthPolicyState {
@@ -27,17 +32,16 @@ func newAuthPolicyState(p config.AuthPolicy) *AuthPolicyState {
 		users[u] = true
 	}
 	return &AuthPolicyState{
-		ID:           p.ID,
-		Users:        users,
-		Header:       p.Header,
-		Username:     p.Username,
-		PasswordHash: p.PasswordHash,
+		ID:         p.ID,
+		Users:      users,
+		Header:     p.Header,
+		SecretHash: p.SecretHash,
 	}
 }
 
 func (p *AuthPolicyState) allowsUser(id string) bool { return id != "" && p.Users[id] }
 func (p *AuthPolicyState) requiresLogin() bool       { return len(p.Users) > 0 }
-func (p *AuthPolicyState) usesPassword() bool        { return p.PasswordHash != "" }
+func (p *AuthPolicyState) usesSecret() bool          { return p.SecretHash != "" }
 
 // headerName returns the identity header to inject, defaulting to x-Gatecrash-User.
 func (p *AuthPolicyState) headerName() string {
@@ -47,24 +51,22 @@ func (p *AuthPolicyState) headerName() string {
 	return "x-Gatecrash-User"
 }
 
-// checkBasic validates HTTP Basic credentials against the policy's password.
-// Credential-bearing requests are per-IP rate limited (a flood of bad passwords
-// is shed cheaply before any bcrypt), and the bcrypt comparison is bounded by the
-// shared concurrency semaphore so it can't exhaust CPU. Returns username on success.
-func (s *Server) checkBasic(r *http.Request, pol *AuthPolicyState) (string, bool) {
-	user, pass, ok := r.BasicAuth()
+// checkServiceSecret validates the HTTP Basic password against the policy's
+// service-secret hash. The username is ignored (all entropy is in the secret).
+// Credential-bearing requests are per-IP rate limited (a flood of bad secrets is
+// shed cheaply before any bcrypt), and the bcrypt comparison is bounded by the
+// shared concurrency semaphore so it can't exhaust CPU. Returns true on success.
+func (s *Server) checkServiceSecret(r *http.Request, pol *AuthPolicyState) bool {
+	_, pass, ok := r.BasicAuth()
 	if !ok {
-		return "", false
+		return false
 	}
 	// Per-IP rate limit on actual credential attempts. Shed floods before bcrypt.
 	if s.tunnelAuthLimiter != nil && !s.tunnelAuthLimiter.allow(basicAuthIP(r)) {
-		return "", false
+		return false
 	}
-	if pol.Username != "" && user != pol.Username {
-		return "", false
-	}
-	if pol.PasswordHash == "" {
-		return "", false
+	if pol.SecretHash == "" {
+		return false
 	}
 	// Bound concurrent bcrypt (shared with SSH auth). Wait briefly rather than
 	// failing instantly so a legitimate login survives a transient burst, but cap
@@ -73,12 +75,9 @@ func (s *Server) checkBasic(r *http.Request, pol *AuthPolicyState) (string, bool
 	case s.bcryptSem <- struct{}{}:
 		defer func() { <-s.bcryptSem }()
 	case <-time.After(s.sshAuthAcquireTimeout):
-		return "", false
+		return false
 	}
-	if bcrypt.CompareHashAndPassword([]byte(pol.PasswordHash), []byte(pass)) != nil {
-		return "", false
-	}
-	return user, true
+	return bcrypt.CompareHashAndPassword([]byte(pol.SecretHash), []byte(pass)) == nil
 }
 
 // basicAuthIP returns the source IP of a request for rate-limiting keys.

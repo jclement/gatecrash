@@ -54,6 +54,13 @@ type User struct {
 	InviteToken   string             `json:"invite_token,omitempty"`
 	InviteExpires time.Time          `json:"invite_expires,omitempty"`
 	CreatedAt     time.Time          `json:"created_at"`
+
+	// SessionEpoch is a monotonically increasing revocation counter. Every issued
+	// session JWT carries the epoch current at mint time; a session whose epoch is
+	// older than this is rejected. Bumping it (logout, passkey reset, role change)
+	// invalidates all of the user's outstanding sessions across devices, which is
+	// what makes logout and credential reset actually revoke a stolen cookie.
+	SessionEpoch int `json:"session_epoch,omitempty"`
 }
 
 func (u *User) IsAdmin() bool     { return u.Role == RoleAdmin }
@@ -134,6 +141,31 @@ func (s *UserStore) Get(id string) *User {
 		return cloneUser(u)
 	}
 	return nil
+}
+
+// Epoch returns a user's current session revocation epoch and whether the user
+// exists. It is the source consulted by SessionManager/TunnelSession to reject
+// stale (logged-out / reset / re-roled) or deleted-user sessions.
+func (s *UserStore) Epoch(id string) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if u := s.getLocked(id); u != nil {
+		return u.SessionEpoch, true
+	}
+	return 0, false
+}
+
+// BumpEpoch increments a user's session epoch, invalidating all of their
+// outstanding sessions, and persists it. A missing user is a no-op.
+func (s *UserStore) BumpEpoch(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.getLocked(id)
+	if u == nil {
+		return nil
+	}
+	u.SessionEpoch++
+	return s.save()
 }
 
 // All returns copies of every user, sorted by ID (admins first).
@@ -338,6 +370,9 @@ func (s *UserStore) SetRole(id, role string) error {
 		return fmt.Errorf("cannot demote the last admin")
 	}
 	u.Role = role
+	// Revoke outstanding sessions so a role change takes effect immediately
+	// rather than at the old token's expiry.
+	u.SessionEpoch++
 	return s.save()
 }
 
@@ -356,6 +391,8 @@ func (s *UserStore) Reset(id string) (inviteToken string, err error) {
 	u.Credentials = nil
 	u.InviteToken = tok
 	u.InviteExpires = time.Now().Add(inviteTTL)
+	// Clearing passkeys is a security action — revoke any live sessions too.
+	u.SessionEpoch++
 	if err := s.save(); err != nil {
 		return "", err
 	}

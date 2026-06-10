@@ -24,14 +24,48 @@ const (
 	sessionDuration   = 24 * time.Hour
 )
 
+// EpochFunc returns a user's current session revocation epoch and whether the
+// user still exists. Sessions whose embedded epoch is older than the current one
+// — or whose user no longer exists — are rejected, giving real server-side
+// revocation on logout, passkey reset, role change, and deletion. A nil
+// EpochFunc disables the check (used in tests without a user store).
+type EpochFunc func(userID string) (epoch int, exists bool)
+
+// epochValid reports whether a token's epoch is still current for its user.
+func epochValid(fn EpochFunc, userID string, tokenEpoch int) bool {
+	if fn == nil {
+		return true
+	}
+	cur, exists := fn(userID)
+	if !exists {
+		return false
+	}
+	return tokenEpoch >= cur
+}
+
 // SessionManager handles JWT-based sessions.
 type SessionManager struct {
-	secret []byte
+	secret  []byte
+	epochOf EpochFunc
 }
 
 // NewSessionManager creates a new session manager with a purpose-derived key.
 func NewSessionManager(secret string) *SessionManager {
 	return &SessionManager{secret: DeriveKey(secret, "admin-session")}
+}
+
+// SetEpochSource wires the revocation-epoch lookup (typically UserStore.Epoch).
+func (sm *SessionManager) SetEpochSource(fn EpochFunc) {
+	sm.epochOf = fn
+}
+
+// currentEpoch returns the user's current epoch, or 0 if unknown/unwired.
+func (sm *SessionManager) currentEpoch(userID string) int {
+	if sm.epochOf == nil {
+		return 0
+	}
+	ep, _ := sm.epochOf(userID)
+	return ep
 }
 
 // sessionClaims extends RegisteredClaims with an actor identity for audit logging
@@ -43,6 +77,7 @@ type sessionClaims struct {
 	Actor string `json:"actor,omitempty"` // user ID
 	Role  string `json:"role,omitempty"`  // "admin" | "user"
 	SID   string `json:"sid,omitempty"`
+	Epoch int    `json:"ep,omitempty"` // revocation epoch at mint time
 }
 
 func newSID() string {
@@ -51,8 +86,9 @@ func newSID() string {
 	return hex.EncodeToString(b)
 }
 
-// issue signs and sets a session cookie carrying the user, role, and stable SID.
-func (sm *SessionManager) issue(w http.ResponseWriter, userID, role, sid string) error {
+// issue signs and sets a session cookie carrying the user, role, stable SID, and
+// revocation epoch.
+func (sm *SessionManager) issue(w http.ResponseWriter, userID, role, sid string, epoch int) error {
 	claims := sessionClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionDuration)),
@@ -62,6 +98,7 @@ func (sm *SessionManager) issue(w http.ResponseWriter, userID, role, sid string)
 		Actor: userID,
 		Role:  role,
 		SID:   sid,
+		Epoch: epoch,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -83,9 +120,10 @@ func (sm *SessionManager) issue(w http.ResponseWriter, userID, role, sid string)
 	return nil
 }
 
-// CreateSession starts a new session (fresh SID) for a login as the given user.
+// CreateSession starts a new session (fresh SID) for a login as the given user,
+// stamping it with the user's current revocation epoch.
 func (sm *SessionManager) CreateSession(w http.ResponseWriter, userID, role string) error {
-	return sm.issue(w, userID, role, newSID())
+	return sm.issue(w, userID, role, newSID(), sm.currentEpoch(userID))
 }
 
 // RefreshSession re-issues the current session with a bumped expiry, PRESERVING
@@ -96,7 +134,9 @@ func (sm *SessionManager) RefreshSession(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return fmt.Errorf("no valid session")
 	}
-	return sm.issue(w, claims.Actor, claims.Role, claims.SID)
+	// parseSession already rejected stale epochs, so preserving the claim's epoch
+	// here is safe (a keepalive never resurrects a revoked session).
+	return sm.issue(w, claims.Actor, claims.Role, claims.SID, claims.Epoch)
 }
 
 // ClearSession removes the session cookie.
@@ -180,6 +220,12 @@ func (sm *SessionManager) parseSession(r *http.Request) (*sessionClaims, bool) {
 	}
 
 	if claims.Issuer != "gatecrash" {
+		return nil, false
+	}
+
+	// Reject sessions revoked since they were minted (logout, passkey reset, role
+	// change) or belonging to a now-deleted user.
+	if !epochValid(sm.epochOf, claims.Actor, claims.Epoch) {
 		return nil, false
 	}
 

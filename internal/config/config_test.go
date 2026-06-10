@@ -3,8 +3,95 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
+
+// TestSaveLoad_RoundTrip is the regression guard for the hand-written TOML
+// serializer in Save(): every populated field must survive a Save→decode cycle.
+// Without this, adding a struct field that Save() forgets to emit silently drops
+// it on the next write. It decodes with toml directly (not Load) to test the
+// serializer in isolation, without Load's cert_dir/secret normalization.
+func TestSaveLoad_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gatecrash.toml")
+
+	orig := &Config{
+		Server: ServerConfig{
+			Secret:    "super-secret-value",
+			SSHPort:   2222,
+			HTTPSPort: 8443,
+			HTTPPort:  8080,
+			AdminHost: "admin.example.com",
+			BindAddr:  "127.0.0.1",
+		},
+		TLS: TLSConfig{
+			ACMEEmail: "ops@example.com",
+			CertDir:   "/var/lib/gatecrash/certs",
+			Staging:   true,
+		},
+		Update: UpdateConfig{
+			Enabled:       true,
+			CheckInterval: "12h",
+			GitHubRepo:    "jclement/gatecrash",
+		},
+		Tunnel: []Tunnel{
+			{
+				ID:           "web",
+				Type:         "http",
+				Hostnames:    []string{"app.example.com", "www.example.com"},
+				SecretHash:   "$2a$12$abcdefghijklmnopqrstuv",
+				PreserveHost: true,
+				IPPolicy:     "internal",
+				AuthPolicy:   "staff",
+			},
+			{
+				ID:             "db",
+				Type:           "tcp",
+				ListenPort:     9000,
+				SecretHash:     "$2a$12$zyxwvutsrqponmlkjihgfe",
+				TLSPassthrough: true,
+				IPPolicy:       "internal",
+			},
+		},
+		Redirect: []Redirect{
+			{From: "old.example.com", To: "https://new.example.com", PreservePath: true},
+		},
+		IPPolicy: []IPPolicy{
+			{
+				ID:          "internal",
+				EnrollToken: "enroll-token-xyz",
+				Ranges: []IPRange{
+					{CIDR: "10.0.0.0/8", Comment: "office LAN"},
+					{CIDR: "192.168.1.5", Comment: ""},
+				},
+			},
+		},
+		AuthPolicy: []AuthPolicy{
+			{
+				ID:         "staff",
+				Users:      []string{"u_1a2b", "u_3c4d"},
+				Header:     "X-Auth-User",
+				SecretHash: "$2a$12$servicesecrethashvalue",
+			},
+		},
+	}
+
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var got Config
+	if _, err := toml.DecodeFile(path, &got); err != nil {
+		t.Fatalf("decode saved config: %v", err)
+	}
+
+	if !reflect.DeepEqual(orig, &got) {
+		t.Fatalf("round-trip mismatch:\n orig = %#v\n got  = %#v", orig, &got)
+	}
+}
 
 func TestLoad_CreatesDefaultConfig(t *testing.T) {
 	dir := t.TempDir()

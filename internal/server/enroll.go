@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"log/slog"
 	"net"
 	"net/http"
@@ -81,62 +80,27 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	label := html.EscapeString(policyLabel(pol))
-	ipStr := html.EscapeString(ip.String())
-	authorizeForm := fmt.Sprintf(`<form method="POST" action="/enroll/%s"><button class="btn" type="submit">%%s</button></form>`, html.EscapeString(token))
-
-	var heading, body, actions string
+	data := enrollPageData{
+		Title: "Authorize Access",
+		IP:    ip.String(),
+		Label: policyLabel(pol),
+		Token: token,
+	}
 	switch {
 	case s.staticAllows(pol.ID, ip):
 		// Permanently allowlisted in config — no self-service grant needed.
-		heading = "You already have access"
-		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is permanently allowed by <strong>%s</strong>.`, ipStr, label)
+		data.Heading = "You already have access"
+		data.Mode = "static"
 	case s.grantRemaining(pol.ID, ip) != "":
 		// Already enrolled — offer to extend (re-grant bumps the 7-day clock).
-		heading = "You're already authorized"
-		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is authorized by <strong>%s</strong> — access expires in %s.`,
-			ipStr, label, html.EscapeString(s.grantRemaining(pol.ID, ip)))
-		actions = fmt.Sprintf(authorizeForm, "Extend 7 days")
+		data.Heading = "You're already authorized"
+		data.Mode = "extend"
+		data.Remaining = s.grantRemaining(pol.ID, ip)
 	default:
-		heading = "Authorize Access"
-		body = fmt.Sprintf(`You've been invited to access services protected by <strong>%s</strong>. Authorize your current IP <span class="ip">%s</span> for 7 days?`, label, ipStr)
-		actions = fmt.Sprintf(authorizeForm, "Authorize my IP")
+		data.Heading = "Authorize Access"
+		data.Mode = ""
 	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize Access — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin-bottom: 12px; }
-  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 8px; }
-  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .btn { display: inline-block; margin: 16px 4px 0; padding: 12px 24px; background: #2563eb;
-         color: white; border: none; cursor: pointer; border-radius: 6px; font-size: 14px;
-         font-weight: 600; text-decoration: none; }
-  .btn:hover { background: #1d4ed8; }
-  form { display: inline-block; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>%s</h1>
-  <p>%s</p>
-  %s
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`, heading, body, actions)
+	s.renderStandalonePage(w, http.StatusOK, "enroll", data)
 }
 
 func policyLabel(p config.IPPolicy) string { return p.ID }
@@ -203,41 +167,12 @@ func (s *Server) handleEnrollSubmit(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Self-enrolled IP %s for ip_policy %q via link (7 days)", ip, pol.ID))
 	slog.Info("ip self-enrolled via link", "policy", pol.ID, "ip", ip)
 
-	continueBtn := ""
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Access Authorized — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin-bottom: 12px; color: #16a34a; }
-  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 8px; }
-  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .btn { display: inline-block; margin-top: 16px; padding: 12px 24px; background: #2563eb;
-         color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; }
-  .btn:hover { background: #1d4ed8; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>&#10003; Access Authorized</h1>
-  <p>Your IP <span class="ip">%s</span> may now access <strong>%s</strong> for 7 days.</p>
-  %s
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`,
-		html.EscapeString(ip.String()), html.EscapeString(policyLabel(pol)), continueBtn)
+	s.renderStandalonePage(w, http.StatusOK, "ip-authorized", ipAuthorizedPageData{
+		Title:   "Access Authorized",
+		Heading: "Access Authorized",
+		IP:      ip.String(),
+		Name:    policyLabel(pol),
+	})
 }
 
 // setEnrollToken sets (or clears, if token == "") the enrollment token on an IP

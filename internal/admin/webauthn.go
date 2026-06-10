@@ -124,8 +124,10 @@ func (h *WebAuthnHandler) BeginRegistration(u *User) (creation interface{}, chal
 		userToWebAuthn(u),
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementRequired,
-			UserVerification: protocol.VerificationPreferred,
+			ResidentKey: protocol.ResidentKeyRequirementRequired,
+			// Require user verification (biometric/PIN). This is an admin control
+			// plane, so a borrowed-but-unlocked authenticator must not be enough.
+			UserVerification: protocol.VerificationRequired,
 		}),
 	)
 	if err != nil {
@@ -174,7 +176,11 @@ func (h *WebAuthnHandler) FinishRegistration(r *http.Request, challengeID string
 
 // BeginLogin starts a usernameless (discoverable) login.
 func (h *WebAuthnHandler) BeginLogin() (assertion interface{}, challengeID string, err error) {
-	options, session, err := h.wan.BeginDiscoverableLogin()
+	// Require user verification so a stolen/unlocked authenticator cannot silently
+	// assert. The library enforces the UV flag at FinishDiscoverableLogin.
+	options, session, err := h.wan.BeginDiscoverableLogin(
+		webauthn.WithUserVerification(protocol.VerificationRequired),
+	)
 	if err != nil {
 		return nil, "", err
 	}

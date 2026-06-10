@@ -18,7 +18,7 @@ import (
 // The listener is tracked in s.tcpListeners so it can be stopped on config reload.
 func (s *Server) serveTCPForward(tunnel *TunnelState) error {
 	port := tunnel.Port()
-	addr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, port)
+	addr := fmt.Sprintf("%s:%d", s.cfgSnapshot().Server.BindAddr, port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -51,12 +51,10 @@ func (s *Server) serveTCPForward(tunnel *TunnelState) error {
 // reconcileTCPListeners starts listeners for new TCP tunnels and stops listeners
 // for removed ones after a config reload.
 func (s *Server) reconcileTCPListeners() {
-	s.tcpMu.Lock()
-	defer s.tcpMu.Unlock()
-
-	if s.tcpListeners == nil {
-		s.tcpListeners = make(map[int]net.Listener)
-	}
+	// Snapshot bind address and tunnels BEFORE taking tcpMu: read s.cfg under its
+	// own lock (it races the reload pointer swap otherwise), and avoid establishing
+	// a tcpMu→registry.mu lock order by querying the registry up front.
+	bindAddr := s.cfgSnapshot().Server.BindAddr
 
 	// Build set of ports that should have listeners
 	wantPorts := make(map[int]*TunnelState)
@@ -66,6 +64,13 @@ func (s *Server) reconcileTCPListeners() {
 				wantPorts[p] = t
 			}
 		}
+	}
+
+	s.tcpMu.Lock()
+	defer s.tcpMu.Unlock()
+
+	if s.tcpListeners == nil {
+		s.tcpListeners = make(map[int]net.Listener)
 	}
 
 	// Stop listeners for ports no longer needed
@@ -80,7 +85,7 @@ func (s *Server) reconcileTCPListeners() {
 	// Start listeners for new ports
 	for port, tunnel := range wantPorts {
 		if _, ok := s.tcpListeners[port]; !ok {
-			addr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, port)
+			addr := fmt.Sprintf("%s:%d", bindAddr, port)
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				slog.Error("TCP forward listen failed", "tunnel", tunnel.ID, "port", port, "error", err)
@@ -171,7 +176,9 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 		done <- struct{}{}
 	}()
 	go func() {
-		n, _ := io.Copy(conn, ch)
+		// Write deadline guards against a public TCP client that stops reading,
+		// which would otherwise pin this goroutine and the SSH channel forever.
+		n, _ := copyWithWriteTimeout(conn, ch, streamWriteIdleTimeout)
 		tunnel.Metrics.BytesOut.Add(n)
 		conn.Close() // unblock the other goroutine
 		done <- struct{}{}

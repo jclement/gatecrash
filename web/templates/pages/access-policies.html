@@ -1,82 +1,92 @@
 {{define "content"}}
-<div x-data="accessPolicies()" x-cloak class="max-w-4xl mx-auto px-4 py-6 space-y-8">
+<div x-data="accessPolicies()" x-cloak>
 
     <!-- IP Policies -->
-    <section class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden border-l-4 border-l-indigo-500">
-        <div class="flex items-center justify-between gap-3 px-4 py-3 bg-indigo-50/70 border-b border-gray-200">
-            <div class="flex items-start gap-2.5">
-                <div class="mt-0.5 w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
-                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zm0 0c2.5 0 4.5-4.03 4.5-9s-2-9-4.5-9-4.5 4.03-4.5 9 2 9 4.5 9zM3.5 9h17M3.5 15h17"/></svg>
-                </div>
-                <div>
-                    <h2 class="text-base font-semibold text-gray-900">IP Policies</h2>
-                    <p class="text-xs text-gray-500">Reusable source-IP allowlists. Reference from a tunnel's IP Policy. Works on HTTP and TCP.</p>
-                </div>
+    <div class="bg-white rounded-lg border border-gray-200 mb-4">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+            <div>
+                <h2 class="text-base font-bold">IP Policies</h2>
+                <p class="text-xs text-gray-400">Reusable source-IP allowlists. Works on HTTP and TCP tunnels.</p>
             </div>
-            <button @click="openNewIP()" class="shrink-0 text-sm bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded font-medium transition-colors">Add IP Policy</button>
+            <button @click="openNewIP()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add IP Policy</button>
         </div>
-        <div>
-            <template x-if="ipPolicies.length === 0">
-                <p class="text-sm text-gray-400 py-6 text-center">No IP policies yet.</p>
-            </template>
-            <table x-show="ipPolicies.length > 0" class="w-full text-sm">
-                <tbody>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-200 bg-gray-50">
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Ranges</th>
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Enroll Link</th>
+                        <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    <template x-if="ipPolicies.length === 0">
+                        <tr><td colspan="4" class="px-3 py-6 text-center text-gray-400">No IP policies configured. Click "Add IP Policy" to create one.</td></tr>
+                    </template>
                     <template x-for="p in ipPolicies" :key="p.id">
-                        <tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                            <td class="px-4 py-2 font-semibold" x-text="p.id"></td>
-                            <td class="px-4 py-2 text-gray-500 text-xs" x-text="(p.ranges?.length || 0) + ' range' + ((p.ranges?.length||0)===1?'':'s')"></td>
-                            <td class="px-4 py-2 text-xs">
-                                <span x-show="p.enroll_url" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">link active</span>
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-3 py-2 font-semibold" x-text="p.id"></td>
+                            <td class="px-3 py-2 text-xs text-gray-500" x-text="(p.ranges?.length || 0) + ' range' + ((p.ranges?.length||0)===1?'':'s')"></td>
+                            <td class="px-3 py-2">
+                                <span x-show="p.enroll_url" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">active</span>
+                                <span x-show="!p.enroll_url" class="text-xs text-gray-400">—</span>
                             </td>
-                            <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
-                                <button @click="openIPDetail(p.id)" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium">IPs &amp; Link</button>
-                                <button @click="openEditIP(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium">Edit</button>
-                                <button @click="deleteIP(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
+                            <td class="px-3 py-2 text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="openIPDetail(p.id)" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium transition-colors">IPs &amp; Link</button>
+                                    <button @click="openEditIP(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
+                                    <button @click="deleteIP(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Delete</button>
+                                </div>
                             </td>
                         </tr>
                     </template>
                 </tbody>
             </table>
         </div>
-    </section>
+    </div>
 
     <!-- Auth Policies -->
-    <section class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden border-l-4 border-l-emerald-500">
-        <div class="flex items-center justify-between gap-3 px-4 py-3 bg-emerald-50/70 border-b border-gray-200">
-            <div class="flex items-start gap-2.5">
-                <div class="mt-0.5 w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91c-.56-.1-1.16.02-1.56.43l-2.1 2.16H9v1.5H7.5v1.5H6v1.5H3.75a.75.75 0 01-.75-.75v-2.69c0-.2.08-.39.22-.53l5.66-5.66c.41-.4.53-1 .43-1.56A6 6 0 1121.75 8.25z"/></svg>
-                </div>
-                <div>
-                    <h2 class="text-base font-semibold text-gray-900">Auth Policies</h2>
-                    <p class="text-xs text-gray-500">Reusable authentication requirements. Methods are OR'd — meet any one. HTTP tunnels only.</p>
-                </div>
+    <div class="bg-white rounded-lg border border-gray-200">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+            <div>
+                <h2 class="text-base font-bold">Auth Policies</h2>
+                <p class="text-xs text-gray-400">Reusable authentication requirements — meet any one method. HTTP tunnels only.</p>
             </div>
-            <button @click="openNewAuth()" class="shrink-0 text-sm bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded font-medium transition-colors">Add Auth Policy</button>
+            <button @click="openNewAuth()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">Add Auth Policy</button>
         </div>
-        <div>
-            <template x-if="authPolicies.length === 0">
-                <p class="text-sm text-gray-400 py-6 text-center">No auth policies yet.</p>
-            </template>
-            <table x-show="authPolicies.length > 0" class="w-full text-sm">
-                <tbody>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-200 bg-gray-50">
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
+                        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Methods</th>
+                        <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    <template x-if="authPolicies.length === 0">
+                        <tr><td colspan="3" class="px-3 py-6 text-center text-gray-400">No auth policies configured. Click "Add Auth Policy" to create one.</td></tr>
+                    </template>
                     <template x-for="p in authPolicies" :key="p.id">
-                        <tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                            <td class="px-4 py-2 font-semibold" x-text="p.id"></td>
-                            <td class="px-4 py-2">
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-3 py-2 font-semibold" x-text="p.id"></td>
+                            <td class="px-3 py-2">
                                 <span class="text-xs text-gray-500" x-text="(p.users?.length || 0) + ' user' + ((p.users?.length||0)===1?'':'s')"></span>
-                                <span x-show="p.has_password" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 ml-1">+ password</span>
+                                <span x-show="p.has_secret" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 ml-1">+ service secret</span>
                             </td>
-                            <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
-                                <button @click="openEditAuth(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium">Edit</button>
-                                <button @click="deleteAuth(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
+                            <td class="px-3 py-2 text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="openEditAuth(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium transition-colors">Edit</button>
+                                    <button @click="deleteAuth(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium transition-colors">Delete</button>
+                                </div>
                             </td>
                         </tr>
                     </template>
                 </tbody>
             </table>
         </div>
-    </section>
+    </div>
 
     <!-- IP Policy edit modal -->
     <div x-show="ipModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
@@ -201,12 +211,32 @@
                     <p class="text-xs text-gray-400 mt-1">The user's ID is injected here (plus X-Gatecrash-Role).</p>
                 </div>
                 <div class="border-t border-gray-200 pt-3">
-                    <label class="block text-xs font-medium text-gray-600 mb-1">Static password <span class="font-normal text-gray-400">(optional — for machines/CI)</span></label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <input type="text" x-model="authEdit.username" placeholder="username (any)" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-                        <input type="password" x-model="authEdit.password" :placeholder="authEdit.has_password ? '•••••• (unchanged)' : 'set a password'" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Service secret <span class="font-normal text-gray-400">(optional — for machines/CI/webhooks)</span></label>
+                    <p class="text-xs text-gray-400 mb-2">A machine-generated secret for non-interactive clients, sent via HTTP Basic. <strong>It grants access independent of the user list</strong>, so only use it for trusted automation.</p>
+
+                    <!-- One-time reveal after generation -->
+                    <div x-show="authEdit.secretReveal" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded">
+                        <p class="text-[11px] text-amber-800 mb-1 font-medium">Copy this now — it will not be shown again.</p>
+                        <div class="flex items-center gap-2">
+                            <code class="flex-1 text-xs bg-white border border-amber-200 rounded px-2 py-1 break-all" x-text="authEdit.secretReveal"></code>
+                            <button type="button" @click="copySecret()" class="text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 px-2 py-1 rounded font-medium">Copy</button>
+                        </div>
+                        <p class="text-[11px] text-gray-500 mt-1">HTTP Basic — username <code x-text="authEdit.secretUsername"></code> (any username works), password is the secret above.</p>
                     </div>
-                    <p class="text-xs text-gray-400 mt-1">HTTP Basic. Leave blank to keep the existing password.</p>
+
+                    <div class="flex items-center gap-2">
+                        <template x-if="!authEdit.has_secret">
+                            <button type="button" @click="genSecret()" class="text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 px-2 py-1 rounded font-medium">Generate service secret</button>
+                        </template>
+                        <template x-if="authEdit.has_secret">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs text-gray-500">A service secret is set.</span>
+                                <button type="button" @click="genSecret()" class="text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 px-2 py-1 rounded font-medium">Regenerate</button>
+                                <button type="button" @click="clearSecret()" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Remove</button>
+                            </div>
+                        </template>
+                    </div>
+                    <p class="text-[11px] text-gray-400 mt-1">Generating saves the policy immediately and creates it if new.</p>
                 </div>
             </div>
             <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
@@ -231,7 +261,7 @@ function accessPolicies() {
     return {
         ipPolicies: [], authPolicies: [], allUsers: [],
         ipModal: false, ipEdit: { id: '', ranges: [], isNew: true },
-        authModal: false, authEdit: { id: '', users: [], header: '', username: '', password: '', has_password: false, isNew: true },
+        authModal: false, authEdit: { id: '', users: [], header: '', has_secret: false, isNew: true, secretReveal: '', secretUsername: 'service' },
         ipDetail: { open: false, id: '', grants: [], enrollUrl: '' },
         toasts: [], _tid: 0,
 
@@ -300,16 +330,35 @@ function accessPolicies() {
 
         // Auth policies
         toggleUser(id) { const i = this.authEdit.users.indexOf(id); if (i >= 0) this.authEdit.users.splice(i, 1); else this.authEdit.users.push(id); },
-        openNewAuth() { this.authEdit = { id: '', users: [], header: '', username: '', password: '', has_password: false, isNew: true }; this.authModal = true; },
-        openEditAuth(p) { this.authEdit = { id: p.id, users: [...(p.users || [])], header: p.header || '', username: p.username || '', password: '', has_password: !!p.has_password, isNew: false }; this.authModal = true; },
+        openNewAuth() { this.authEdit = { id: '', users: [], header: '', has_secret: false, isNew: true, secretReveal: '', secretUsername: 'service' }; this.authModal = true; },
+        openEditAuth(p) { this.authEdit = { id: p.id, users: [...(p.users || [])], header: p.header || '', has_secret: !!p.has_secret, isNew: false, secretReveal: '', secretUsername: 'service' }; this.authModal = true; },
+        authBody(extra) { return Object.assign({ id: this.authEdit.id.trim(), users: this.authEdit.users, header: this.authEdit.header }, extra || {}); },
+        async postAuth(extra) {
+            const resp = await fetch('/api/auth-policies', { method: 'POST', headers: headers(), body: JSON.stringify(this.authBody(extra)) });
+            if (this.auth(resp)) return null;
+            if (!resp.ok) { this.toast('Error: ' + await resp.text()); return null; }
+            return await resp.json();
+        },
         async saveAuth() {
-            if (this.authEdit.users.length === 0 && !this.authEdit.password && !this.authEdit.has_password) { this.toast('Select at least one user or set a password'); return; }
-            const body = { id: this.authEdit.id.trim(), users: this.authEdit.users, header: this.authEdit.header, username: this.authEdit.username, password: this.authEdit.password };
-            const resp = await fetch('/api/auth-policies', { method: 'POST', headers: headers(), body: JSON.stringify(body) });
-            if (this.auth(resp)) return;
-            if (!resp.ok) { this.toast('Error: ' + await resp.text()); return; }
+            if (this.authEdit.users.length === 0 && !this.authEdit.has_secret) { this.toast('Select at least one user or generate a service secret'); return; }
+            if (!(await this.postAuth())) return;
             this.authModal = false; this.load();
         },
+        async genSecret() {
+            const r = await this.postAuth({ generate_secret: true });
+            if (!r) return;
+            this.authEdit.has_secret = true; this.authEdit.isNew = false;
+            this.authEdit.secretReveal = r.secret || '';
+            this.authEdit.secretUsername = r.secret_username || 'service';
+            this.toast('Service secret generated'); this.load();
+        },
+        async clearSecret() {
+            if (!confirm('Remove the service secret? Clients using it will lose access.')) return;
+            if (!(await this.postAuth({ clear_secret: true }))) return;
+            this.authEdit.has_secret = false; this.authEdit.secretReveal = '';
+            this.toast('Service secret removed'); this.load();
+        },
+        copySecret() { navigator.clipboard?.writeText(this.authEdit.secretReveal).then(() => this.toast('Copied')).catch(() => this.toast('Copy failed')); },
         async deleteAuth(id) {
             if (!confirm('Delete auth policy "' + id + '"?')) return;
             const resp = await fetch('/api/auth-policies/' + encodeURIComponent(id), { method: 'DELETE', headers: headers() });

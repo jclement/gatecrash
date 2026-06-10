@@ -40,7 +40,10 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 			}
 			defer release()
 
-			tunnelID, valid := token.Validate(password, s.cfg.LookupSecretHash)
+			// Snapshot the config under the lock: this closure runs on every auth
+			// attempt and races the pointer swap in handleConfigReload otherwise.
+			cfg := s.cfgSnapshot()
+			tunnelID, valid := token.Validate(password, cfg.LookupSecretHash)
 			if !valid {
 				slog.Warn("SSH auth failed", "remote", ctx.RemoteAddr())
 				return false

@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -43,45 +42,14 @@ func (s *Server) handleAuthorizeIPPage(w http.ResponseWriter, r *http.Request) {
 	}
 	csrf := s.sessionMgr.CSRFToken(r)
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize IP — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin-bottom: 12px; }
-  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 8px; }
-  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .btn { margin-top: 16px; padding: 12px 24px; background: #2563eb; color: white;
-         border: none; cursor: pointer; border-radius: 6px; font-size: 14px; font-weight: 600; }
-  .btn:hover { background: #1d4ed8; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>Authorize this IP</h1>
-  <p>Grant <span class="ip">%s</span> access to <strong>%s</strong> for 7 days?</p>
-  <form method="POST" action="/authorize-ip">
-    <input type="hidden" name="tunnel" value="%s">
-    <input type="hidden" name="return" value="%s">
-    <input type="hidden" name="csrf_token" value="%s">
-    <button class="btn" type="submit">Authorize this IP</button>
-  </form>
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`,
-		html.EscapeString(ip.String()), html.EscapeString(name),
-		html.EscapeString(tunnelID), html.EscapeString(returnURL), html.EscapeString(csrf))
+	s.renderStandalonePage(w, http.StatusOK, "ip-authorize", ipAuthorizePageData{
+		Title:     "Authorize IP",
+		IP:        ip.String(),
+		Name:      name,
+		TunnelID:  tunnelID,
+		ReturnURL: returnURL,
+		CSRF:      csrf,
+	})
 }
 
 // handleAuthorizeIPSubmit (POST) performs the grant after validating CSRF.
@@ -153,37 +121,14 @@ func safeTunnelReturnURL(raw string, tunnel *TunnelState) string {
 }
 
 func (s *Server) serveIPAuthorizedPage(w http.ResponseWriter, _ *http.Request, tunnelID, ip string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IP Authorized — Gatecrash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #f5f5f5; color: #333; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }
-  .card { background: white; border-radius: 8px; padding: 48px; max-width: 480px;
-          text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin-bottom: 12px; color: #16a34a; }
-  p { color: #666; line-height: 1.6; font-size: 14px; margin-bottom: 8px; }
-  .ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-  .footer { margin-top: 24px; font-size: 12px; color: #bbb; }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>&#10003; IP Authorized</h1>
-  <p>Your address <span class="ip">%s</span> may now access <strong>%s</strong> for the next 7 days.</p>
-  <p>You can close this page.</p>
-  <div class="footer">Gatecrash</div>
-</div>
-</body>
-</html>`, html.EscapeString(ip), html.EscapeString(tunnelID))
+	s.renderStandalonePage(w, http.StatusOK, "ip-authorized", ipAuthorizedPageData{
+		Title:   "IP Authorized",
+		Heading: "IP Authorized",
+		IP:      ip,
+		Name:    tunnelID,
+	})
 }
+
 
 // handleListPolicyIPs returns an IP policy's permanent ranges and live grants.
 func (s *Server) handleListPolicyIPs(w http.ResponseWriter, r *http.Request) {

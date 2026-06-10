@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/log"
 	"golang.org/x/term"
 
@@ -21,6 +23,37 @@ import (
 )
 
 var Version = "dev"
+
+// defaultClientConfigPath is loaded automatically when present, so a client can
+// run as a service from a declarative file instead of a long flag string.
+const defaultClientConfigPath = "/etc/gatecrash/client.toml"
+
+// fileConfig mirrors the settings a client.toml may provide. Flags and env vars
+// take precedence over the file; the file takes precedence over built-in
+// defaults. Targets accept the same "host:port" / "hostname=host:port" forms as
+// the --target flag.
+type fileConfig struct {
+	Server  string   `toml:"server"`
+	Token   string   `toml:"token"`
+	HostKey string   `toml:"host_key"`
+	Count   int      `toml:"count"`
+	Debug   bool     `toml:"debug"`
+	Targets []string `toml:"targets"`
+}
+
+// loadClientConfig reads a client.toml. explicit reports whether --config was
+// passed (in which case a missing/unreadable file is a fatal error rather than a
+// silently-skipped default).
+func loadClientConfig(path string, explicit bool) (fileConfig, error) {
+	var fc fileConfig
+	if _, err := toml.DecodeFile(path, &fc); err != nil {
+		if errors.Is(err, os.ErrNotExist) && !explicit {
+			return fc, nil // default path absent — fine
+		}
+		return fc, fmt.Errorf("reading config %s: %w", path, err)
+	}
+	return fc, nil
+}
 
 func main() {
 	// Check for subcommands first
@@ -50,6 +83,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  gatecrash version    Print version\n")
 	fmt.Fprintf(os.Stderr, "  gatecrash help       Show this help\n")
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "  -c, --config FILE    Load settings from a TOML file (default %s if present)\n", defaultClientConfigPath)
 	fmt.Fprintf(os.Stderr, "  --server HOST:PORT   Server SSH address (or GATECRASH_SERVER)\n")
 	fmt.Fprintf(os.Stderr, "  --token TOKEN        Tunnel token (or GATECRASH_TOKEN)\n")
 	fmt.Fprintf(os.Stderr, "  --target TARGET      Target address (repeatable, or GATECRASH_TARGET)\n")
@@ -84,18 +118,37 @@ func setupLogging(debug bool) {
 	slog.SetDefault(slog.New(handler))
 }
 
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+func envBool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// resolveStr applies precedence: explicit flag > env var > config-file value >
+// built-in default.
+func resolveStr(flagSet bool, flagVal, envKey, fileVal, def string) string {
+	if flagSet {
+		return flagVal
+	}
+	if v := os.Getenv(envKey); v != "" {
 		return v
+	}
+	if fileVal != "" {
+		return fileVal
 	}
 	return def
 }
 
-func envOrDefaultInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
+func resolveInt(flagSet bool, flagVal int, envKey string, fileVal, def int) int {
+	if flagSet {
+		return flagVal
+	}
+	if v := os.Getenv(envKey); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+	}
+	if fileVal != 0 {
+		return fileVal
 	}
 	return def
 }
@@ -111,24 +164,57 @@ func (r *targetFlags) Set(value string) error {
 
 func runClient(args []string) {
 	fs := flag.NewFlagSet("gatecrash", flag.ExitOnError)
-	serverAddr := fs.String("server", envOrDefault("GATECRASH_SERVER", ""), "server SSH address (host:port)")
-	token := fs.String("token", envOrDefault("GATECRASH_TOKEN", ""), "tunnel token (tunnel_id:secret)")
-	hostKey := fs.String("host-key", envOrDefault("GATECRASH_HOST_KEY", ""), "server SSH host key fingerprint (SHA256:...)")
-	count := fs.Int("count", envOrDefaultInt("GATECRASH_COUNT", 1), "number of tunnel connections for redundancy")
-	debug := fs.Bool("debug", Version == "dev", "enable debug logging")
+	// Flags default to empty so we can layer precedence (flag > env > file >
+	// built-in default) after parsing; fs.Visit tells us which were set.
+	configPath := fs.String("config", "", "path to client.toml (default "+defaultClientConfigPath+" if present)")
+	fs.StringVar(configPath, "c", "", "shorthand for --config")
+	serverAddr := fs.String("server", "", "server SSH address (host:port)")
+	token := fs.String("token", "", "tunnel token (tunnel_id:secret)")
+	hostKey := fs.String("host-key", "", "server SSH host key fingerprint (SHA256:...)")
+	count := fs.Int("count", 0, "number of tunnel connections for redundancy")
+	debug := fs.Bool("debug", false, "enable debug logging")
 	var targets targetFlags
 	fs.Var(&targets, "target", "target: host:port or hostname=host:port (repeatable)")
 	fs.Parse(args)
 
-	// Also parse targets from env var (comma-separated)
-	if envTarget := os.Getenv("GATECRASH_TARGET"); envTarget != "" && len(targets) == 0 {
-		for _, t := range strings.Split(envTarget, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				targets = append(targets, t)
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	// Load the config file: an explicit --config/-c makes a missing file fatal;
+	// the default path is loaded only if it exists.
+	explicit := set["config"] || set["c"]
+	path := *configPath
+	if path == "" {
+		path = defaultClientConfigPath
+	}
+	fc, err := loadClientConfig(path, explicit)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// Resolve each setting by precedence: explicit flag > env var > file > default.
+	resolvedServer := resolveStr(set["server"], *serverAddr, "GATECRASH_SERVER", fc.Server, "")
+	resolvedToken := resolveStr(set["token"], *token, "GATECRASH_TOKEN", fc.Token, "")
+	resolvedHostKey := resolveStr(set["host-key"], *hostKey, "GATECRASH_HOST_KEY", fc.HostKey, "")
+	resolvedCount := resolveInt(set["count"], *count, "GATECRASH_COUNT", fc.Count, 1)
+	resolvedDebug := *debug || envBool("GATECRASH_DEBUG") || fc.Debug || Version == "dev"
+
+	// Targets: explicit --target wins, else env (comma-separated), else file.
+	if len(targets) == 0 {
+		if envTarget := os.Getenv("GATECRASH_TARGET"); envTarget != "" {
+			for _, t := range strings.Split(envTarget, ",") {
+				if t = strings.TrimSpace(t); t != "" {
+					targets = append(targets, t)
+				}
 			}
+		} else {
+			targets = append(targets, fc.Targets...)
 		}
 	}
+
+	serverAddr, token, hostKey = &resolvedServer, &resolvedToken, &resolvedHostKey
+	count, debug = &resolvedCount, &resolvedDebug
 
 	setupLogging(*debug)
 

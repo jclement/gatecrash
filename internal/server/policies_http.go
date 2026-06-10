@@ -118,11 +118,10 @@ func (s *Server) handleDeleteIPPolicy(w http.ResponseWriter, r *http.Request) {
 // ── Auth policies ────────────────────────────────────────────────────────────
 
 type authPolicyView struct {
-	ID          string   `json:"id"`
-	Users       []string `json:"users"`
-	Header      string   `json:"header"`
-	Username    string   `json:"username"`
-	HasPassword bool     `json:"has_password"`
+	ID        string   `json:"id"`
+	Users     []string `json:"users"`
+	Header    string   `json:"header"`
+	HasSecret bool     `json:"has_secret"`
 }
 
 func (s *Server) handleListAuthPolicies(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +129,8 @@ func (s *Server) handleListAuthPolicies(w http.ResponseWriter, r *http.Request) 
 	out := make([]authPolicyView, 0, len(s.cfg.AuthPolicy))
 	for _, p := range s.cfg.AuthPolicy {
 		out = append(out, authPolicyView{
-			ID: p.ID, Users: p.Users, Header: p.Header, Username: p.Username,
-			HasPassword: p.PasswordHash != "",
+			ID: p.ID, Users: p.Users, Header: p.Header,
+			HasSecret: p.SecretHash != "",
 		})
 	}
 	s.cfgMu.RUnlock()
@@ -140,11 +139,14 @@ func (s *Server) handleListAuthPolicies(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleSaveAuthPolicy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID       string   `json:"id"`
-		Users    []string `json:"users"`
-		Header   string   `json:"header"`
-		Username string   `json:"username"`
-		Password string   `json:"password"` // plaintext; empty on edit keeps existing
+		ID     string   `json:"id"`
+		Users  []string `json:"users"`
+		Header string   `json:"header"`
+		// GenerateSecret mints a fresh service secret (returned once in the
+		// response). ClearSecret removes any existing one. Neither set keeps the
+		// current secret unchanged.
+		GenerateSecret bool `json:"generate_secret"`
+		ClearSecret    bool `json:"clear_secret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -155,43 +157,64 @@ func (s *Server) handleSaveAuthPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var newHash string
-	if req.Password != "" {
-		h, err := token.HashSecret(req.Password)
+	// Generate the secret outside the lock (bcrypt is slow). plaintextSecret is
+	// returned to the admin exactly once.
+	var newHash, plaintextSecret string
+	if req.GenerateSecret {
+		plain, hash, err := token.GenerateSecret()
 		if err != nil {
-			http.Error(w, "failed to hash password", http.StatusInternalServerError)
+			http.Error(w, "failed to generate secret", http.StatusInternalServerError)
 			return
 		}
-		newHash = h
+		newHash, plaintextSecret = hash, plain
 	}
 
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 
-	pol := config.AuthPolicy{ID: req.ID, Users: req.Users, Header: req.Header, Username: req.Username}
-	updated := false
+	pol := config.AuthPolicy{ID: req.ID, Users: req.Users, Header: req.Header}
 	for i := range s.cfg.AuthPolicy {
 		if s.cfg.AuthPolicy[i].ID == req.ID {
-			if newHash == "" {
-				pol.PasswordHash = s.cfg.AuthPolicy[i].PasswordHash // keep existing
-			} else {
-				pol.PasswordHash = newHash
+			switch {
+			case req.GenerateSecret:
+				pol.SecretHash = newHash
+			case req.ClearSecret:
+				pol.SecretHash = ""
+			default:
+				pol.SecretHash = s.cfg.AuthPolicy[i].SecretHash // keep existing
 			}
 			s.cfg.AuthPolicy[i] = pol
-			updated = true
-			break
+			if err := s.saveAndReloadPoliciesLocked(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			s.auditLog.Log(s.actorName(r), "auth_policy.save", fmt.Sprintf("Saved auth_policy %q", req.ID))
+			s.writeAuthPolicySaved(w, plaintextSecret)
+			return
 		}
 	}
-	if !updated {
-		pol.PasswordHash = newHash
-		s.cfg.AuthPolicy = append(s.cfg.AuthPolicy, pol)
+	// New policy.
+	if !req.ClearSecret {
+		pol.SecretHash = newHash
 	}
+	s.cfg.AuthPolicy = append(s.cfg.AuthPolicy, pol)
 	if err := s.saveAndReloadPoliciesLocked(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.auditLog.Log(s.actorName(r), "auth_policy.save", fmt.Sprintf("Saved auth_policy %q", req.ID))
-	writeJSON(w, map[string]string{"status": "ok"})
+	s.writeAuthPolicySaved(w, plaintextSecret)
+}
+
+// writeAuthPolicySaved returns the save result, including a freshly generated
+// service secret (shown exactly once) when present.
+func (s *Server) writeAuthPolicySaved(w http.ResponseWriter, plaintextSecret string) {
+	resp := map[string]string{"status": "ok"}
+	if plaintextSecret != "" {
+		resp["secret"] = plaintextSecret
+		resp["secret_username"] = ServiceAuthUsername
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleDeleteAuthPolicy(w http.ResponseWriter, r *http.Request) {

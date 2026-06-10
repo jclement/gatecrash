@@ -85,6 +85,8 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 
 	// Pre-provision certificates for known hostnames
 	if len(hosts) > 0 {
+		slog.Info("provisioning TLS certificates — each hostname must resolve to this server with ports 80+443 reachable; the first certificate can take ~30s",
+			"hosts", hosts)
 		slog.Info("pre-provisioning TLS certificates", "hosts", hosts)
 		if err := magic.ManageSync(context.Background(), hosts); err != nil {
 			slog.Warn("ACME pre-provisioning failed, will try on-demand",
@@ -128,10 +130,20 @@ func (s *Server) setupTLS() (*tls.Config, error) {
 	tlsConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		cert, err := origGetCert(hello)
 		if err == nil {
+			// Recovered — forget the warning so a later regression logs again.
+			s.fallbackLogged.Delete(hello.ServerName)
 			return cert, nil
 		}
-		slog.Warn("ACME cert unavailable, using self-signed fallback",
-			"hostname", hello.ServerName, "error", err)
+		// Fall back to a self-signed cert so the handshake completes, but the
+		// browser will show a warning. Log an actionable hint ONCE per hostname
+		// (handshakes retry rapidly; without dedup this floods the log).
+		if _, seen := s.fallbackLogged.LoadOrStore(hello.ServerName, struct{}{}); !seen {
+			slog.Warn("serving a self-signed certificate — browsers will show a security warning",
+				"hostname", hello.ServerName,
+				"likely_cause", "DNS for this hostname isn't pointing at this server yet, inbound port 80/443 is blocked, or the Let's Encrypt certificate is still being issued (the first one can take ~30s)",
+				"action", "confirm DNS resolves to this server and ports 80+443 are open, then retry shortly",
+				"acme_error", err.Error())
+		}
 		return fallbackCert, nil
 	}
 
