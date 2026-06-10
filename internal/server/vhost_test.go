@@ -246,6 +246,29 @@ func TestVhostTunnelOffline(t *testing.T) {
 	}
 }
 
+func TestStripTrustedHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Gatecrash-User", "attacker")
+	h.Set("X-Gatecrash-Role", "admin")
+	h.Set("x-gatecrash-anything", "spoof") // case-insensitive, whole namespace
+	h.Set("X-Forwarded-For", "1.2.3.4")    // unrelated header, must survive
+	h.Set("Authorization", "Basic abc")    // unrelated header, must survive
+
+	stripTrustedHeaders(h)
+
+	for _, k := range []string{"X-Gatecrash-User", "X-Gatecrash-Role", "X-Gatecrash-Anything"} {
+		if got := h.Get(k); got != "" {
+			t.Errorf("expected %s to be stripped, got %q", k, got)
+		}
+	}
+	if h.Get("X-Forwarded-For") != "1.2.3.4" {
+		t.Errorf("X-Forwarded-For must not be stripped")
+	}
+	if h.Get("Authorization") != "Basic abc" {
+		t.Errorf("Authorization must not be stripped")
+	}
+}
+
 func TestVhostStripPortVariants(t *testing.T) {
 	tests := []struct {
 		name     string

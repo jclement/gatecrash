@@ -34,11 +34,11 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 			SSHPort   int
 		}{
 			Tunnels: []admin.TunnelView{{
-				ID:          "mcp",
-				Type:        "http",
-				Hostnames:   []string{"mcp.example.com"},
-				IPAllowlist: true,
-				AllowIPs:    []string{"203.0.113.4", "10.0.0.0/8"},
+				ID:         "mcp",
+				Type:       "http",
+				Hostnames:  []string{"mcp.example.com"},
+				IPPolicy:   "internal",
+				AuthPolicy: "staff",
 			}},
 			SSHPort: 2222,
 		},
@@ -48,20 +48,19 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 		t.Fatalf("render status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	// The edit button should carry the new args through to openEditTunnel.
-	if !strings.Contains(body, "203.0.113.4, 10.0.0.0/8") {
-		t.Error("expected AllowIPsCSV to render in the dashboard")
+	// The grid should show the policy badges and the edit button should carry
+	// the policy refs through to openEditTunnel.
+	if !strings.Contains(body, ">internal<") || !strings.Contains(body, ">staff<") {
+		t.Error("expected ip/auth policy badges in the dashboard")
 	}
-	// An allowlist tunnel should expose the IPs management button.
-	if !strings.Contains(body, "openIPModal('mcp')") {
-		t.Error("expected IPs button for an ip_allowlist tunnel")
+	if !strings.Contains(body, "'internal', 'staff')") {
+		t.Error("expected openEditTunnel to receive the policy refs")
 	}
 }
 
-// TestLoginRendersReturnURL renders the real login template with an OIDC login
-// URL that carries a return path, confirming the template compiles (JS-context
-// escaping of OIDCLoginURL included) and threads the return through.
-func TestLoginRendersReturnURL(t *testing.T) {
+// TestAuthPagesRender renders the real login/setup/passkeys/users/invite
+// templates to confirm they compile and execute.
+func TestAuthPagesRender(t *testing.T) {
 	tmplFS, err := fs.Sub(web.EmbeddedFS, "templates")
 	if err != nil {
 		t.Fatalf("sub fs: %v", err)
@@ -70,16 +69,25 @@ func TestLoginRendersReturnURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHandlers (template parse): %v", err)
 	}
-	rec := httptest.NewRecorder()
-	h.Render(rec, "pages/login.html", &admin.PageData{
-		Title:          "Login",
-		OIDCConfigured: true,
-		OIDCLoginURL:   "/oidc/login?return=%2Fauthorize-ip%3Ftunnel%3Dmcp",
-	})
-	if rec.Code != 200 {
-		t.Fatalf("render status = %d", rec.Code)
+	cases := []struct {
+		page string
+		data *admin.PageData
+	}{
+		{"pages/login.html", &admin.PageData{Title: "Sign in"}},
+		{"pages/setup.html", &admin.PageData{Title: "Set up admin"}},
+		{"pages/passkeys.html", &admin.PageData{Title: "Passkeys", Active: "passkeys", UserID: "admin", IsAdmin: true, CSRFToken: "x",
+			Data: struct {
+				Passkeys  []admin.PasskeyView
+				CanDelete bool
+			}{}}},
+		{"pages/users.html", &admin.PageData{Title: "Users", Active: "users", IsAdmin: true, CSRFToken: "x"}},
+		{"pages/invite.html", &admin.PageData{Title: "Set up your passkey", Data: struct{ UserID, Token string }{"alice", "tok"}}},
 	}
-	if !strings.Contains(rec.Body.String(), "/oidc/login?return=") {
-		t.Error("expected OIDC login URL with return param in rendered login page")
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		h.Render(rec, c.page, c.data)
+		if rec.Code != 200 {
+			t.Errorf("%s render status = %d", c.page, rec.Code)
+		}
 	}
 }

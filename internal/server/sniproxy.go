@@ -53,7 +53,7 @@ func (l *sniListener) Accept() (net.Conn, error) {
 
 		if sni != "" {
 			tunnel := l.server.registry.FindByHostname(sni)
-			if tunnel != nil && tunnel.TLSPassthrough {
+			if tunnel != nil && tunnel.IsTLSPassthrough() {
 				slog.Debug("TLS passthrough", "sni", sni, "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
 				go l.server.handleTCPConn(pc, tunnel)
 				continue // don't return this conn to http.Serve

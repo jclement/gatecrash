@@ -90,9 +90,13 @@ func (s *Server) keepaliveLoopParams(conn gossh.Conn, tunnel *TunnelState, tunne
 	}
 }
 
-// openChannelTimeout opens an SSH channel but gives up after timeout, closing
-// the underlying connection so the parked OpenChannel goroutine can unwind.
-// Callers must treat a non-nil error as a dead connection and evict it.
+// openChannelTimeout opens an SSH channel but gives up after timeout. It does
+// NOT close the underlying connection: that conn is shared by other concurrent
+// requests, and closing it here would break them. Instead the caller evicts the
+// conn from the pool (so no new request picks it) and the keepalive loop is the
+// single authority that actually closes a dead conn — which is what unblocks the
+// parked OpenChannel goroutine below. The result channel is buffered, so that
+// goroutine never leaks even if it stays parked until the keepalive reap.
 func openChannelTimeout(conn gossh.Conn, chType string, data []byte, timeout time.Duration) (gossh.Channel, <-chan *gossh.Request, error) {
 	type result struct {
 		ch   gossh.Channel
@@ -109,7 +113,6 @@ func openChannelTimeout(conn gossh.Conn, chType string, data []byte, timeout tim
 	case r := <-resCh:
 		return r.ch, r.reqs, r.err
 	case <-time.After(timeout):
-		conn.Close() // unblock the parked OpenChannel goroutine
 		return nil, nil, fmt.Errorf("open %s channel: timed out after %s (client unresponsive)", chType, timeout)
 	}
 }

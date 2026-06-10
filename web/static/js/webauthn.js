@@ -1,4 +1,4 @@
-// WebAuthn/Passkey helper functions
+// WebAuthn / passkey helpers.
 
 function bufferToBase64url(buffer) {
     const bytes = new Uint8Array(buffer);
@@ -16,124 +16,91 @@ function base64urlToBuffer(str) {
     return bytes.buffer;
 }
 
-// Resolve an API path to an absolute URL
-function apiURL(path) {
-    if (path === '.') return '/';
-    return '/' + path;
+function _status(msg, ok) {
+    const el = document.getElementById('status');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'text-xs mt-3 ' + (ok === true ? 'text-green-600' : ok === false ? 'text-red-600' : 'text-gray-500');
 }
 
-async function registerPasskey() {
-    const status = document.getElementById('status');
-    const btn = document.getElementById('register-btn');
-    btn.disabled = true;
-    status.textContent = 'Starting registration...';
+function _safeReturn() {
+    const r = new URLSearchParams(window.location.search).get('return');
+    return (r && r.startsWith('/') && !r.startsWith('//')) ? r : null;
+}
 
+// doRegister runs a passkey registration ceremony against begin/finish URLs.
+// On success it navigates to data.redirect (if any) or reloads.
+async function doRegister(beginURL, finishURL, btnID) {
+    const btn = btnID ? document.getElementById(btnID) : null;
+    if (btn) btn.disabled = true;
+    _status('Starting…');
     try {
-        const optResp = await fetch(apiURL('auth/register/begin'), { method: 'POST' });
-        if (!optResp.ok) throw new Error('Failed to get registration options');
+        const optResp = await fetch(beginURL, { method: 'POST' });
+        if (!optResp.ok) throw new Error(await optResp.text() || 'failed to start');
         const data = await optResp.json();
         const challengeID = data.challenge_id;
-        const options = { publicKey: data.publicKey };
+        const pk = data.publicKey;
+        pk.challenge = base64urlToBuffer(pk.challenge);
+        pk.user.id = base64urlToBuffer(pk.user.id);
+        if (pk.excludeCredentials) pk.excludeCredentials = pk.excludeCredentials.map(c => ({ ...c, id: base64urlToBuffer(c.id) }));
 
-        options.publicKey.challenge = base64urlToBuffer(options.publicKey.challenge);
-        options.publicKey.user.id = base64urlToBuffer(options.publicKey.user.id);
-        if (options.publicKey.excludeCredentials) {
-            options.publicKey.excludeCredentials = options.publicKey.excludeCredentials.map(c => ({
-                ...c,
-                id: base64urlToBuffer(c.id)
-            }));
-        }
-
-        const credential = await navigator.credentials.create(options);
-
+        const cred = await navigator.credentials.create({ publicKey: pk });
         const body = JSON.stringify({
-            id: credential.id,
-            rawId: bufferToBase64url(credential.rawId),
-            type: credential.type,
+            id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type,
             response: {
-                attestationObject: bufferToBase64url(credential.response.attestationObject),
-                clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
-            }
+                attestationObject: bufferToBase64url(cred.response.attestationObject),
+                clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
+            },
         });
-
-        const finResp = await fetch(apiURL('auth/register/finish') + '?challenge_id=' + encodeURIComponent(challengeID), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: body
+        const finResp = await fetch(finishURL + '?challenge_id=' + encodeURIComponent(challengeID), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
         });
-
-        if (finResp.ok) {
-            status.textContent = 'Passkey registered! Redirecting...';
-            status.className = 'is-size-7 mt-2 has-text-success';
-            setTimeout(() => window.location.href = apiURL('.'), 1000);
-        } else {
-            throw new Error('Registration failed');
-        }
+        if (!finResp.ok) throw new Error(await finResp.text() || 'registration failed');
+        _status('Done! Redirecting…', true);
+        let redirect = null;
+        try { redirect = (await finResp.json()).redirect; } catch (_) {}
+        setTimeout(() => { window.location.href = redirect || window.location.pathname; }, 800);
     } catch (err) {
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'is-size-7 mt-2 has-text-danger';
-        btn.disabled = false;
+        _status('Error: ' + (err.message || err), false);
+        if (btn) btn.disabled = false;
     }
 }
 
-async function authenticatePasskey() {
-    const status = document.getElementById('status');
-    const btn = document.getElementById('login-btn');
+// doLogin runs a usernameless passkey login. On success it navigates to a safe
+// ?return= URL, else data.redirect, else "/".
+async function doLogin(btnID) {
+    const btn = btnID ? document.getElementById(btnID) : null;
     if (btn) btn.disabled = true;
-    status.textContent = 'Starting authentication...';
-
+    _status('Starting…');
     try {
-        const optResp = await fetch(apiURL('auth/login/begin'), { method: 'POST' });
-        if (!optResp.ok) throw new Error('Failed to get authentication options');
+        const optResp = await fetch('/auth/login/begin', { method: 'POST' });
+        if (!optResp.ok) throw new Error('failed to start');
         const data = await optResp.json();
         const challengeID = data.challenge_id;
-        const options = { publicKey: data.publicKey };
+        const pk = data.publicKey;
+        pk.challenge = base64urlToBuffer(pk.challenge);
+        if (pk.allowCredentials) pk.allowCredentials = pk.allowCredentials.map(c => ({ ...c, id: base64urlToBuffer(c.id) }));
 
-        options.publicKey.challenge = base64urlToBuffer(options.publicKey.challenge);
-        if (options.publicKey.allowCredentials) {
-            options.publicKey.allowCredentials = options.publicKey.allowCredentials.map(c => ({
-                ...c,
-                id: base64urlToBuffer(c.id)
-            }));
-        }
-
-        const assertion = await navigator.credentials.get(options);
-
+        const assertion = await navigator.credentials.get({ publicKey: pk });
         const body = JSON.stringify({
-            id: assertion.id,
-            rawId: bufferToBase64url(assertion.rawId),
-            type: assertion.type,
+            id: assertion.id, rawId: bufferToBase64url(assertion.rawId), type: assertion.type,
             response: {
                 authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
                 clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
                 signature: bufferToBase64url(assertion.response.signature),
-                userHandle: assertion.response.userHandle ?
-                    bufferToBase64url(assertion.response.userHandle) : null,
-            }
+                userHandle: assertion.response.userHandle ? bufferToBase64url(assertion.response.userHandle) : null,
+            },
         });
-
-        const finResp = await fetch(apiURL('auth/login/finish') + '?challenge_id=' + encodeURIComponent(challengeID), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: body
+        const finResp = await fetch('/auth/login/finish?challenge_id=' + encodeURIComponent(challengeID), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
         });
-
-        if (finResp.ok) {
-            status.textContent = 'Authenticated! Redirecting...';
-            status.className = 'is-size-7 mt-2 has-text-success';
-            const params = new URLSearchParams(window.location.search);
-            let returnURL = params.get('return');
-            // Validate: must be a relative path (no open redirect)
-            if (!returnURL || !returnURL.startsWith('/') || returnURL.startsWith('//')) {
-                returnURL = apiURL('.');
-            }
-            setTimeout(() => window.location.href = returnURL, 1000);
-        } else {
-            throw new Error('Authentication failed');
-        }
+        if (!finResp.ok) throw new Error('authentication failed');
+        _status('Signed in! Redirecting…', true);
+        let redirect = null;
+        try { redirect = (await finResp.json()).redirect; } catch (_) {}
+        setTimeout(() => { window.location.href = _safeReturn() || redirect || '/'; }, 600);
     } catch (err) {
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'is-size-7 mt-2 has-text-danger';
+        _status('Error: ' + (err.message || err), false);
         if (btn) btn.disabled = false;
     }
 }

@@ -15,8 +15,7 @@
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#how-it-works">How It Works</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
-  <a href="#oidc-authentication">OIDC</a> &bull;
-  <a href="#ip-allowlist">IP Allowlist</a> &bull;
+  <a href="#authentication--access-policies">Auth &amp; Policies</a> &bull;
   <a href="#docker">Docker</a>
 </p>
 
@@ -31,7 +30,7 @@ Gatecrash ships as two separate binaries:
 
 | Binary | Purpose | Size |
 |--------|---------|------|
-| `gatecrash-server` | Tunnel server with admin panel, TLS, OIDC | ~15 MB |
+| `gatecrash-server` | Tunnel server with admin panel, TLS, passkey auth | ~15 MB |
 | `gatecrash` | Lightweight tunnel client | ~7 MB |
 
 ### Linux Server (Quick Install)
@@ -197,12 +196,8 @@ The config file is auto-generated on first run with sensible defaults and inline
 |--------|---------|-------------|
 | `preserve_host` | `false` | Pass the original `Host` header to the backend |
 | `tls_passthrough` | `false` | Forward raw TLS without terminating (backend handles TLS) |
-| `require_auth` | `false` | Require OIDC/passkey authentication to access this tunnel (HTTP only; not available with `tls_passthrough`) |
-| `auth_rule` | | OIDC rule name that must match for access |
-| `auth_header` | `x-Gatecrash-User` | Header name for authenticated user identity |
-| `auth_header_claim` | _(email claim)_ | Which OIDC claim value to put in the auth header |
-| `ip_allowlist` | `false` | Restrict access by source IP (independent of `require_auth`; works on HTTP and TCP, including passthrough) |
-| `allow_ips` | | Permanently allowed IPs/CIDRs, e.g. `["203.0.113.4", "10.0.0.0/8"]` (IPv4 and IPv6) |
+| `ip_policy` | | ID of an [IP policy](#authentication--access-policies) to restrict by source IP (HTTP and TCP, including passthrough) |
+| `auth_policy` | | ID of an [auth policy](#authentication--access-policies) requiring a signed-in user (HTTP only; not with `tls_passthrough`) |
 
 Example:
 
@@ -213,10 +208,8 @@ type = "http"
 hostnames = ["api.example.com"]
 secret_hash = "$2a$12$..."
 preserve_host = true
-require_auth = true
-auth_rule = "Employees"
-auth_header = "x-Gatecrash-User"
-auth_header_claim = "email"
+ip_policy = "internal"     # see [[ip_policy]]
+auth_policy = "staff"      # see [[auth_policy]]
 ```
 
 #### Forwarding Headers
@@ -231,101 +224,49 @@ For HTTP tunnels (when `tls_passthrough = false`), the following headers are inj
 | `X-Real-IP` | Original client IP |
 | `X-Request-Id` | Unique request ID |
 
-When `require_auth = true`, the configured `auth_header` is also injected with the authenticated user's claim value.
+When an `auth_policy` authenticates a request, the user's ID is injected as `x-Gatecrash-User` (header name configurable) along with `X-Gatecrash-Role`.
 
 ---
 
-## OIDC Authentication
+## Authentication & Access Policies
 
-By default, Gatecrash uses passkey authentication (single admin user). When OIDC is enabled, it **replaces** passkeys entirely -- all admin and tunnel authentication goes through your OIDC provider.
+### Users
 
-### Configuring OIDC
+Gatecrash authenticates with **passkeys** — phishing-resistant credentials bound to a device. On first boot, open the admin host and provision the first **admin**. Users have an immutable **ID** (also the value injected as the identity header), a **role** (`admin` or `user`), and one or more passkeys:
 
-Add the `[oidc]` section to `gatecrash.toml`:
+- **admin** — manages tunnels, access policies, users, and the audit log.
+- **user** — signs in and can be granted access to protected tunnels; lands on their own Passkeys page.
 
-```toml
-[oidc]
-enabled = true
-provider_name = "Keycloak"            # Display name on login button
-client_id = "gatecrash"
-client_secret = "your-client-secret"
-auth_url = "https://idp.example.com/auth/realms/main/protocol/openid-connect/auth"
-token_url = "https://idp.example.com/auth/realms/main/protocol/openid-connect/token"
-cert_url = "https://idp.example.com/auth/realms/main/protocol/openid-connect/certs"
-use_pkce = false
-name_claim = "name"                   # Claim containing user's display name
-email_claim = "email"                 # Claim containing user's email
+On the **Users** page an admin adds a user (ID + role), which produces a one-time **invite link** (`https://<admin_host>/invite/<token>`); opening it registers the user's passkey. **Reset** clears a user's passkeys and issues a fresh invite. Everyone manages their own passkeys from the **Passkeys** page. Users live in `<config_dir>/users.json`.
 
-# Optional: restrict admin access to users matching a specific claim.
-# When empty, any authenticated OIDC user is an admin.
-admin_claim_name = "role"
-admin_claim_value = "admin"
-```
+### Access policies
 
-> **Note:** OIDC is configured in `gatecrash.toml` only. Environment variables are not supported for OIDC settings.
+Policies are reusable and assigned to tunnels by ID. The two are **independent gates** — a tunnel may use either, both (AND), or neither.
 
-When OIDC is enabled:
-- The login page auto-redirects to your OIDC provider
-- Passkey authentication is disabled (the Passkeys tab is hidden)
-- Audit log entries show the OIDC user's name and email
-
-### Protecting Tunnels
-
-HTTP tunnels can require authentication via the **Require Authentication** checkbox in the tunnel edit dialog.
-
-**In passkey mode:** the admin must be logged in with their passkey to access the tunnel (single-user).
-
-**In OIDC mode:** users are redirected to the OIDC provider. You can optionally restrict access by claim:
+**Auth policy** — a set of allowed users (signed in with a passkey), plus an optional static HTTP Basic password for non-interactive clients. HTTP-only; not available with `tls_passthrough`. Visitors are sent to the admin host to sign in and bounced back to the tunnel.
 
 ```toml
-[[tunnel]]
-id = "internal-app"
-type = "http"
-hostnames = ["internal.example.com"]
-secret_hash = "$2a$12$..."
-require_auth = true                   # Users must authenticate
-auth_claim_name = "department"        # Optional: restrict by claim
-auth_claim_value = "engineering"      # Only users with this claim value get access
-auth_header = "x-Gatecrash-User"     # Header injected into proxied requests
-auth_header_claim = "email"          # Claim value to put in the header
+[[auth_policy]]
+id = "staff"
+users = ["alice", "bob"]   # allowed user IDs
+# header = "x-Gatecrash-User"   # optional: override the identity header name
+# username = "ci"               # optional static HTTP Basic credential
+# password_hash = "$2a$12$..."  #   (set/rotated from the admin UI)
 ```
 
-When `auth_claim_name` is empty, any authenticated OIDC user can access the tunnel. The `auth_header` is injected into all proxied requests with the authenticated user's claim value.
-
-Claim filters support string and array claims (e.g. if `groups` is `["engineering", "ops"]`, filtering on `engineering` will match).
-
-### Callback URL
-
-Register this callback URL with your OIDC provider:
-
-- `https://<admin_host>/oidc/callback`
-
-Both admin login and tunnel "Require Auth" use this single callback URL. There is no need to register per-tunnel callback URLs.
-
----
-
-## IP Allowlist
-
-The IP allowlist restricts a tunnel to a set of source IP addresses. It is an **independent** control from `require_auth` — a tunnel may use either, both, or neither. Because allowed clients pass through with **no cookie or credential**, it's well suited to protecting services that can't authenticate themselves (MCP servers, API/tool endpoints). Unlike `require_auth`, it works on **both HTTP and TCP** tunnels, including TLS passthrough.
+**IP policy** — a source-IP allowlist (with optional comments), reusable across tunnels. Works on HTTP and TCP (including passthrough). Because allowed clients pass through with **no credential**, it suits services that can't authenticate (MCP servers, API/tool endpoints).
 
 ```toml
-[[tunnel]]
-id = "mcp"
-type = "http"
-hostnames = ["mcp.example.com"]
-ip_allowlist = true
-allow_ips = ["203.0.113.4", "10.0.0.0/8"]   # permanent; IPv4 and IPv6 / CIDRs
+[[ip_policy]]
+id = "internal"
+[[ip_policy.range]]
+cidr = "10.0.0.0/8"
+comment = "office LAN"
 ```
 
-There are three ways an IP gets allowed:
+An IP gets allowed three ways: a **permanent** range; **self-service** (a blocked HTTP visitor signs in and grants their IP for 7 days); or a shareable **enrollment link** (`/enroll/<token>`) that lets anyone authorize their own IP for 7 days **without signing in** — the only self-service option for TCP tunnels. Grants are listed and revocable from the policy's **IPs & Link** panel, and are keyed by source IP (everyone behind one public IP shares access; prefer a permanent CIDR for rotating IPv6 prefixes). Treat enrollment links like passwords; **Rotate** invalidates old ones.
 
-- **Permanent** — `allow_ips` entries in the config (or the dashboard's IP Allowlist field). Never expire.
-- **Self-service (admin)** — a blocked visitor to an HTTP tunnel is shown an "Authorize this IP" page; after signing in to the admin panel they confirm, and their current IP is granted for 7 days.
-- **Enrollment link** — from the **IPs** button on a tunnel, create a shareable link (`https://<admin_host>/enroll/<token>`). Anyone with the link can authorize their own IP for 7 days **without signing in** — the only self-service option for TCP tunnels, since the link is served on the admin host and the visitor's browser shares the egress IP of their TCP client. The link is a **bearer secret** — treat it like a password and use **Rotate** to invalidate old links.
-
-Active self-service grants are listed (with who authorized them and when they expire) and revocable from the **IPs** button. Grants are keyed by source IP, so everyone sharing a public IP (NAT/CGNAT) shares access; for IPv6 clients with rotating privacy addresses, prefer a permanent CIDR covering the delegated prefix.
-
-> The enrollment link requires `server.admin_host` to be configured (it's served on the admin host).
+> User login and enrollment links require `server.admin_host` to be configured.
 
 ---
 
@@ -336,9 +277,10 @@ All admin panel changes are recorded in an audit log, viewable from the **Audit 
 Logged events include:
 - Tunnel create, edit, delete, and secret regeneration
 - Redirect create, edit, delete
-- Admin logins (passkey or OIDC)
+- User and access-policy changes (create, edit/reset, delete)
+- Sign-ins and IP authorizations
 
-Each entry records the timestamp, actor identity (`Admin (passkey)` or `Name <email>` for OIDC users), action, and detail. The log is stored at `<config_dir>/audit.json` and retains the most recent 1,000 entries.
+Each entry records the timestamp, the acting user's ID, the action, and a detail. The log is stored at `<config_dir>/audit.json` (NDJSON, rotated) and the admin UI shows the most recent 1,000 entries, filterable by user and action.
 
 ---
 
@@ -506,7 +448,7 @@ volumes:
   config:
 ```
 
-OIDC and other settings are configured in `gatecrash.toml` inside the config volume, or via the admin panel.
+Settings are configured in `gatecrash.toml` inside the config volume, or via the admin panel.
 
 ---
 
@@ -545,7 +487,7 @@ gatecrash/
 │   ├── config/              # TOML config + file watcher
 │   ├── server/              # SSH server, HTTP proxy, TCP forward, vhost routing, TLS
 │   ├── client/              # SSH client, HTTP/TCP handlers, reconnect logic
-│   ├── admin/               # Web admin panel (passkeys, OIDC, sessions, audit log)
+│   ├── admin/               # Web admin panel (users, passkeys, sessions, audit log)
 │   ├── protocol/            # SSH channel types and control messages (shared)
 │   ├── token/               # bcrypt-based tunnel authentication
 │   └── update/              # Self-update via GitHub releases (shared)

@@ -40,7 +40,8 @@ func NewSessionManager(secret string) *SessionManager {
 // keepalive), which would otherwise invalidate CSRF tokens in other open tabs.
 type sessionClaims struct {
 	jwt.RegisteredClaims
-	Actor string `json:"actor,omitempty"`
+	Actor string `json:"actor,omitempty"` // user ID
+	Role  string `json:"role,omitempty"`  // "admin" | "user"
 	SID   string `json:"sid,omitempty"`
 }
 
@@ -50,15 +51,16 @@ func newSID() string {
 	return hex.EncodeToString(b)
 }
 
-// issue signs and sets a session cookie carrying the given actor and stable SID.
-func (sm *SessionManager) issue(w http.ResponseWriter, actor, sid string) error {
+// issue signs and sets a session cookie carrying the user, role, and stable SID.
+func (sm *SessionManager) issue(w http.ResponseWriter, userID, role, sid string) error {
 	claims := sessionClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionDuration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "gatecrash",
 		},
-		Actor: actor,
+		Actor: userID,
+		Role:  role,
 		SID:   sid,
 	}
 
@@ -81,21 +83,20 @@ func (sm *SessionManager) issue(w http.ResponseWriter, actor, sid string) error 
 	return nil
 }
 
-// CreateSession starts a new session (fresh SID) for a login.
-// The actor string identifies who is logging in (e.g. "Admin (passkey)" or "Name <email>").
-func (sm *SessionManager) CreateSession(w http.ResponseWriter, actor string) error {
-	return sm.issue(w, actor, newSID())
+// CreateSession starts a new session (fresh SID) for a login as the given user.
+func (sm *SessionManager) CreateSession(w http.ResponseWriter, userID, role string) error {
+	return sm.issue(w, userID, role, newSID())
 }
 
 // RefreshSession re-issues the current session with a bumped expiry, PRESERVING
-// its actor and SID. Used by the sliding-window keepalive so the CSRF token
-// (bound to the SID) does not change underneath other open tabs.
+// its user, role, and SID. Used by the sliding-window keepalive so the CSRF
+// token (bound to the SID) does not change underneath other open tabs.
 func (sm *SessionManager) RefreshSession(w http.ResponseWriter, r *http.Request) error {
 	claims, ok := sm.parseSession(r)
 	if !ok {
 		return fmt.Errorf("no valid session")
 	}
-	return sm.issue(w, claims.Actor, claims.SID)
+	return sm.issue(w, claims.Actor, claims.Role, claims.SID)
 }
 
 // ClearSession removes the session cookie.
@@ -117,19 +118,41 @@ func (sm *SessionManager) ValidateSession(r *http.Request) bool {
 	return ok
 }
 
-// GetActor returns the actor identity from the session JWT.
-// Returns "Admin (passkey)" as default for sessions without an actor field.
+// GetActor returns the user ID from the session JWT (for the audit log).
 func (sm *SessionManager) GetActor(r *http.Request) string {
 	claims, ok := sm.parseSession(r)
 	if !ok {
-		return "Admin (passkey)"
+		return "unknown"
 	}
 	return actorOf(claims)
 }
 
+// UserID returns the logged-in user's ID, or "" if no valid session.
+func (sm *SessionManager) UserID(r *http.Request) string {
+	claims, ok := sm.parseSession(r)
+	if !ok {
+		return ""
+	}
+	return claims.Actor
+}
+
+// Role returns the logged-in user's role, or "" if no valid session.
+func (sm *SessionManager) Role(r *http.Request) string {
+	claims, ok := sm.parseSession(r)
+	if !ok {
+		return ""
+	}
+	return claims.Role
+}
+
+// IsAdmin reports whether the request has a valid admin session.
+func (sm *SessionManager) IsAdmin(r *http.Request) bool {
+	return sm.Role(r) == RoleAdmin
+}
+
 func actorOf(c *sessionClaims) string {
 	if c.Actor == "" {
-		return "Admin (passkey)"
+		return "unknown"
 	}
 	return c.Actor
 }

@@ -28,12 +28,12 @@ type RouteTarget struct {
 
 // Config holds the client configuration.
 type Config struct {
-	ServerAddr string // host:port of the SSH server
-	Token      string // tunnel token (tunnel_id:secret)
-	TargetHost string // default target service host
-	TargetPort int    // default target service port
-	HostKey    string // optional SSH host key fingerprint (SHA256:...)
-	TargetTLS  string // "", "tls", or "tls-insecure"
+	ServerAddr string                 // host:port of the SSH server
+	Token      string                 // tunnel token (tunnel_id:secret)
+	TargetHost string                 // default target service host
+	TargetPort int                    // default target service port
+	HostKey    string                 // optional SSH host key fingerprint (SHA256:...)
+	TargetTLS  string                 // "", "tls", or "tls-insecure"
 	Routes     map[string]RouteTarget // hostname or "tcp" → target
 }
 

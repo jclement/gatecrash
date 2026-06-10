@@ -41,15 +41,19 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 		Host:         r.Host,
 		RemoteAddr:   clientIP,
 		TLS:          r.TLS != nil,
-		PreserveHost: tunnel.PreserveHost,
+		PreserveHost: tunnel.PreservesHost(),
 	}
 
 	payload := marshalHTTPChannelData(&data)
 
 	ch, reqs, err := openChannelTimeout(conn, protocol.ChannelHTTP, payload, channelOpenTimeout)
 	if err != nil {
-		// Remove the dead connection so PickConn won't select it again.
+		// A 15s channel-open timeout means the SSH transport is dead (half-open).
+		// Evict it from the pool FIRST so no concurrent request picks it, then
+		// close it: that unblocks the parked OpenChannel goroutine and forces the
+		// client to reconnect cleanly instead of lingering as an unusable zombie.
 		tunnel.RemoveClient(conn)
+		conn.Close()
 		slog.Error("failed to open HTTP channel", "tunnel", tunnel.ID, "error", err)
 		http.Error(w, "tunnel unavailable", http.StatusBadGateway)
 		return

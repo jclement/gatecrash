@@ -17,7 +17,8 @@ import (
 // serveTCPForward listens on a port and forwards connections through the SSH tunnel.
 // The listener is tracked in s.tcpListeners so it can be stopped on config reload.
 func (s *Server) serveTCPForward(tunnel *TunnelState) error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, tunnel.ListenPort)
+	port := tunnel.Port()
+	addr := fmt.Sprintf("%s:%d", s.cfg.Server.BindAddr, port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -27,7 +28,7 @@ func (s *Server) serveTCPForward(tunnel *TunnelState) error {
 	if s.tcpListeners == nil {
 		s.tcpListeners = make(map[int]net.Listener)
 	}
-	s.tcpListeners[tunnel.ListenPort] = listener
+	s.tcpListeners[port] = listener
 	s.tcpMu.Unlock()
 
 	slog.Info("TCP forward listening", "tunnel", tunnel.ID, "addr", addr)
@@ -60,8 +61,10 @@ func (s *Server) reconcileTCPListeners() {
 	// Build set of ports that should have listeners
 	wantPorts := make(map[int]*TunnelState)
 	for _, t := range s.registry.AllTunnels() {
-		if t.Type == "tcp" && t.ListenPort > 0 {
-			wantPorts[t.ListenPort] = t
+		if t.TunnelType() == "tcp" {
+			if p := t.Port(); p > 0 {
+				wantPorts[p] = t
+			}
 		}
 	}
 
@@ -108,13 +111,14 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 	// below don't block forever reading from a dead socket.
 	setTCPKeepAlive(conn, 30*time.Second)
 
-	// IP allowlist gate. TCP tunnels can't present an authorization page, so a
+	// IP policy gate. TCP tunnels can't present an authorization page, so a
 	// blocked client is simply dropped; IPs are enrolled out-of-band via the
-	// admin panel (the browser's egress IP matches the TCP client's).
-	if tunnel.IPAllowlist {
+	// admin panel or enrollment link (the browser's egress IP matches the
+	// TCP client's).
+	if pol := s.registry.FindIPPolicy(tunnel.IPPolicy()); pol != nil {
 		ip := tcpRemoteIP(conn)
-		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
-			slog.Debug("ip allowlist blocked TCP conn", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
+		if !pol.Allows(ip) && !s.ipAllow.IsGranted(pol.ID, ip) {
+			slog.Debug("ip policy blocked TCP conn", "tunnel", tunnel.ID, "policy", pol.ID, "remote", conn.RemoteAddr())
 			return
 		}
 	}
@@ -145,10 +149,11 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 
 	ch, reqs, err := openChannelTimeout(sshConn, protocol.ChannelDirectTCPIP, data, channelOpenTimeout)
 	if err != nil {
-		// Remove the dead connection so PickConn won't select it again. On a
-		// wedged client this is the path that fires (openChannelTimeout closed
-		// the conn), preventing connections from piling up against it.
+		// A channel-open timeout means the SSH transport is dead. Evict it from
+		// the pool FIRST so no concurrent connection picks it, then close it to
+		// unblock the parked OpenChannel goroutine and force a clean reconnect.
 		tunnel.RemoveClient(sshConn)
+		sshConn.Close()
 		slog.Error("TCP forward: failed to open channel", "tunnel", tunnel.ID, "error", err)
 		return
 	}

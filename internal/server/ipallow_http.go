@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/jclement/gatecrash/internal/config"
 )
 
 // ipGrantTTL is how long a self-service IP authorization lasts.
@@ -36,8 +38,8 @@ func (s *Server) handleAuthorizeIPPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := tunnelID
-	if len(tunnel.Hostnames) > 0 {
-		name = tunnel.Hostnames[0]
+	if hosts := tunnel.HostnameList(); len(hosts) > 0 {
+		name = hosts[0]
 	}
 	csrf := s.sessionMgr.CSRFToken(r)
 
@@ -105,17 +107,23 @@ func (s *Server) handleAuthorizeIPSubmit(w http.ResponseWriter, r *http.Request)
 			"Could not determine your IP address.")
 		return
 	}
+	pol := s.registry.FindIPPolicy(tunnel.IPPolicy())
+	if pol == nil {
+		s.serveErrorPage(w, r, http.StatusBadRequest, "Authorization Failed",
+			"This tunnel has no IP policy.")
+		return
+	}
 
 	actor := s.sessionMgr.GetActor(r)
-	if err := s.ipAllow.Grant(tunnelID, ip.String(), actor, ipGrantTTL); err != nil {
-		slog.Error("failed to grant ip", "tunnel", tunnelID, "ip", ip, "error", err)
+	if err := s.ipAllow.Grant(pol.ID, ip.String(), actor, ipGrantTTL); err != nil {
+		slog.Error("failed to grant ip", "policy", pol.ID, "ip", ip, "error", err)
 		s.serveErrorPage(w, r, http.StatusInternalServerError, "Authorization Failed",
 			"Failed to record the authorization. Please try again.")
 		return
 	}
-	s.auditLog.Log(actor, "tunnel.ip_authorize",
-		fmt.Sprintf("Authorized IP %s for tunnel %q (7 days)", ip, tunnelID))
-	slog.Info("ip authorized", "tunnel", tunnelID, "ip", ip, "by", actor)
+	s.auditLog.Log(actor, "ip_policy.authorize",
+		fmt.Sprintf("Authorized IP %s for ip_policy %q (7 days)", ip, pol.ID))
+	slog.Info("ip authorized", "policy", pol.ID, "ip", ip, "by", actor)
 
 	// Send the user back to the originating app if the return URL is a safe https
 	// URL on one of this tunnel's hostnames; otherwise show a confirmation page.
@@ -136,7 +144,7 @@ func safeTunnelReturnURL(raw string, tunnel *TunnelState) string {
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
 		return ""
 	}
-	for _, h := range tunnel.Hostnames {
+	for _, h := range tunnel.HostnameList() {
 		if h == u.Hostname() {
 			return u.String()
 		}
@@ -177,39 +185,37 @@ func (s *Server) serveIPAuthorizedPage(w http.ResponseWriter, _ *http.Request, t
 </html>`, html.EscapeString(ip), html.EscapeString(tunnelID))
 }
 
-// handleListTunnelIPs returns a tunnel's permanent allowlist and live grants.
-func (s *Server) handleListTunnelIPs(w http.ResponseWriter, r *http.Request) {
+// handleListPolicyIPs returns an IP policy's permanent ranges and live grants.
+func (s *Server) handleListPolicyIPs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	tunnel := s.registry.FindByID(id)
-	if tunnel == nil {
+	pol := s.registry.FindIPPolicy(id)
+	if pol == nil {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		return
 	}
 	resp := struct {
-		IPAllowlist bool      `json:"ip_allowlist"`
-		Static      []string  `json:"static"`
-		Grants      []IPGrant `json:"grants"`
-		EnrollURL   string    `json:"enroll_url"`
+		Ranges    []config.IPRange `json:"ranges"`
+		Grants    []IPGrant        `json:"grants"`
+		EnrollURL string           `json:"enroll_url"`
 	}{
-		IPAllowlist: tunnel.IPAllowlist,
-		Static:      tunnel.AllowIPs,
-		Grants:      s.ipAllow.List(id),
-		EnrollURL:   s.enrollURL(s.enrollTokenFor(id)),
+		Ranges:    pol.Ranges,
+		Grants:    s.ipAllow.List(id),
+		EnrollURL: s.enrollURL(pol.EnrollToken),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleRevokeTunnelIP removes a self-service grant.
-func (s *Server) handleRevokeTunnelIP(w http.ResponseWriter, r *http.Request) {
+// handleRevokePolicyIP removes a self-service grant from an IP policy.
+func (s *Server) handleRevokePolicyIP(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ip := r.PathValue("ip")
 	if err := s.ipAllow.Revoke(id, ip); err != nil {
-		slog.Error("failed to revoke ip grant", "tunnel", id, "ip", ip, "error", err)
+		slog.Error("failed to revoke ip grant", "policy", id, "ip", ip, "error", err)
 		http.Error(w, "failed to revoke", http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.ip_revoke",
-		fmt.Sprintf("Revoked IP %s from tunnel %q", ip, id))
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.revoke",
+		fmt.Sprintf("Revoked IP %s from ip_policy %q", ip, id))
 	w.WriteHeader(http.StatusNoContent)
 }

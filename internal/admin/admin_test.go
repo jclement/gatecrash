@@ -114,13 +114,16 @@ func TestTunnelView_ClientSummary(t *testing.T) {
 
 func TestNewHandlers_Production(t *testing.T) {
 	tmplFS := fstest.MapFS{
-		"base.html":                 {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
-		"pages/login.html":          {Data: []byte(`{{define "content"}}login{{end}}`)},
-		"pages/setup.html":          {Data: []byte(`{{define "content"}}setup{{end}}`)},
-		"pages/passkeys.html":       {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
-		"pages/dashboard.html":      {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
-		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
-		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"base.html":                  {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
+		"pages/login.html":           {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html":           {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":        {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":       {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":            {Data: []byte(`{{define "content"}}help{{end}}`)},
+		"pages/auditlog.html":        {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
+		"pages/users.html":           {Data: []byte(`{{define "content"}}users{{end}}`)},
+		"pages/invite.html":          {Data: []byte(`{{define "content"}}invite{{end}}`)},
 	}
 
 	h, err := NewHandlers("1.0.0", 6*time.Hour, tmplFS)
@@ -134,8 +137,8 @@ func TestNewHandlers_Production(t *testing.T) {
 		t.Fatal("should not be dev mode for version 1.0.0")
 	}
 	// Production mode pre-compiles all pages
-	if len(h.pages) != 6 {
-		t.Fatalf("expected 6 pre-compiled pages, got %d", len(h.pages))
+	if len(h.pages) != 9 {
+		t.Fatalf("expected 9 pre-compiled pages, got %d", len(h.pages))
 	}
 }
 
@@ -158,13 +161,16 @@ func TestNewHandlers_DevMode(t *testing.T) {
 
 func TestRender(t *testing.T) {
 	tmplFS := fstest.MapFS{
-		"base.html":        {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
-		"pages/login.html": {Data: []byte(`{{define "content"}}login-page{{end}}`)},
-		"pages/setup.html": {Data: []byte(`{{define "content"}}setup-page{{end}}`)},
-		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
-		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
-		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
-		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"base.html":                  {Data: []byte(`{{define "base"}}base:{{template "content" .}}{{end}}`)},
+		"pages/login.html":           {Data: []byte(`{{define "content"}}login-page{{end}}`)},
+		"pages/setup.html":           {Data: []byte(`{{define "content"}}setup-page{{end}}`)},
+		"pages/passkeys.html":        {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":       {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":            {Data: []byte(`{{define "content"}}help{{end}}`)},
+		"pages/auditlog.html":        {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
+		"pages/users.html":           {Data: []byte(`{{define "content"}}users{{end}}`)},
+		"pages/invite.html":          {Data: []byte(`{{define "content"}}invite{{end}}`)},
 	}
 
 	h, err := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -200,13 +206,16 @@ func TestRender(t *testing.T) {
 
 func TestRender_NilData(t *testing.T) {
 	tmplFS := fstest.MapFS{
-		"base.html":        {Data: []byte(`{{define "base"}}ok{{end}}`)},
-		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}`)},
-		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
-		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
-		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
-		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
-		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"base.html":                  {Data: []byte(`{{define "base"}}ok{{end}}`)},
+		"pages/login.html":           {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html":           {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":        {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":       {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":            {Data: []byte(`{{define "content"}}help{{end}}`)},
+		"pages/auditlog.html":        {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
+		"pages/users.html":           {Data: []byte(`{{define "content"}}users{{end}}`)},
+		"pages/invite.html":          {Data: []byte(`{{define "content"}}invite{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -219,13 +228,16 @@ func TestRender_NilData(t *testing.T) {
 
 func TestRender_UnknownPage(t *testing.T) {
 	tmplFS := fstest.MapFS{
-		"base.html":        {Data: []byte(`{{define "base"}}ok{{end}}`)},
-		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}`)},
-		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
-		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
-		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
-		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
-		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"base.html":                  {Data: []byte(`{{define "base"}}ok{{end}}`)},
+		"pages/login.html":           {Data: []byte(`{{define "content"}}login{{end}}`)},
+		"pages/setup.html":           {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":        {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":       {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":            {Data: []byte(`{{define "content"}}help{{end}}`)},
+		"pages/auditlog.html":        {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
+		"pages/users.html":           {Data: []byte(`{{define "content"}}users{{end}}`)},
+		"pages/invite.html":          {Data: []byte(`{{define "content"}}invite{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)
@@ -238,13 +250,16 @@ func TestRender_UnknownPage(t *testing.T) {
 
 func TestRenderPartial(t *testing.T) {
 	tmplFS := fstest.MapFS{
-		"base.html":        {Data: []byte(`{{define "base"}}base{{end}}`)},
-		"pages/login.html": {Data: []byte(`{{define "content"}}login{{end}}{{define "partial"}}partial-content{{end}}`)},
-		"pages/setup.html": {Data: []byte(`{{define "content"}}setup{{end}}`)},
-		"pages/passkeys.html":  {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
-		"pages/dashboard.html": {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
-		"pages/help.html":           {Data: []byte(`{{define "content"}}help{{end}}`)},
-		"pages/auditlog.html":       {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"base.html":                  {Data: []byte(`{{define "base"}}base{{end}}`)},
+		"pages/login.html":           {Data: []byte(`{{define "content"}}login{{end}}{{define "partial"}}partial-content{{end}}`)},
+		"pages/setup.html":           {Data: []byte(`{{define "content"}}setup{{end}}`)},
+		"pages/passkeys.html":        {Data: []byte(`{{define "content"}}passkeys{{end}}`)},
+		"pages/dashboard.html":       {Data: []byte(`{{define "content"}}dashboard{{end}}`)},
+		"pages/help.html":            {Data: []byte(`{{define "content"}}help{{end}}`)},
+		"pages/auditlog.html":        {Data: []byte(`{{define "content"}}auditlog{{end}}`)},
+		"pages/access-policies.html": {Data: []byte(`{{define "content"}}policies{{end}}`)},
+		"pages/users.html":           {Data: []byte(`{{define "content"}}users{{end}}`)},
+		"pages/invite.html":          {Data: []byte(`{{define "content"}}invite{{end}}`)},
 	}
 
 	h, _ := NewHandlers("1.0.0", time.Hour, tmplFS)

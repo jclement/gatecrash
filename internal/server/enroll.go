@@ -25,35 +25,23 @@ func generateEnrollToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// findTunnelByEnrollToken returns the config tunnel whose enrollment token
+// findIPPolicyByEnrollToken returns the config IP policy whose enrollment token
 // matches (constant-time), or ok=false.
-func (s *Server) findTunnelByEnrollToken(token string) (config.Tunnel, bool) {
+func (s *Server) findIPPolicyByEnrollToken(token string) (config.IPPolicy, bool) {
 	if token == "" {
-		return config.Tunnel{}, false
+		return config.IPPolicy{}, false
 	}
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
-	for _, t := range s.cfg.Tunnel {
-		if t.EnrollToken == "" {
+	for _, p := range s.cfg.IPPolicy {
+		if p.EnrollToken == "" {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(t.EnrollToken), []byte(token)) == 1 {
-			return t, true
+		if subtle.ConstantTimeCompare([]byte(p.EnrollToken), []byte(token)) == 1 {
+			return p, true
 		}
 	}
-	return config.Tunnel{}, false
-}
-
-// enrollTokenFor returns the enrollment token configured for a tunnel ID.
-func (s *Server) enrollTokenFor(id string) string {
-	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
-	for _, t := range s.cfg.Tunnel {
-		if t.ID == id {
-			return t.EnrollToken
-		}
-	}
-	return ""
+	return config.IPPolicy{}, false
 }
 
 // enrollURL builds the public enrollment link for a token on the admin host.
@@ -75,33 +63,12 @@ func (s *Server) enrollURL(token string) string {
 	return base + "/enroll/" + token
 }
 
-// publicURLFor builds the public https URL for a tunnel's first hostname.
-func (s *Server) publicURLFor(t config.Tunnel) string {
-	if t.Type != "http" || len(t.Hostnames) == 0 {
-		return ""
-	}
-	s.cfgMu.RLock()
-	httpsPort := s.cfg.Server.HTTPSPort
-	s.cfgMu.RUnlock()
-	if httpsPort != 443 {
-		return fmt.Sprintf("https://%s:%d", t.Hostnames[0], httpsPort)
-	}
-	return "https://" + t.Hostnames[0]
-}
-
-func tunnelLabel(t config.Tunnel) string {
-	if len(t.Hostnames) > 0 {
-		return t.Hostnames[0]
-	}
-	return t.ID
-}
-
 // handleEnrollPage (GET /enroll/{token}) shows an unauthenticated confirmation
 // page for self-authorizing the visitor's source IP. The grant happens on POST
 // (so link-preview bots / scanners can't enroll by merely fetching the URL).
 func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	tunnel, ok := s.findTunnelByEnrollToken(token)
+	pol, ok := s.findIPPolicyByEnrollToken(token)
 	if !ok {
 		s.serveErrorPage(w, r, http.StatusNotFound, "Invalid Link",
 			"This enrollment link is not valid. It may have been rotated or removed.")
@@ -114,31 +81,25 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	label := html.EscapeString(tunnelLabel(tunnel))
+	label := html.EscapeString(policyLabel(pol))
 	ipStr := html.EscapeString(ip.String())
-	appURL := s.publicURLFor(tunnel)
-	continueBtn := ""
-	if appURL != "" {
-		continueBtn = fmt.Sprintf(`<a class="btn" href="%s">Continue to %s</a>`, html.EscapeString(appURL), label)
-	}
 	authorizeForm := fmt.Sprintf(`<form method="POST" action="/enroll/%s"><button class="btn" type="submit">%%s</button></form>`, html.EscapeString(token))
 
 	var heading, body, actions string
 	switch {
-	case s.staticAllows(tunnel.ID, ip):
+	case s.staticAllows(pol.ID, ip):
 		// Permanently allowlisted in config — no self-service grant needed.
 		heading = "You already have access"
-		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is permanently allowed for <strong>%s</strong>.`, ipStr, label)
-		actions = continueBtn
-	case s.grantRemaining(tunnel.ID, ip) != "":
+		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is permanently allowed by <strong>%s</strong>.`, ipStr, label)
+	case s.grantRemaining(pol.ID, ip) != "":
 		// Already enrolled — offer to extend (re-grant bumps the 7-day clock).
 		heading = "You're already authorized"
-		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> can access <strong>%s</strong> — access expires in %s.`,
-			ipStr, label, html.EscapeString(s.grantRemaining(tunnel.ID, ip)))
-		actions = fmt.Sprintf(authorizeForm, "Extend 7 days") + continueBtn
+		body = fmt.Sprintf(`Your IP <span class="ip">%s</span> is authorized by <strong>%s</strong> — access expires in %s.`,
+			ipStr, label, html.EscapeString(s.grantRemaining(pol.ID, ip)))
+		actions = fmt.Sprintf(authorizeForm, "Extend 7 days")
 	default:
 		heading = "Authorize Access"
-		body = fmt.Sprintf(`You've been invited to access <strong>%s</strong>. Authorize your current IP <span class="ip">%s</span> for 7 days?`, label, ipStr)
+		body = fmt.Sprintf(`You've been invited to access services protected by <strong>%s</strong>. Authorize your current IP <span class="ip">%s</span> for 7 days?`, label, ipStr)
 		actions = fmt.Sprintf(authorizeForm, "Authorize my IP")
 	}
 
@@ -178,16 +139,18 @@ func (s *Server) handleEnrollPage(w http.ResponseWriter, r *http.Request) {
 </html>`, heading, body, actions)
 }
 
-// staticAllows reports whether ip is permanently allowlisted for the tunnel.
-func (s *Server) staticAllows(tunnelID string, ip net.IP) bool {
-	ts := s.registry.FindByID(tunnelID)
-	return ts != nil && ts.StaticIPAllowed(ip)
+func policyLabel(p config.IPPolicy) string { return p.ID }
+
+// staticAllows reports whether ip is permanently allowed by the IP policy.
+func (s *Server) staticAllows(policyID string, ip net.IP) bool {
+	pol := s.registry.FindIPPolicy(policyID)
+	return pol != nil && pol.Allows(ip)
 }
 
 // grantRemaining returns a human-readable remaining time for a live self-service
-// grant, or "" if the IP has no live grant.
-func (s *Server) grantRemaining(tunnelID string, ip net.IP) string {
-	g, ok := s.ipAllow.GrantFor(tunnelID, ip)
+// grant, or "" if the IP has no live grant for the policy.
+func (s *Server) grantRemaining(policyID string, ip net.IP) string {
+	g, ok := s.ipAllow.GrantFor(policyID, ip)
 	if !ok {
 		return ""
 	}
@@ -217,7 +180,7 @@ func plural(n int, unit string) string {
 // handleEnrollSubmit (POST /enroll/{token}) records the grant and confirms.
 func (s *Server) handleEnrollSubmit(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	tunnel, ok := s.findTunnelByEnrollToken(token)
+	pol, ok := s.findIPPolicyByEnrollToken(token)
 	if !ok {
 		s.serveErrorPage(w, r, http.StatusNotFound, "Invalid Link",
 			"This enrollment link is not valid. It may have been rotated or removed.")
@@ -230,22 +193,17 @@ func (s *Server) handleEnrollSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ipAllow.Grant(tunnel.ID, ip.String(), "enrollment-link", ipGrantTTL); err != nil {
-		slog.Error("failed to grant ip via enroll link", "tunnel", tunnel.ID, "ip", ip, "error", err)
+	if err := s.ipAllow.Grant(pol.ID, ip.String(), "enrollment-link", ipGrantTTL); err != nil {
+		slog.Error("failed to grant ip via enroll link", "policy", pol.ID, "ip", ip, "error", err)
 		s.serveErrorPage(w, r, http.StatusInternalServerError, "Enrollment Failed",
 			"Failed to record the authorization. Please try again.")
 		return
 	}
-	s.auditLog.Log("enrollment-link", "tunnel.ip_authorize",
-		fmt.Sprintf("Self-enrolled IP %s for tunnel %q via link (7 days)", ip, tunnel.ID))
-	slog.Info("ip self-enrolled via link", "tunnel", tunnel.ID, "ip", ip)
+	s.auditLog.Log("enrollment-link", "ip_policy.authorize",
+		fmt.Sprintf("Self-enrolled IP %s for ip_policy %q via link (7 days)", ip, pol.ID))
+	slog.Info("ip self-enrolled via link", "policy", pol.ID, "ip", ip)
 
-	appURL := s.publicURLFor(tunnel)
 	continueBtn := ""
-	if appURL != "" {
-		continueBtn = fmt.Sprintf(`<a class="btn" href="%s">Continue to %s</a>`,
-			html.EscapeString(appURL), html.EscapeString(tunnelLabel(tunnel)))
-	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
@@ -279,11 +237,25 @@ func (s *Server) handleEnrollSubmit(w http.ResponseWriter, r *http.Request) {
 </div>
 </body>
 </html>`,
-		html.EscapeString(ip.String()), html.EscapeString(tunnelLabel(tunnel)), continueBtn)
+		html.EscapeString(ip.String()), html.EscapeString(policyLabel(pol)), continueBtn)
 }
 
-// handleRotateEnrollToken (POST) generates a new enrollment token for a tunnel,
-// invalidating any previous link, and returns the new URL.
+// setEnrollToken sets (or clears, if token == "") the enrollment token on an IP
+// policy and persists the config. Returns ok=false if the policy is unknown.
+func (s *Server) setEnrollToken(policyID, token string) (ok bool, err error) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	for i := range s.cfg.IPPolicy {
+		if s.cfg.IPPolicy[i].ID == policyID {
+			s.cfg.IPPolicy[i].EnrollToken = token
+			return true, s.cfg.Save(s.configPath)
+		}
+	}
+	return false, nil
+}
+
+// handleRotateEnrollToken (POST) generates a new enrollment token for an IP
+// policy, invalidating any previous link, and returns the new URL.
 func (s *Server) handleRotateEnrollToken(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	token, err := generateEnrollToken()
@@ -291,24 +263,9 @@ func (s *Server) handleRotateEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to generate token", http.StatusInternalServerError)
 		return
 	}
-
-	s.cfgMu.Lock()
-	found := false
-	for i := range s.cfg.Tunnel {
-		if s.cfg.Tunnel[i].ID == id {
-			s.cfg.Tunnel[i].EnrollToken = token
-			found = true
-			break
-		}
-	}
-	var saveErr error
-	if found {
-		saveErr = s.cfg.Save(s.configPath)
-	}
-	s.cfgMu.Unlock()
-
+	found, saveErr := s.setEnrollToken(id, token)
 	if !found {
-		http.Error(w, "tunnel not found", http.StatusNotFound)
+		http.Error(w, "policy not found", http.StatusNotFound)
 		return
 	}
 	if saveErr != nil {
@@ -316,34 +273,18 @@ func (s *Server) handleRotateEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to save config", http.StatusInternalServerError)
 		return
 	}
-
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.enroll_token.rotate",
-		fmt.Sprintf("Rotated enrollment link for tunnel %q", id))
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.enroll_token.rotate",
+		fmt.Sprintf("Rotated enrollment link for ip_policy %q", id))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"url": s.enrollURL(token)})
 }
 
-// handleDeleteEnrollToken (DELETE) removes a tunnel's enrollment link.
+// handleDeleteEnrollToken (DELETE) removes an IP policy's enrollment link.
 func (s *Server) handleDeleteEnrollToken(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-
-	s.cfgMu.Lock()
-	found := false
-	for i := range s.cfg.Tunnel {
-		if s.cfg.Tunnel[i].ID == id {
-			s.cfg.Tunnel[i].EnrollToken = ""
-			found = true
-			break
-		}
-	}
-	var saveErr error
-	if found {
-		saveErr = s.cfg.Save(s.configPath)
-	}
-	s.cfgMu.Unlock()
-
+	found, saveErr := s.setEnrollToken(id, "")
 	if !found {
-		http.Error(w, "tunnel not found", http.StatusNotFound)
+		http.Error(w, "policy not found", http.StatusNotFound)
 		return
 	}
 	if saveErr != nil {
@@ -351,8 +292,7 @@ func (s *Server) handleDeleteEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to save config", http.StatusInternalServerError)
 		return
 	}
-
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.enroll_token.remove",
-		fmt.Sprintf("Removed enrollment link for tunnel %q", id))
+	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.enroll_token.remove",
+		fmt.Sprintf("Removed enrollment link for ip_policy %q", id))
 	w.WriteHeader(http.StatusNoContent)
 }

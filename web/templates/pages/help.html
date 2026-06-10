@@ -122,56 +122,41 @@
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
-        <h2 class="text-base font-semibold">OIDC Authentication</h2>
+        <h2 class="text-base font-semibold">Users &amp; Sign-in</h2>
         <p class="text-sm text-gray-600">
-            By default, Gatecrash uses passkey authentication (single admin user). When OIDC is enabled in <code class="bg-gray-100 px-1 rounded text-xs">gatecrash.toml</code>, it replaces passkeys entirely &mdash; all admin and tunnel authentication goes through your OIDC provider.
+            Gatecrash uses <strong>passkeys</strong> &mdash; phishing-resistant credentials on your device. On first boot you provision the <strong>admin</strong> user. There are two roles: <strong>admin</strong> (manages tunnels, access policies, users, and the audit log) and <strong>user</strong> (signs in and can be granted access to protected tunnels).
         </p>
-
         <div class="space-y-2">
-            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Admin Access</p>
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Adding users</p>
             <p class="text-sm text-gray-600">
-                With OIDC enabled, admin login redirects to your OIDC provider. You can optionally restrict admin access by setting <code class="bg-gray-100 px-1 rounded text-xs">admin_claim_name</code> and <code class="bg-gray-100 px-1 rounded text-xs">admin_claim_value</code> in the config (e.g. <code class="bg-gray-100 px-1 rounded text-xs">role = admin</code>). When empty, any authenticated OIDC user is an admin.
+                On the <strong>Users</strong> page, add a user with an immutable ID and role. They get a one-time <strong>invite link</strong>; opening it registers their passkey. If a user loses their device, <strong>Reset</strong> clears their passkeys and issues a fresh invite. Everyone can add or remove their own passkeys from the <strong>Passkeys</strong> page.
             </p>
         </div>
-
         <div class="space-y-2">
-            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Protecting Tunnels</p>
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Protecting tunnels</p>
             <p class="text-sm text-gray-600">
-                HTTP tunnels can require authentication via the <strong>Require Authentication</strong> checkbox. In passkey mode, this requires the admin session. In OIDC mode, users are redirected to your OIDC provider. You can optionally filter by a claim (e.g. <code class="bg-gray-100 px-1 rounded text-xs">department = engineering</code>). After authentication, a user identity header (default: <code class="bg-gray-100 px-1 rounded text-xs">x-Gatecrash-User</code>) is injected into proxied requests.
-            </p>
-        </div>
-
-        <div class="space-y-2">
-            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Callback URL</p>
-            <p class="text-sm text-gray-600">
-                Register this callback URL with your OIDC provider:
-            </p>
-            <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
-                <li><code class="bg-gray-100 px-1 rounded text-xs">https://{{.Data.AdminHost}}/oidc/callback</code></li>
-            </ul>
-            <p class="text-sm text-gray-500">
-                Both admin login and tunnel "Require Auth" use this single callback URL.
+                Create an <strong>Auth Policy</strong> (under Access Policies) selecting which users may access it, then assign it to an HTTP tunnel. Visitors are sent to the admin host to sign in with a passkey and bounced back. The user's ID is injected as <code class="bg-gray-100 px-1 rounded text-xs">x-Gatecrash-User</code> (header name configurable) along with <code class="bg-gray-100 px-1 rounded text-xs">X-Gatecrash-Role</code>. An auth policy can also carry an optional <strong>static password</strong> (HTTP Basic) for non-interactive clients. Auth policies are HTTP-only (not available with TLS passthrough).
             </p>
         </div>
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
-        <h2 class="text-base font-semibold">IP Allowlist</h2>
+        <h2 class="text-base font-semibold">IP Policies</h2>
         <p class="text-sm text-gray-600">
-            The <strong>IP Allowlist</strong> restricts a tunnel to a set of source IP addresses. It's an <em>independent</em> control from Require Authentication &mdash; a tunnel can use either, both, or neither. Because allowed clients pass through with no cookie or credential, it's ideal for protecting services that can't authenticate themselves, such as MCP servers or other API/tool endpoints. It works on both HTTP and TCP tunnels (including TLS passthrough). Require Authentication, by contrast, only applies to HTTP and is not available with TLS passthrough.
+            An <strong>IP Policy</strong> (under Access Policies) restricts access to a set of source IP addresses, and can be shared across tunnels. It's an <em>independent</em> gate from auth policies &mdash; a tunnel can use either, both, or neither. Because allowed clients pass through with no cookie or credential, it's ideal for services that can't authenticate, such as MCP servers. It works on HTTP and TCP tunnels (including TLS passthrough).
         </p>
         <div class="space-y-2">
-            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Adding IPs</p>
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Allowing IPs</p>
             <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
-                <li><strong>Permanent</strong> &mdash; enter IPs or CIDRs (e.g. <code class="bg-gray-100 px-1 rounded text-xs">203.0.113.4</code>, <code class="bg-gray-100 px-1 rounded text-xs">10.0.0.0/8</code>) in the tunnel's IP Allowlist field. IPv4 and IPv6 are both supported.</li>
-                <li><strong>Self-service</strong> &mdash; a blocked visitor to an HTTP tunnel sees an "Authorize this IP" page; after signing in to the admin panel, their current IP is granted for 7 days.</li>
-                <li><strong>Enrollment link</strong> &mdash; from the <strong>IPs</strong> button on a tunnel, create a shareable link. Anyone with the link can authorize their own IP for 7 days <em>without signing in</em> &mdash; useful for sharing access with non-admins, and the only self-service option for TCP tunnels. Treat the link like a password; <strong>Rotate</strong> invalidates old links.</li>
+                <li><strong>Permanent</strong> &mdash; IPs or CIDRs (e.g. <code class="bg-gray-100 px-1 rounded text-xs">203.0.113.4</code>, <code class="bg-gray-100 px-1 rounded text-xs">10.0.0.0/8</code>) with optional comments. IPv4 and IPv6 supported.</li>
+                <li><strong>Self-service</strong> &mdash; a blocked visitor to an HTTP tunnel sees an "Authorize this IP" page; after signing in, their IP is granted for 7 days.</li>
+                <li><strong>Enrollment link</strong> &mdash; from the policy's <strong>IPs &amp; Link</strong> panel, create a shareable link anyone can use to authorize their own IP for 7 days <em>without signing in</em> &mdash; the only self-service option for TCP tunnels. Treat it like a password; <strong>Rotate</strong> invalidates old links.</li>
             </ul>
         </div>
         <div class="space-y-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Managing grants</p>
             <p class="text-sm text-gray-600">
-                The <strong>IPs</strong> button lists active self-service grants with who authorized them and when they expire; <strong>Revoke</strong> removes one immediately. Self-service grants expire after 7 days; permanent entries never expire. Because grants are keyed by source IP, everyone sharing the same public IP (NAT/CGNAT, or a rotating IPv6 prefix) shares the same access &mdash; prefer a permanent CIDR for stable IPv6 prefixes.
+                The policy's <strong>IPs &amp; Link</strong> panel lists active grants with who authorized them and when they expire; <strong>Revoke</strong> removes one immediately. Grants are keyed by source IP, so everyone behind the same public IP (NAT/CGNAT, or a rotating IPv6 prefix) shares access &mdash; prefer a permanent CIDR for stable prefixes.
             </p>
         </div>
     </div>

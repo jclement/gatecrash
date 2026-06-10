@@ -3,33 +3,34 @@ package admin
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
-	"log/slog"
-	"net/http"
+	"fmt"
 	"sync"
 	"time"
+
+	"net/http"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// WebAuthnHandler handles passkey registration and authentication.
+// WebAuthnHandler runs passkey registration and (usernameless) login ceremonies
+// against the user directory. It is transport-agnostic: callers handle HTTP and
+// persistence.
 type WebAuthnHandler struct {
-	wan     *webauthn.WebAuthn
-	store   *PasskeyStore
-	session *SessionManager
+	wan   *webauthn.WebAuthn
+	users *UserStore
 
-	// In-memory challenge store with TTL
 	mu         sync.Mutex
-	challenges map[string]*sessionData
+	challenges map[string]*challenge
 }
 
-type sessionData struct {
+type challenge struct {
 	session *webauthn.SessionData
+	userID  string // registration target; empty for login
 	expires time.Time
 }
 
-// webauthnUser implements webauthn.User interface.
+// webauthnUser adapts a directory User to the webauthn.User interface.
 type webauthnUser struct {
 	id          []byte
 	name        string
@@ -41,8 +42,22 @@ func (u *webauthnUser) WebAuthnName() string                       { return u.na
 func (u *webauthnUser) WebAuthnDisplayName() string                { return u.name }
 func (u *webauthnUser) WebAuthnCredentials() []webauthn.Credential { return u.credentials }
 
-// NewWebAuthnHandler creates a new WebAuthn handler.
-func NewWebAuthnHandler(rpID, rpOrigin string, store *PasskeyStore, session *SessionManager) (*WebAuthnHandler, error) {
+func userToWebAuthn(u *User) *webauthnUser {
+	creds := make([]webauthn.Credential, len(u.Credentials))
+	for i, sc := range u.Credentials {
+		creds[i] = webauthn.Credential{
+			ID:              sc.ID,
+			PublicKey:       sc.PublicKey,
+			AttestationType: sc.AttType,
+			Authenticator:   webauthn.Authenticator{AAGUID: sc.AAGUID, SignCount: sc.SignCount},
+			Flags:           webauthn.CredentialFlags{BackupEligible: sc.BackupEligible, BackupState: sc.BackupState},
+		}
+	}
+	return &webauthnUser{id: []byte(u.ID), name: u.ID, credentials: creds}
+}
+
+// NewWebAuthnHandler creates a WebAuthn handler bound to the user directory.
+func NewWebAuthnHandler(rpID, rpOrigin string, users *UserStore) (*WebAuthnHandler, error) {
 	wan, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: "Gatecrash",
 		RPID:          rpID,
@@ -51,17 +66,8 @@ func NewWebAuthnHandler(rpID, rpOrigin string, store *PasskeyStore, session *Ses
 	if err != nil {
 		return nil, err
 	}
-
-	h := &WebAuthnHandler{
-		wan:        wan,
-		store:      store,
-		session:    session,
-		challenges: make(map[string]*sessionData),
-	}
-
-	// Cleanup expired challenges every minute
+	h := &WebAuthnHandler{wan: wan, users: users, challenges: make(map[string]*challenge)}
 	go h.cleanupLoop()
-
 	return h, nil
 }
 
@@ -80,7 +86,7 @@ func (h *WebAuthnHandler) cleanupLoop() {
 	}
 }
 
-func (h *WebAuthnHandler) storeChallenge(sd *webauthn.SessionData) string {
+func (h *WebAuthnHandler) store(sd *webauthn.SessionData, userID string) string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return ""
@@ -88,190 +94,118 @@ func (h *WebAuthnHandler) storeChallenge(sd *webauthn.SessionData) string {
 	key := base64.RawURLEncoding.EncodeToString(b)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.challenges[key] = &sessionData{
-		session: sd,
-		expires: time.Now().Add(5 * time.Minute),
-	}
+	h.challenges[key] = &challenge{session: sd, userID: userID, expires: time.Now().Add(5 * time.Minute)}
 	return key
 }
 
-func (h *WebAuthnHandler) getChallenge(key string) *webauthn.SessionData {
+func (h *WebAuthnHandler) take(key string) *challenge {
 	if key == "" {
 		return nil
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	sd, ok := h.challenges[key]
-	if !ok || time.Now().After(sd.expires) {
+	c, ok := h.challenges[key]
+	if !ok || time.Now().After(c.expires) {
 		delete(h.challenges, key)
 		return nil
 	}
 	delete(h.challenges, key)
-	return sd.session
+	return c
 }
 
-// user builds a webauthnUser from stored credentials.
-func (h *WebAuthnHandler) user() *webauthnUser {
-	stored := h.store.Credentials()
-	creds := make([]webauthn.Credential, len(stored))
-	for i, sc := range stored {
-		creds[i] = webauthn.Credential{
-			ID:              sc.ID,
-			PublicKey:       sc.PublicKey,
-			AttestationType: sc.AttType,
-			Authenticator: webauthn.Authenticator{
-				AAGUID:    sc.AAGUID,
-				SignCount: sc.SignCount,
-			},
-			Flags: webauthn.CredentialFlags{
-				BackupEligible: sc.BackupEligible,
-				BackupState:    sc.BackupState,
-			},
-		}
-	}
-	return &webauthnUser{
-		id:          []byte("gatecrash-admin"),
-		name:        "admin",
-		credentials: creds,
-	}
-}
-
-// HandleRegisterBegin starts passkey registration.
-func (h *WebAuthnHandler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
-	user := h.user()
-	options, session, err := h.wan.BeginRegistration(user)
+// BeginRegistration starts a passkey registration for the target user, requiring
+// a discoverable (resident) credential so usernameless login works.
+func (h *WebAuthnHandler) BeginRegistration(u *User) (creation interface{}, challengeID string, err error) {
+	options, session, err := h.wan.BeginRegistration(
+		userToWebAuthn(u),
+		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
+		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
+			UserVerification: protocol.VerificationPreferred,
+		}),
+	)
 	if err != nil {
-		slog.Error("WebAuthn register begin failed", "error", err)
-		http.Error(w, "registration failed", http.StatusInternalServerError)
-		return
+		return nil, "", err
 	}
-
-	key := h.storeChallenge(session)
+	key := h.store(session, u.ID)
 	if key == "" {
-		http.Error(w, "failed to store challenge", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("failed to store challenge")
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"publicKey":    options.Response,
-		"challenge_id": key,
-	})
+	return options.Response, key, nil
 }
 
-// HandleRegisterFinish completes passkey registration.
-func (h *WebAuthnHandler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
-	challengeID := r.URL.Query().Get("challenge_id")
-	session := h.getChallenge(challengeID)
-	if session == nil {
-		http.Error(w, "no pending registration", http.StatusBadRequest)
-		return
+// FinishRegistration verifies the registration response and returns the target
+// user ID and the new credential. The caller persists it.
+func (h *WebAuthnHandler) FinishRegistration(r *http.Request, challengeID string) (userID string, sc StoredCredential, err error) {
+	c := h.take(challengeID)
+	if c == nil || c.userID == "" {
+		return "", StoredCredential{}, fmt.Errorf("no pending registration")
 	}
-
-	user := h.user()
-	credential, err := h.wan.FinishRegistration(user, *session, r)
+	u := h.users.Get(c.userID)
+	if u == nil {
+		return "", StoredCredential{}, fmt.Errorf("unknown user")
+	}
+	cred, err := h.wan.FinishRegistration(userToWebAuthn(u), *c.session, r)
 	if err != nil {
-		slog.Error("WebAuthn register finish failed", "error", err)
-		http.Error(w, "registration verification failed", http.StatusBadRequest)
-		return
+		return "", StoredCredential{}, err
 	}
-
-	// Determine transport strings
 	var transports []string
-	for _, t := range credential.Transport {
+	for _, t := range cred.Transport {
 		transports = append(transports, string(t))
 	}
-
-	// Store credential
-	sc := StoredCredential{
-		ID:             credential.ID,
-		PublicKey:      credential.PublicKey,
+	return c.userID, StoredCredential{
+		ID:             cred.ID,
+		PublicKey:      cred.PublicKey,
 		Name:           "Passkey",
-		AAGUID:        credential.Authenticator.AAGUID,
-		SignCount:      credential.Authenticator.SignCount,
+		AAGUID:         cred.Authenticator.AAGUID,
+		SignCount:      cred.Authenticator.SignCount,
 		Transport:      transports,
-		AttType:        credential.AttestationType,
-		BackupEligible: credential.Flags.BackupEligible,
-		BackupState:    credential.Flags.BackupState,
-	}
-	if err := h.store.AddCredential(sc); err != nil {
-		slog.Error("failed to store credential", "error", err)
-		http.Error(w, "failed to store credential", http.StatusInternalServerError)
-		return
-	}
-
-	// Create session
-	if err := h.session.CreateSession(w, "Admin (passkey)"); err != nil {
-		slog.Error("failed to create session", "error", err)
-	}
-
-	slog.Info("passkey registered")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		AttType:        cred.AttestationType,
+		BackupEligible: cred.Flags.BackupEligible,
+		BackupState:    cred.Flags.BackupState,
+		CreatedAt:      time.Now(),
+		LastUsedAt:     time.Now(),
+	}, nil
 }
 
-// HandleLoginBegin starts passkey authentication.
-func (h *WebAuthnHandler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
-	user := h.user()
-	if len(user.credentials) == 0 {
-		http.Error(w, "no passkeys registered", http.StatusBadRequest)
-		return
-	}
-
-	options, session, err := h.wan.BeginLogin(user)
+// BeginLogin starts a usernameless (discoverable) login.
+func (h *WebAuthnHandler) BeginLogin() (assertion interface{}, challengeID string, err error) {
+	options, session, err := h.wan.BeginDiscoverableLogin()
 	if err != nil {
-		slog.Error("WebAuthn login begin failed", "error", err)
-		http.Error(w, "login failed", http.StatusInternalServerError)
-		return
+		return nil, "", err
 	}
-
-	key := h.storeChallenge(session)
+	key := h.store(session, "")
 	if key == "" {
-		http.Error(w, "failed to store challenge", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("failed to store challenge")
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"publicKey":    options.Response,
-		"challenge_id": key,
-	})
+	return options.Response, key, nil
 }
 
-// HandleLoginFinish completes passkey authentication.
-func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
-	challengeID := r.URL.Query().Get("challenge_id")
-	session := h.getChallenge(challengeID)
-	if session == nil {
-		http.Error(w, "no pending login", http.StatusBadRequest)
-		return
+// FinishLogin verifies a discoverable login, resolving and returning the
+// authenticated user ID, the credential used, and its new sign count.
+func (h *WebAuthnHandler) FinishLogin(r *http.Request, challengeID string) (userID string, credID []byte, signCount uint32, err error) {
+	c := h.take(challengeID)
+	if c == nil {
+		return "", nil, 0, fmt.Errorf("no pending login")
 	}
-
-	user := h.user()
-	credential, err := h.wan.FinishLogin(user, *session, r)
+	var resolved *User
+	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
+		u := h.users.Get(string(userHandle))
+		if u == nil {
+			return nil, fmt.Errorf("unknown user")
+		}
+		resolved = u
+		return userToWebAuthn(u), nil
+	}
+	cred, err := h.wan.FinishDiscoverableLogin(handler, *c.session, r)
 	if err != nil {
-		slog.Error("WebAuthn login finish failed", "error", err)
-		http.Error(w, "authentication failed", http.StatusBadRequest)
-		return
+		return "", nil, 0, err
 	}
-
-	// Update sign count
-	h.store.UpdateSignCount(credential.ID, credential.Authenticator.SignCount)
-
-	// Create session
-	if err := h.session.CreateSession(w, "Admin (passkey)"); err != nil {
-		slog.Error("failed to create session", "error", err)
+	if resolved == nil {
+		return "", nil, 0, fmt.Errorf("user not resolved")
 	}
-
-	slog.Info("passkey authenticated")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return resolved.ID, cred.ID, cred.Authenticator.SignCount, nil
 }
 
-// NeedsSetup returns true if no passkeys are registered.
-func (h *WebAuthnHandler) NeedsSetup() bool {
-	return !h.store.IsSetupComplete()
-}
-
-// Ensure protocol is imported (used in credential transport types)
-var _ = protocol.AuthenticatorTransport("")
+// NeedsSetup reports whether first-boot admin provisioning is required.
+func (h *WebAuthnHandler) NeedsSetup() bool { return h.users.NeedsSetup() }

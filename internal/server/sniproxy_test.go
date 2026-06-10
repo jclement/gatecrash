@@ -108,10 +108,10 @@ func buildClientHello(hostname string) []byte {
 	body := []byte{
 		0x03, 0x03, // client version TLS 1.2
 	}
-	body = append(body, make([]byte, 32)...) // random
-	body = append(body, 0x00)                // session ID length = 0
+	body = append(body, make([]byte, 32)...)    // random
+	body = append(body, 0x00)                   // session ID length = 0
 	body = append(body, 0x00, 0x02, 0x00, 0x2f) // cipher suites: 1 suite
-	body = append(body, 0x01, 0x00)              // compression: 1 method (null)
+	body = append(body, 0x01, 0x00)             // compression: 1 method (null)
 	body = append(body, byte(extLen>>8), byte(extLen))
 	body = append(body, sniExt...)
 
@@ -131,10 +131,10 @@ func buildClientHelloNoExtensions() []byte {
 	body := []byte{
 		0x03, 0x03, // client version
 	}
-	body = append(body, make([]byte, 32)...) // random
-	body = append(body, 0x00)                // session ID length
+	body = append(body, make([]byte, 32)...)    // random
+	body = append(body, 0x00)                   // session ID length
 	body = append(body, 0x00, 0x02, 0x00, 0x2f) // cipher suites
-	body = append(body, 0x01, 0x00)              // compression
+	body = append(body, 0x01, 0x00)             // compression
 
 	bodyLen := len(body)
 	handshake := []byte{

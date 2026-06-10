@@ -19,10 +19,14 @@
             <a href="/" class="font-bold text-base mr-6 hover:text-gray-200">Gatecrash</a>
             <!-- Desktop nav links -->
             <div class="hidden md:flex items-center gap-1">
+                {{if .IsAdmin}}
                 <a href="/" class="px-3 py-1 rounded text-sm {{if eq .Active "dashboard"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Dashboard</a>
-                {{if not .OIDCConfigured}}<a href="/passkeys" class="px-3 py-1 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>{{end}}
+                <a href="/access-policies" class="px-3 py-1 rounded text-sm {{if eq .Active "access-policies"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Access Policies</a>
+                <a href="/users" class="px-3 py-1 rounded text-sm {{if eq .Active "users"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Users</a>
                 <a href="/auditlog" class="px-3 py-1 rounded text-sm {{if eq .Active "auditlog"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Audit Log</a>
-                <a href="/help" class="px-3 py-1 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>
+                {{end}}
+                <a href="/passkeys" class="px-3 py-1 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>
+                {{if .IsAdmin}}<a href="/help" class="px-3 py-1 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>{{end}}
             </div>
             <!-- Desktop right controls -->
             <div class="ml-auto hidden md:flex items-center gap-3">
@@ -49,10 +53,14 @@
         </div>
         <!-- Mobile dropdown -->
         <div x-show="mobileMenu" x-transition @click.outside="mobileMenu = false" class="md:hidden border-t border-gray-700 px-4 py-2 flex flex-col gap-1">
+            {{if .IsAdmin}}
             <a href="/" class="px-3 py-2 rounded text-sm {{if eq .Active "dashboard"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Dashboard</a>
-            {{if not .OIDCConfigured}}<a href="/passkeys" class="px-3 py-2 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>{{end}}
+            <a href="/access-policies" class="px-3 py-2 rounded text-sm {{if eq .Active "access-policies"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Access Policies</a>
+            <a href="/users" class="px-3 py-2 rounded text-sm {{if eq .Active "users"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Users</a>
             <a href="/auditlog" class="px-3 py-2 rounded text-sm {{if eq .Active "auditlog"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Audit Log</a>
-            <a href="/help" class="px-3 py-2 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>
+            {{end}}
+            <a href="/passkeys" class="px-3 py-2 rounded text-sm {{if eq .Active "passkeys"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Passkeys</a>
+            {{if .IsAdmin}}<a href="/help" class="px-3 py-2 rounded text-sm {{if eq .Active "help"}}bg-gray-600 font-semibold{{else}}hover:bg-gray-700{{end}}">Help</a>{{end}}
             <div class="border-t border-gray-700 mt-1 pt-2 flex items-center gap-3">
                 <div x-data="updateBanner()" x-init="init()" x-cloak>
                     <template x-if="available && !isDocker">

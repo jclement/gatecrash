@@ -174,5 +174,5 @@ type noFlushWriter struct {
 }
 
 func (n *noFlushWriter) Header() http.Header         { return n.rec.Header() }
-func (n *noFlushWriter) Write(b []byte) (int, error)  { return n.rec.Write(b) }
-func (n *noFlushWriter) WriteHeader(code int)         { n.rec.WriteHeader(code) }
+func (n *noFlushWriter) Write(b []byte) (int, error) { return n.rec.Write(b) }
+func (n *noFlushWriter) WriteHeader(code int)        { n.rec.WriteHeader(code) }

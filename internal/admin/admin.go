@@ -29,36 +29,28 @@ type ClientView struct {
 
 // TunnelView is the template data for a single tunnel row.
 type TunnelView struct {
-	ID              string
-	Type            string
-	Hostnames       []string
-	ListenPort      int
-	PreserveHost    bool
-	TLSPassthrough  bool
-	RequireAuth     bool
-	AuthClaimName   string
-	AuthClaimValue  string
-	AuthHeader      string
-	AuthHeaderClaim string
-	IPAllowlist     bool
-	AllowIPs        []string
-	Connected       bool
-	ClientCount     int
-	Clients         []ClientView
-	Requests        int64
-	BytesIn         int64
-	BytesOut        int64
-	ActiveConns     int32
-	Token           string
-	HostCerts       []HostCert
-	ServerVersion   string
+	ID             string
+	Type           string
+	Hostnames      []string
+	ListenPort     int
+	PreserveHost   bool
+	TLSPassthrough bool
+	IPPolicy       string
+	AuthPolicy     string
+	Connected      bool
+	ClientCount    int
+	Clients        []ClientView
+	Requests       int64
+	BytesIn        int64
+	BytesOut       int64
+	ActiveConns    int32
+	Token          string
+	HostCerts      []HostCert
+	ServerVersion  string
 }
 
 // HostnamesCSV returns hostnames as a comma-separated string.
 func (t TunnelView) HostnamesCSV() string { return strings.Join(t.Hostnames, ", ") }
-
-// AllowIPsCSV returns the permanent IP allowlist entries as a comma-separated string.
-func (t TunnelView) AllowIPsCSV() string { return strings.Join(t.AllowIPs, ", ") }
 
 // ClientSummary returns a tooltip-friendly summary of all clients with uptime and version.
 // The output is sorted by address for a stable, deterministic tooltip.
@@ -139,16 +131,15 @@ func FormatUptime(since time.Time) string {
 
 // PageData is the template rendering context.
 type PageData struct {
-	Title             string
-	Active            string
-	Version           string
-	CheckIntervalMS   int64
-	CSRFToken         string
-	Flash             *Flash
-	Data              any
-	OIDCConfigured    bool
-	OIDCProviderName  string
-	OIDCLoginURL      string // OIDC sign-in URL, carries an optional return path
+	Title           string
+	Active          string
+	Version         string
+	CheckIntervalMS int64
+	CSRFToken       string
+	Flash           *Flash
+	Data            any
+	UserID          string // logged-in user's ID
+	IsAdmin         bool   // logged-in user is an admin (drives nav gating)
 }
 
 // PasskeyView represents a passkey for display in templates.
@@ -172,7 +163,7 @@ type Handlers struct {
 	tmplFuncs       template.FuncMap
 	tmplFS          fs.FS
 	isDev           bool
-	baseHTML        string                       // cached base template source
+	baseHTML        string                        // cached base template source
 	pages           map[string]*template.Template // pre-compiled: page name → base+page
 }
 
@@ -202,9 +193,12 @@ func NewHandlers(version string, checkInterval time.Duration, templateFS fs.FS) 
 			"pages/login.html",
 			"pages/setup.html",
 			"pages/passkeys.html",
+			"pages/invite.html",
+			"pages/users.html",
 			"pages/dashboard.html",
 			"pages/help.html",
 			"pages/auditlog.html",
+			"pages/access-policies.html",
 		} {
 			tmpl, err := h.compilePage(page)
 			if err != nil {

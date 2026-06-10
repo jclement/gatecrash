@@ -100,9 +100,7 @@ func (a *AuditLog) migrateFromLegacy(legacy []AuditEntry) error {
 		return err
 	}
 	a.size = int64(buf.Len())
-	for _, e := range legacy { // legacy is already newest-first
-		a.recent = append(a.recent, e)
-	}
+	a.recent = append(a.recent, legacy...) // legacy is already newest-first
 	if len(a.recent) > auditRingSize {
 		a.recent = a.recent[:auditRingSize]
 	}

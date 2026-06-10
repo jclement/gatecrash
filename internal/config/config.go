@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,13 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig `toml:"server"`
-	TLS      TLSConfig    `toml:"tls"`
-	Update   UpdateConfig `toml:"update"`
-	OIDC     OIDCConfig   `toml:"oidc"`
-	Tunnel   []Tunnel     `toml:"tunnel"`
-	Redirect []Redirect   `toml:"redirect"`
+	Server     ServerConfig `toml:"server"`
+	TLS        TLSConfig    `toml:"tls"`
+	Update     UpdateConfig `toml:"update"`
+	Tunnel     []Tunnel     `toml:"tunnel"`
+	Redirect   []Redirect   `toml:"redirect"`
+	IPPolicy   []IPPolicy   `toml:"ip_policy"`
+	AuthPolicy []AuthPolicy `toml:"auth_policy"`
 }
 
 type ServerConfig struct {
@@ -44,52 +46,48 @@ type UpdateConfig struct {
 	GitHubRepo    string `toml:"github_repo"`
 }
 
-// OIDCConfig holds OIDC provider settings.
-// When enabled, OIDC replaces passkey authentication entirely.
-type OIDCConfig struct {
-	Enabled         bool   `toml:"enabled"`
-	ProviderName    string `toml:"provider_name"`
-	ClientID        string `toml:"client_id"`
-	ClientSecret    string `toml:"client_secret"`
-	AuthURL         string `toml:"auth_url"`
-	TokenURL        string `toml:"token_url"`
-	CertURL         string `toml:"cert_url"`
-	UsePKCE         bool   `toml:"use_pkce"`
-	NameClaim       string `toml:"name_claim"`
-	EmailClaim      string `toml:"email_claim"`
-	AdminClaimName  string `toml:"admin_claim_name"`
-	AdminClaimValue string `toml:"admin_claim_value"`
-}
-
-// IsConfigured returns true if the OIDC provider has the minimum required fields set.
-func (o *OIDCConfig) IsConfigured() bool {
-	return o.Enabled && o.ClientID != "" && o.AuthURL != "" && o.TokenURL != "" && o.CertURL != ""
-}
-
 type Tunnel struct {
-	ID              string   `toml:"id"`
-	Type            string   `toml:"type"`
-	Hostnames       []string `toml:"hostnames,omitempty"`
-	ListenPort      int      `toml:"listen_port,omitempty"`
-	SecretHash      string   `toml:"secret_hash,omitempty"`
-	PreserveHost    bool     `toml:"preserve_host,omitempty"`
-	TLSPassthrough  bool     `toml:"tls_passthrough,omitempty"`
-	RequireAuth     bool     `toml:"require_auth,omitempty"`
-	AuthClaimName   string   `toml:"auth_claim_name,omitempty"`
-	AuthClaimValue  string   `toml:"auth_claim_value,omitempty"`
-	AuthHeader      string   `toml:"auth_header,omitempty"`
-	AuthHeaderClaim string   `toml:"auth_header_claim,omitempty"`
-	// IPAllowlist, when true, restricts access to clients whose source IP is in
-	// AllowIPs (permanent) or has been granted a temporary self-service grant.
-	// It is an independent gate from RequireAuth — a tunnel may use either, both,
-	// or neither.
-	IPAllowlist bool     `toml:"ip_allowlist,omitempty"`
-	AllowIPs    []string `toml:"allow_ips,omitempty"` // permanent IPs or CIDRs
-	// EnrollToken, when set, enables a shareable self-service enrollment link
-	// (/enroll/<token> on the admin host) that lets anyone with the link
-	// authorize their own source IP without signing in. Bearer secret — rotate
-	// to invalidate old links.
-	EnrollToken string `toml:"enroll_token,omitempty"`
+	ID             string   `toml:"id"`
+	Type           string   `toml:"type"`
+	Hostnames      []string `toml:"hostnames,omitempty"`
+	ListenPort     int      `toml:"listen_port,omitempty"`
+	SecretHash     string   `toml:"secret_hash,omitempty"`
+	PreserveHost   bool     `toml:"preserve_host,omitempty"`
+	TLSPassthrough bool     `toml:"tls_passthrough,omitempty"`
+	// IPPolicy / AuthPolicy reference reusable access policies by ID. They are
+	// independent gates: when both are set a request must pass both (AND). Auth
+	// policies apply to HTTP tunnels only.
+	IPPolicy   string `toml:"ip_policy,omitempty"`
+	AuthPolicy string `toml:"auth_policy,omitempty"`
+}
+
+// IPRange is one entry in an IP policy: a CIDR or single IP with an optional
+// human comment for documentation.
+type IPRange struct {
+	CIDR    string `toml:"cidr"`
+	Comment string `toml:"comment,omitempty"`
+}
+
+// IPPolicy is a reusable source-IP allowlist that tunnels can share. Access is
+// granted to any client in Ranges (permanent) or holding a live self-service
+// grant. EnrollToken, when set, exposes a shareable self-enrollment link.
+type IPPolicy struct {
+	ID          string    `toml:"id"`
+	Ranges      []IPRange `toml:"range,omitempty"`
+	EnrollToken string    `toml:"enroll_token,omitempty"`
+}
+
+// AuthPolicy is a reusable authentication requirement that tunnels can share.
+// A request authenticates if it is a logged-in user in Users, OR (optionally) it
+// presents the static HTTP Basic password.
+type AuthPolicy struct {
+	ID    string   `toml:"id"`
+	Users []string `toml:"users,omitempty"` // allowed user IDs (passkey login)
+	// Header overrides the identity header name (default x-Gatecrash-User).
+	Header string `toml:"header,omitempty"`
+	// Optional static HTTP Basic credential for non-interactive clients.
+	Username     string `toml:"username,omitempty"`
+	PasswordHash string `toml:"password_hash,omitempty"`
 }
 
 type Redirect struct {
@@ -228,13 +226,55 @@ func Load(path string) (*Config, error) {
 // express — in particular access-control combinations that would silently not
 // be enforced, which would be a security footgun if accepted.
 func (c *Config) Validate() error {
+	ipIDs := map[string]bool{}
+	for _, p := range c.IPPolicy {
+		if p.ID == "" {
+			return fmt.Errorf("ip_policy: id is required")
+		}
+		if ipIDs[p.ID] {
+			return fmt.Errorf("duplicate ip_policy id %q", p.ID)
+		}
+		ipIDs[p.ID] = true
+		for _, r := range p.Ranges {
+			if _, _, err := net.ParseCIDR(r.CIDR); err != nil && net.ParseIP(r.CIDR) == nil {
+				return fmt.Errorf("ip_policy %q: invalid range %q (want IP or CIDR)", p.ID, r.CIDR)
+			}
+		}
+	}
+
+	authIDs := map[string]bool{}
+	for _, p := range c.AuthPolicy {
+		if p.ID == "" {
+			return fmt.Errorf("auth_policy: id is required")
+		}
+		if authIDs[p.ID] {
+			return fmt.Errorf("duplicate auth_policy id %q", p.ID)
+		}
+		authIDs[p.ID] = true
+		if len(p.Users) == 0 && p.PasswordHash == "" {
+			return fmt.Errorf("auth_policy %q: must allow at least one user or set a static password", p.ID)
+		}
+		// User login is established via the admin host's cross-host handoff.
+		if len(p.Users) > 0 && c.Server.AdminHost == "" {
+			return fmt.Errorf("auth_policy %q: user login requires server.admin_host", p.ID)
+		}
+	}
+
 	for _, t := range c.Tunnel {
-		// Passthrough hands raw bytes straight to the backend without an HTTP
-		// layer, so the browser-based require_auth gate is never evaluated. The
-		// IP allowlist, by contrast, IS enforced for passthrough (at the TCP
-		// accept), so that combination is allowed.
-		if t.RequireAuth && t.TLSPassthrough {
-			return fmt.Errorf("tunnel %q: require_auth cannot be combined with tls_passthrough (passthrough traffic never reaches the HTTP auth layer; use the IP allowlist instead)", t.ID)
+		if t.IPPolicy != "" && !ipIDs[t.IPPolicy] {
+			return fmt.Errorf("tunnel %q: unknown ip_policy %q", t.ID, t.IPPolicy)
+		}
+		if t.AuthPolicy != "" {
+			if !authIDs[t.AuthPolicy] {
+				return fmt.Errorf("tunnel %q: unknown auth_policy %q", t.ID, t.AuthPolicy)
+			}
+			// Auth gates need the HTTP layer; passthrough/TCP never reach it.
+			if t.TLSPassthrough {
+				return fmt.Errorf("tunnel %q: auth_policy cannot be used with tls_passthrough (traffic never reaches the HTTP auth layer; use an ip_policy)", t.ID)
+			}
+			if t.Type == "tcp" {
+				return fmt.Errorf("tunnel %q: auth_policy is not supported on TCP tunnels (use an ip_policy)", t.ID)
+			}
 		}
 	}
 	return nil
@@ -312,73 +352,6 @@ func (c *Config) Save(path string) error {
 	fmt.Fprintf(&b, "check_interval = %q\n", c.Update.CheckInterval)
 	fmt.Fprintf(&b, "github_repo = %q\n\n", c.Update.GitHubRepo)
 
-	// [oidc]
-	b.WriteString("# ─── OIDC Authentication ────────────────────────────────────────────\n")
-	b.WriteString("#\n")
-	b.WriteString("# Configure an OpenID Connect provider for admin login and tunnel protection.\n")
-	b.WriteString("# When enabled, you can define claim-matching rules and use them to gate\n")
-	b.WriteString("# admin access or protect HTTP tunnels.\n")
-	b.WriteString("#\n")
-	b.WriteString("[oidc]\n")
-	fmt.Fprintf(&b, "enabled = %v\n", c.OIDC.Enabled)
-	if c.OIDC.ProviderName != "" {
-		fmt.Fprintf(&b, "provider_name = %q\n", c.OIDC.ProviderName)
-	} else {
-		b.WriteString("# provider_name = \"My Identity Provider\"\n")
-	}
-	if c.OIDC.ClientID != "" {
-		fmt.Fprintf(&b, "client_id = %q\n", c.OIDC.ClientID)
-	} else {
-		b.WriteString("# client_id = \"\"\n")
-	}
-	if c.OIDC.ClientSecret != "" {
-		fmt.Fprintf(&b, "client_secret = %q\n", c.OIDC.ClientSecret)
-	} else {
-		b.WriteString("# client_secret = \"\"\n")
-	}
-	if c.OIDC.AuthURL != "" {
-		fmt.Fprintf(&b, "auth_url = %q\n", c.OIDC.AuthURL)
-	} else {
-		b.WriteString("# auth_url = \"\"\n")
-	}
-	if c.OIDC.TokenURL != "" {
-		fmt.Fprintf(&b, "token_url = %q\n", c.OIDC.TokenURL)
-	} else {
-		b.WriteString("# token_url = \"\"\n")
-	}
-	if c.OIDC.CertURL != "" {
-		fmt.Fprintf(&b, "cert_url = %q\n", c.OIDC.CertURL)
-	} else {
-		b.WriteString("# cert_url = \"\"\n")
-	}
-	if c.OIDC.UsePKCE {
-		b.WriteString("use_pkce = true\n")
-	} else {
-		b.WriteString("# use_pkce = false\n")
-	}
-	nameClaim := c.OIDC.NameClaim
-	if nameClaim == "" {
-		nameClaim = "name"
-	}
-	fmt.Fprintf(&b, "name_claim = %q\n", nameClaim)
-	emailClaim := c.OIDC.EmailClaim
-	if emailClaim == "" {
-		emailClaim = "email"
-	}
-	fmt.Fprintf(&b, "email_claim = %q\n", emailClaim)
-	b.WriteString("\n")
-	b.WriteString("# Optional: restrict admin access to users matching a specific claim.\n")
-	b.WriteString("# When set, only OIDC users whose claim matches get admin access.\n")
-	b.WriteString("# When empty, any authenticated OIDC user is an admin.\n")
-	if c.OIDC.AdminClaimName != "" {
-		fmt.Fprintf(&b, "admin_claim_name = %q\n", c.OIDC.AdminClaimName)
-		fmt.Fprintf(&b, "admin_claim_value = %q\n", c.OIDC.AdminClaimValue)
-	} else {
-		b.WriteString("# admin_claim_name = \"role\"\n")
-		b.WriteString("# admin_claim_value = \"admin\"\n")
-	}
-	b.WriteString("\n")
-
 	// Tunnel documentation
 	b.WriteString("# ─── Tunnels ────────────────────────────────────────────────────────\n")
 	b.WriteString("#\n")
@@ -402,19 +375,14 @@ func (c *Config) Save(path string) error {
 		b.WriteString("# secret_hash = \"$2a$10$...\"        # bcrypt hash of the token secret\n")
 		b.WriteString("# # preserve_host = false           # pass original Host header to backend\n")
 		b.WriteString("#\n")
-		b.WriteString("# # OIDC-protected tunnel (requires [oidc] to be configured):\n")
+		b.WriteString("# # Access-policy-protected tunnel (define [[ip_policy]]/[[auth_policy]] below):\n")
 		b.WriteString("# [[tunnel]]\n")
 		b.WriteString("# id = \"internal-app\"\n")
 		b.WriteString("# type = \"http\"\n")
 		b.WriteString("# hostnames = [\"internal.example.com\"]\n")
 		b.WriteString("# secret_hash = \"$2a$10$...\"\n")
-		b.WriteString("# require_auth = true               # require authentication to access\n")
-		b.WriteString("# auth_claim_name = \"department\"     # optional: restrict by OIDC claim\n")
-		b.WriteString("# auth_claim_value = \"engineering\"   # claim value that must match\n")
-		b.WriteString("# auth_header = \"x-Gatecrash-User\"   # header injected into proxied requests\n")
-		b.WriteString("# auth_header_claim = \"email\"        # claim value to put in the header\n")
-		b.WriteString("# ip_allowlist = true                # restrict access by source IP (independent of require_auth)\n")
-		b.WriteString("# allow_ips = [\"203.0.113.4\", \"10.0.0.0/8\"]  # permanently allowed IPs/CIDRs; others can self-authorize\n")
+		b.WriteString("# ip_policy = \"internal\"            # restrict by source IP (see [[ip_policy]])\n")
+		b.WriteString("# auth_policy = \"staff\"             # require authentication (see [[auth_policy]])\n")
 		b.WriteString("#\n")
 		b.WriteString("# [[tunnel]]\n")
 		b.WriteString("# id = \"example-tcp\"\n")
@@ -443,27 +411,64 @@ func (c *Config) Save(path string) error {
 			if t.TLSPassthrough {
 				b.WriteString("tls_passthrough = true\n")
 			}
-			if t.RequireAuth {
-				b.WriteString("require_auth = true\n")
-				if t.AuthClaimName != "" {
-					fmt.Fprintf(&b, "auth_claim_name = %q\n", t.AuthClaimName)
-					fmt.Fprintf(&b, "auth_claim_value = %q\n", t.AuthClaimValue)
-				}
-				if t.AuthHeader != "" {
-					fmt.Fprintf(&b, "auth_header = %q\n", t.AuthHeader)
-				}
-				if t.AuthHeaderClaim != "" {
-					fmt.Fprintf(&b, "auth_header_claim = %q\n", t.AuthHeaderClaim)
+			if t.IPPolicy != "" {
+				fmt.Fprintf(&b, "ip_policy = %q\n", t.IPPolicy)
+			}
+			if t.AuthPolicy != "" {
+				fmt.Fprintf(&b, "auth_policy = %q\n", t.AuthPolicy)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	// Access policy documentation + entries
+	b.WriteString("# ─── Access Policies ────────────────────────────────────────────────\n")
+	b.WriteString("#\n")
+	b.WriteString("# Reusable IP allowlists and auth requirements, referenced by tunnels via\n")
+	b.WriteString("# ip_policy / auth_policy. Both are independent gates (AND when both set).\n")
+	if len(c.IPPolicy) == 0 && len(c.AuthPolicy) == 0 {
+		b.WriteString("#\n")
+		b.WriteString("# [[ip_policy]]\n")
+		b.WriteString("# id = \"internal\"\n")
+		b.WriteString("# [[ip_policy.range]]\n")
+		b.WriteString("# cidr = \"10.0.0.0/8\"\n")
+		b.WriteString("# comment = \"office LAN\"\n")
+		b.WriteString("#\n")
+		b.WriteString("# [[auth_policy]]   # define users in the admin UI; reference by id here\n")
+		b.WriteString("# id = \"staff\"\n")
+		b.WriteString("# users = [\"alice\"]              # user IDs allowed to access\n")
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n\n")
+		for _, p := range c.IPPolicy {
+			b.WriteString("[[ip_policy]]\n")
+			fmt.Fprintf(&b, "id = %q\n", p.ID)
+			if p.EnrollToken != "" {
+				fmt.Fprintf(&b, "enroll_token = %q\n", p.EnrollToken)
+			}
+			for _, r := range p.Ranges {
+				b.WriteString("[[ip_policy.range]]\n")
+				fmt.Fprintf(&b, "cidr = %q\n", r.CIDR)
+				if r.Comment != "" {
+					fmt.Fprintf(&b, "comment = %q\n", r.Comment)
 				}
 			}
-			if t.IPAllowlist {
-				b.WriteString("ip_allowlist = true\n")
+			b.WriteString("\n")
+		}
+		for _, p := range c.AuthPolicy {
+			b.WriteString("[[auth_policy]]\n")
+			fmt.Fprintf(&b, "id = %q\n", p.ID)
+			if len(p.Users) > 0 {
+				fmt.Fprintf(&b, "users = [%s]\n", formatStringSlice(p.Users))
 			}
-			if len(t.AllowIPs) > 0 {
-				fmt.Fprintf(&b, "allow_ips = [%s]\n", formatStringSlice(t.AllowIPs))
+			if p.Header != "" {
+				fmt.Fprintf(&b, "header = %q\n", p.Header)
 			}
-			if t.EnrollToken != "" {
-				fmt.Fprintf(&b, "enroll_token = %q\n", t.EnrollToken)
+			if p.Username != "" {
+				fmt.Fprintf(&b, "username = %q\n", p.Username)
+			}
+			if p.PasswordHash != "" {
+				fmt.Fprintf(&b, "password_hash = %q\n", p.PasswordHash)
 			}
 			b.WriteString("\n")
 		}

@@ -47,7 +47,7 @@ func (c *blockingConn) ClientVersion() []byte { return nil }
 func (c *blockingConn) ServerVersion() []byte { return nil }
 func (c *blockingConn) User() string          { return "" }
 
-func TestOpenChannelTimeout_ClosesConnOnTimeout(t *testing.T) {
+func TestOpenChannelTimeout_DoesNotCloseSharedConn(t *testing.T) {
 	conn := newBlockingConn()
 
 	start := time.Now()
@@ -63,11 +63,14 @@ func TestOpenChannelTimeout_ClosesConnOnTimeout(t *testing.T) {
 	if elapsed > time.Second {
 		t.Fatalf("returned too late: %v", elapsed)
 	}
-	// The whole point: timing out must close the conn so the parked OpenChannel
-	// goroutine (and any others blocked on this conn) can unwind.
-	if !conn.closed.Load() {
-		t.Fatal("expected conn.Close() to be called on timeout")
+	// The conn is shared by other concurrent requests, so a single request's
+	// channel-open timeout must NOT close it. The caller evicts it from the pool
+	// and the keepalive loop is the sole authority that actually closes a dead
+	// conn (which then unblocks the parked OpenChannel goroutine).
+	if conn.closed.Load() {
+		t.Fatal("openChannelTimeout must not close the shared conn on timeout")
 	}
+	conn.Close() // release the parked OpenChannel goroutine
 }
 
 func TestPingConn_TimeoutOnHalfOpen(t *testing.T) {

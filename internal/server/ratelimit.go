@@ -16,8 +16,8 @@ type ipRateLimiter struct {
 }
 
 type rlEntry struct {
-	count    int
-	resetAt  time.Time
+	count   int
+	resetAt time.Time
 }
 
 func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {

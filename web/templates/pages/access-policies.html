@@ -1,0 +1,321 @@
+{{define "content"}}
+<div x-data="accessPolicies()" x-cloak class="max-w-4xl mx-auto px-4 py-6 space-y-8">
+
+    <!-- IP Policies -->
+    <div>
+        <div class="flex items-center justify-between mb-3">
+            <div>
+                <h1 class="text-lg font-semibold">IP Policies</h1>
+                <p class="text-xs text-gray-500">Reusable source-IP allowlists. Reference from a tunnel's IP Policy. Works on HTTP and TCP.</p>
+            </div>
+            <button @click="openNewIP()" class="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded font-medium transition-colors">Add IP Policy</button>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+            <template x-if="ipPolicies.length === 0">
+                <p class="text-sm text-gray-500 py-6 text-center">No IP policies yet.</p>
+            </template>
+            <table x-show="ipPolicies.length > 0" class="w-full text-sm">
+                <tbody>
+                    <template x-for="p in ipPolicies" :key="p.id">
+                        <tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                            <td class="px-4 py-2 font-semibold" x-text="p.id"></td>
+                            <td class="px-4 py-2 text-gray-500 text-xs" x-text="(p.ranges?.length || 0) + ' range' + ((p.ranges?.length||0)===1?'':'s')"></td>
+                            <td class="px-4 py-2 text-xs">
+                                <span x-show="p.enroll_url" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">link active</span>
+                            </td>
+                            <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
+                                <button @click="openIPDetail(p.id)" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium">IPs &amp; Link</button>
+                                <button @click="openEditIP(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium">Edit</button>
+                                <button @click="deleteIP(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Auth Policies -->
+    <div>
+        <div class="flex items-center justify-between mb-3">
+            <div>
+                <h1 class="text-lg font-semibold">Auth Policies</h1>
+                <p class="text-xs text-gray-500">Reusable authentication requirements. Methods are OR'd — meet any one. HTTP tunnels only.</p>
+            </div>
+            <button @click="openNewAuth()" class="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded font-medium transition-colors">Add Auth Policy</button>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+            <template x-if="authPolicies.length === 0">
+                <p class="text-sm text-gray-500 py-6 text-center">No auth policies yet.</p>
+            </template>
+            <table x-show="authPolicies.length > 0" class="w-full text-sm">
+                <tbody>
+                    <template x-for="p in authPolicies" :key="p.id">
+                        <tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                            <td class="px-4 py-2 font-semibold" x-text="p.id"></td>
+                            <td class="px-4 py-2">
+                                <span class="text-xs text-gray-500" x-text="(p.users?.length || 0) + ' user' + ((p.users?.length||0)===1?'':'s')"></span>
+                                <span x-show="p.has_password" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 ml-1">+ password</span>
+                            </td>
+                            <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
+                                <button @click="openEditAuth(p)" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded font-medium">Edit</button>
+                                <button @click="deleteAuth(p.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- IP Policy edit modal -->
+    <div x-show="ipModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/50" @click="ipModal = false"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[85vh]" @click.stop>
+            <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                <h3 class="text-base font-semibold" x-text="ipEdit.isNew ? 'Add IP Policy' : 'Edit IP Policy'"></h3>
+                <button @click="ipModal = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+            </div>
+            <div class="px-5 py-4 space-y-3 overflow-y-auto">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">ID</label>
+                    <input type="text" x-model="ipEdit.id" :disabled="!ipEdit.isNew" placeholder="internal"
+                           class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Ranges (IP or CIDR) &amp; comments</label>
+                    <div class="space-y-1.5">
+                        <template x-for="(rg, i) in ipEdit.ranges" :key="i">
+                            <div class="flex items-center gap-1.5">
+                                <input type="text" x-model="rg.cidr" placeholder="10.0.0.0/8"
+                                       class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
+                                <input type="text" x-model="rg.comment" placeholder="comment (optional)"
+                                       class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm">
+                                <button @click="ipEdit.ranges.splice(i, 1)" class="text-gray-400 hover:text-red-600 px-1">&times;</button>
+                            </div>
+                        </template>
+                    </div>
+                    <button @click="ipEdit.ranges.push({cidr:'', comment:''})" class="mt-2 text-xs text-blue-600 hover:text-blue-700">+ Add range</button>
+                </div>
+            </div>
+            <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
+                <button @click="ipModal = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
+                <button @click="saveIP()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- IP Policy detail (grants + enroll link) modal -->
+    <div x-show="ipDetail.open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/50" @click="ipDetail.open = false"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[85vh]" @click.stop>
+            <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-2"><h3 class="text-base font-semibold">IPs &amp; Link</h3><span class="font-mono text-xs text-gray-400" x-text="ipDetail.id"></span></div>
+                <button @click="ipDetail.open = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+            </div>
+            <div class="px-5 py-4 space-y-4 overflow-y-auto">
+                <div>
+                    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Self-service grants</h4>
+                    <template x-if="ipDetail.grants.length === 0"><p class="text-sm text-gray-400">No active grants.</p></template>
+                    <table x-show="ipDetail.grants.length > 0" class="w-full text-sm">
+                        <thead><tr class="text-left text-xs text-gray-400 border-b border-gray-200"><th class="py-1.5 font-medium">IP</th><th class="py-1.5 font-medium">By</th><th class="py-1.5 font-medium">Expires</th><th></th></tr></thead>
+                        <tbody>
+                            <template x-for="g in ipDetail.grants" :key="g.ip">
+                                <tr class="border-b border-gray-100">
+                                    <td class="py-1.5"><code class="text-xs" x-text="g.ip"></code></td>
+                                    <td class="py-1.5 text-gray-600 text-xs" x-text="g.granted_by || '—'"></td>
+                                    <td class="py-1.5 text-gray-600 text-xs" x-text="expiresLabel(g.expires_at)"></td>
+                                    <td class="py-1.5 text-right"><button @click="revokeGrant(g.ip)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Revoke</button></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="border-t border-gray-200 pt-3">
+                    <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Enrollment link</h4>
+                    <p class="text-xs text-gray-400 mb-2">Anyone with this link can authorize their IP for 7 days <strong>without signing in</strong>. Treat it like a password; rotate to invalidate.</p>
+                    <template x-if="!ipDetail.enrollUrl">
+                        <button @click="rotateEnroll()" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded font-medium">Create enrollment link</button>
+                    </template>
+                    <template x-if="ipDetail.enrollUrl">
+                        <div class="space-y-2">
+                            <div class="flex items-center gap-1.5">
+                                <input type="text" readonly :value="ipDetail.enrollUrl" @focus="$event.target.select()" class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-xs font-mono bg-gray-50">
+                                <button @click="copyEnroll()" class="text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 px-2 py-1.5 rounded font-medium">Copy</button>
+                            </div>
+                            <div class="flex gap-1.5">
+                                <button @click="rotateEnroll()" class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium">Rotate</button>
+                                <button @click="removeEnroll()" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Remove</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="px-5 py-3 border-t border-gray-200 flex justify-end shrink-0">
+                <button @click="ipDetail.open = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Policy edit modal -->
+    <div x-show="authModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/50" @click="authModal = false"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[85vh]" @click.stop>
+            <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                <h3 class="text-base font-semibold" x-text="authEdit.isNew ? 'Add Auth Policy' : 'Edit Auth Policy'"></h3>
+                <button @click="authModal = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+            </div>
+            <div class="px-5 py-4 space-y-3 overflow-y-auto">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">ID</label>
+                    <input type="text" x-model="authEdit.id" :disabled="!authEdit.isNew" placeholder="staff"
+                           class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Allowed users</label>
+                    <p class="text-xs text-gray-400 mb-1">Signed-in users who may access tunnels using this policy.</p>
+                    <template x-if="allUsers.length === 0"><p class="text-sm text-gray-400">No users yet. Add users under <a href="/users" class="text-blue-600 hover:underline">Users</a>.</p></template>
+                    <div class="space-y-1 max-h-40 overflow-y-auto">
+                        <template x-for="u in allUsers" :key="u.id">
+                            <label class="flex items-center gap-2 text-sm">
+                                <input type="checkbox" :checked="authEdit.users.includes(u.id)" @change="toggleUser(u.id)" class="rounded">
+                                <span x-text="u.id"></span>
+                                <span x-show="u.role==='admin'" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">admin</span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Identity header <span class="font-normal text-gray-400">(optional)</span></label>
+                    <input type="text" x-model="authEdit.header" placeholder="x-Gatecrash-User" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                    <p class="text-xs text-gray-400 mt-1">The user's ID is injected here (plus X-Gatecrash-Role).</p>
+                </div>
+                <div class="border-t border-gray-200 pt-3">
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Static password <span class="font-normal text-gray-400">(optional — for machines/CI)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="text" x-model="authEdit.username" placeholder="username (any)" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                        <input type="password" x-model="authEdit.password" :placeholder="authEdit.has_password ? '•••••• (unchanged)' : 'set a password'" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">HTTP Basic. Leave blank to keep the existing password.</p>
+                </div>
+            </div>
+            <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
+                <button @click="authModal = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
+                <button @click="saveAuth()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toasts -->
+    <div class="fixed bottom-4 right-4 space-y-2 z-[60]">
+        <template x-for="t in toasts" :key="t.id">
+            <div class="bg-gray-800 text-white text-sm px-4 py-2 rounded shadow-lg" x-text="t.msg"></div>
+        </template>
+    </div>
+</div>
+
+<script>
+function accessPolicies() {
+    const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const headers = () => ({ 'X-CSRF-Token': csrf(), 'Content-Type': 'application/json' });
+    return {
+        ipPolicies: [], authPolicies: [], allUsers: [],
+        ipModal: false, ipEdit: { id: '', ranges: [], isNew: true },
+        authModal: false, authEdit: { id: '', users: [], header: '', username: '', password: '', has_password: false, isNew: true },
+        ipDetail: { open: false, id: '', grants: [], enrollUrl: '' },
+        toasts: [], _tid: 0,
+
+        init() { this.load(); },
+        toast(msg) { const id = ++this._tid; this.toasts.push({ id, msg }); setTimeout(() => this.toasts = this.toasts.filter(t => t.id !== id), 2500); },
+        auth(resp) { if (resp.status === 401) { window.location.href = '/login'; return true; } return false; },
+
+        async load() {
+            const [ipR, authR, usersR] = await Promise.all([fetch('/api/ip-policies'), fetch('/api/auth-policies'), fetch('/api/users')]);
+            if (this.auth(ipR) || this.auth(authR)) return;
+            if (usersR.ok) this.allUsers = (await usersR.json()) || [];
+            this.ipPolicies = (await ipR.json()) || [];
+            this.authPolicies = (await authR.json()) || [];
+        },
+
+        // IP policies
+        openNewIP() { this.ipEdit = { id: '', ranges: [{ cidr: '', comment: '' }], isNew: true }; this.ipModal = true; },
+        openEditIP(p) { this.ipEdit = { id: p.id, ranges: JSON.parse(JSON.stringify(p.ranges || [])), isNew: false }; if (this.ipEdit.ranges.length === 0) this.ipEdit.ranges.push({ cidr: '', comment: '' }); this.ipModal = true; },
+        async saveIP() {
+            const ranges = this.ipEdit.ranges.filter(r => (r.cidr || '').trim()).map(r => ({ cidr: r.cidr.trim(), comment: (r.comment || '').trim() }));
+            const resp = await fetch('/api/ip-policies', { method: 'POST', headers: headers(), body: JSON.stringify({ id: this.ipEdit.id.trim(), ranges }) });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Error: ' + await resp.text()); return; }
+            this.ipModal = false; this.load();
+        },
+        async deleteIP(id) {
+            if (!confirm('Delete IP policy "' + id + '"?')) return;
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(id), { method: 'DELETE', headers: headers() });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed: ' + await resp.text()); return; }
+            this.load();
+        },
+
+        // IP detail (grants + enroll)
+        async openIPDetail(id) {
+            this.ipDetail = { open: true, id, grants: [], enrollUrl: '' };
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(id) + '/ips');
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed to load'); return; }
+            const data = await resp.json();
+            this.ipDetail.grants = data.grants || [];
+            this.ipDetail.enrollUrl = data.enroll_url || '';
+        },
+        async revokeGrant(ip) {
+            if (!confirm('Revoke ' + ip + '?')) return;
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(this.ipDetail.id) + '/ips/' + encodeURIComponent(ip), { method: 'DELETE', headers: headers() });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed'); return; }
+            this.openIPDetail(this.ipDetail.id);
+        },
+        async rotateEnroll() {
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(this.ipDetail.id) + '/enroll-token', { method: 'POST', headers: headers() });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed: ' + await resp.text()); return; }
+            this.ipDetail.enrollUrl = (await resp.json()).url || '';
+            this.toast('Enrollment link updated'); this.load();
+        },
+        async removeEnroll() {
+            if (!confirm('Remove the enrollment link?')) return;
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(this.ipDetail.id) + '/enroll-token', { method: 'DELETE', headers: headers() });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed'); return; }
+            this.ipDetail.enrollUrl = ''; this.load();
+        },
+        copyEnroll() { navigator.clipboard?.writeText(this.ipDetail.enrollUrl).then(() => this.toast('Copied')).catch(() => this.toast('Copy failed')); },
+
+        // Auth policies
+        toggleUser(id) { const i = this.authEdit.users.indexOf(id); if (i >= 0) this.authEdit.users.splice(i, 1); else this.authEdit.users.push(id); },
+        openNewAuth() { this.authEdit = { id: '', users: [], header: '', username: '', password: '', has_password: false, isNew: true }; this.authModal = true; },
+        openEditAuth(p) { this.authEdit = { id: p.id, users: [...(p.users || [])], header: p.header || '', username: p.username || '', password: '', has_password: !!p.has_password, isNew: false }; this.authModal = true; },
+        async saveAuth() {
+            if (this.authEdit.users.length === 0 && !this.authEdit.password && !this.authEdit.has_password) { this.toast('Select at least one user or set a password'); return; }
+            const body = { id: this.authEdit.id.trim(), users: this.authEdit.users, header: this.authEdit.header, username: this.authEdit.username, password: this.authEdit.password };
+            const resp = await fetch('/api/auth-policies', { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Error: ' + await resp.text()); return; }
+            this.authModal = false; this.load();
+        },
+        async deleteAuth(id) {
+            if (!confirm('Delete auth policy "' + id + '"?')) return;
+            const resp = await fetch('/api/auth-policies/' + encodeURIComponent(id), { method: 'DELETE', headers: headers() });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed: ' + await resp.text()); return; }
+            this.load();
+        },
+
+        expiresLabel(iso) {
+            const ms = new Date(iso).getTime() - Date.now();
+            if (isNaN(ms) || ms <= 0) return 'expired';
+            const d = Math.floor(ms / 86400000); if (d >= 1) return 'in ' + d + 'd';
+            const h = Math.floor(ms / 3600000); if (h >= 1) return 'in ' + h + 'h';
+            return 'in ' + Math.max(1, Math.floor(ms / 60000)) + 'm';
+        },
+    };
+}
+</script>
+{{end}}

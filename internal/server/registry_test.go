@@ -311,3 +311,52 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 		t.Fatal("original tunnel should still exist")
 	}
 }
+
+// TestRegistry_ReloadVsConfigReads exercises a config reload (which mutates a
+// live tunnel's config fields via applySpec) concurrently with the accessors
+// that request handlers use. Run under -race, it guards against reintroducing
+// the unsynchronized field reads that could momentarily skip an access policy.
+func TestRegistry_ReloadVsConfigReads(t *testing.T) {
+	r := NewRegistry()
+	r.Reload([]TunnelSpec{{ID: "t", Type: "http", Hostnames: []string{"a.example.com"}, IPPolicyID: "ip1", AuthPolicyID: "auth1"}})
+	tun := r.FindByID("t")
+
+	var wg sync.WaitGroup
+	deadline := time.Now().Add(100 * time.Millisecond)
+
+	// Writer: repeatedly reload, flipping the policy IDs and hostnames.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		toggle := false
+		for time.Now().Before(deadline) {
+			toggle = !toggle
+			spec := TunnelSpec{ID: "t", Type: "http", Hostnames: []string{"a.example.com"}, IPPolicyID: "ip1", AuthPolicyID: "auth1"}
+			if toggle {
+				spec.IPPolicyID, spec.AuthPolicyID = "ip2", "auth2"
+				spec.TLSPassthrough = true
+				spec.Hostnames = []string{"b.example.com", "c.example.com"}
+			}
+			r.Reload([]TunnelSpec{spec})
+		}
+	}()
+
+	// Readers: the exact accessors the request handlers call.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) {
+				_ = tun.IPPolicy()
+				_ = tun.AuthPolicy()
+				_ = tun.TunnelType()
+				_ = tun.Port()
+				_ = tun.PreservesHost()
+				_ = tun.IsTLSPassthrough()
+				_ = tun.HostnameList()
+			}
+		}()
+	}
+
+	wg.Wait()
+}

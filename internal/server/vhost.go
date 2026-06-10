@@ -9,8 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/jclement/gatecrash/internal/admin"
 )
 
 // ServeHTTP routes requests based on Host header.
@@ -46,13 +44,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2.5 Handle auth completion on tunnel hostnames (redirected from admin host)
-	if strings.HasPrefix(r.URL.Path, "/.gatecrash/oidc/complete") {
-		s.handleTunnelOIDCComplete(w, r, host)
-		return
-	}
+	// 2.5 Handle login completion on tunnel hostnames (handed off from admin host)
 	if strings.HasPrefix(r.URL.Path, "/.gatecrash/auth/complete") {
-		s.handleTunnelPasskeyComplete(w, r, host)
+		s.handleTunnelLoginComplete(w, r, host)
 		return
 	}
 
@@ -76,60 +70,92 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3.5 IP allowlist gate (independent of require_auth). Clients whose source
-	// IP is permanently allowed or holds a live self-service grant pass through;
-	// everyone else is shown a page to authorize their current IP.
-	if tunnel.IPAllowlist {
+	// Strip any inbound trusted-identity headers to prevent spoofing, on every
+	// path — including tunnels with no auth policy, which never reach
+	// enforceAuthPolicy. The entire X-Gatecrash-* namespace is server-owned;
+	// the auth policy re-injects identity only after a successful login. A
+	// policy with a custom (non-namespaced) header name strips that too, below.
+	stripTrustedHeaders(r.Header)
+
+	// IP policy gate. Clients in a permanent range or holding a live self-service
+	// grant pass; everyone else is shown a page to authorize their current IP.
+	if pol := s.registry.FindIPPolicy(tunnel.IPPolicy()); pol != nil {
 		ip := clientIP(r)
-		if !tunnel.StaticIPAllowed(ip) && !s.ipAllow.IsGranted(tunnel.ID, ip) {
-			slog.Debug("ip allowlist blocked", "tunnel", tunnel.ID, "ip", ip, "host", host)
+		if !pol.Allows(ip) && !s.ipAllow.IsGranted(pol.ID, ip) {
+			slog.Debug("ip policy blocked", "tunnel", tunnel.ID, "policy", pol.ID, "ip", ip, "host", host)
 			s.serveIPAuthorizePage(w, r, tunnel, host, adminHost, httpsPort)
 			return
 		}
 	}
 
-	// Strip the trusted identity header to prevent spoofing from external clients
-	r.Header.Del("x-Gatecrash-User")
-
-	// 4. Check tunnel auth requirement
-	if tunnel.RequireAuth {
-		if s.oidcProvider != nil && s.tunnelAuth != nil {
-			// OIDC mode: require OIDC authentication
-			claims, ok := s.tunnelAuth.ValidateSession(r, host)
-			if !ok {
-				s.initiateTunnelAuth(w, r, host)
-				return
-			}
-
-			// Evaluate optional claim filter
-			if !admin.MatchesClaim(claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
-				s.serveErrorPage(w, r, http.StatusForbidden,
-					"Access Denied",
-					fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)),
-				)
-				return
-			}
-
-			// Inject user identity header
-			headerName := tunnel.AuthHeader
-			if headerName == "" {
-				headerName = "x-Gatecrash-User"
-			}
-			headerValue := claims.GetClaimValue(tunnel.AuthHeaderClaim)
-			if headerValue == "" {
-				headerValue = claims.Email
-			}
-			r.Header.Set(headerName, headerValue)
-		} else {
-			// Passkey mode: require passkey tunnel session on this hostname
-			if !s.passkeyTunnelAuth.ValidateSession(r, host) {
-				s.initiateTunnelPasskeyAuth(w, r, host)
-				return
-			}
+	// Auth policy gate (any enabled method satisfies it).
+	if pol := s.registry.FindAuthPolicy(tunnel.AuthPolicy()); pol != nil {
+		if !s.enforceAuthPolicy(w, r, host, pol) {
+			return // enforceAuthPolicy already wrote a response (challenge/deny)
 		}
 	}
 
 	s.proxyHTTP(w, r, tunnel)
+}
+
+// stripTrustedHeaders removes every server-owned identity header from an inbound
+// request so a client can never spoof them. The whole X-Gatecrash-* namespace is
+// reserved for the server; auth policies re-inject identity only after a verified
+// login (or static-password) success.
+func stripTrustedHeaders(h http.Header) {
+	for name := range h {
+		if len(name) >= len(trustedHeaderPrefix) &&
+			strings.EqualFold(name[:len(trustedHeaderPrefix)], trustedHeaderPrefix) {
+			h.Del(name)
+		}
+	}
+}
+
+const trustedHeaderPrefix = "X-Gatecrash-"
+
+// enforceAuthPolicy authenticates a request against an auth policy: a logged-in
+// user in the allowed set, OR the static password. Returns true to proceed;
+// false means it already wrote a response (a login redirect, a 401, or a 403).
+// On success it injects the identity headers.
+func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host string, pol *AuthPolicyState) bool {
+	r.Header.Del(pol.headerName())
+	r.Header.Del("X-Gatecrash-Role")
+
+	// 1. Static password (HTTP Basic), if provided.
+	if pol.usesPassword() {
+		if user, ok := s.checkBasic(r, pol); ok {
+			r.Header.Set(pol.headerName(), user)
+			r.Header.Set("X-Gatecrash-Role", "basic")
+			return true
+		}
+	}
+
+	// 2. Logged-in user (tunnel session established via the admin handoff). The
+	// user must still exist and still be in the policy's allowed set.
+	if pol.requiresLogin() {
+		if userID, role, ok := s.tunnelSession.ValidateSession(r, host); ok && s.users.Get(userID) != nil {
+			if !pol.allowsUser(userID) {
+				s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
+					fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)))
+				return false
+			}
+			r.Header.Set(pol.headerName(), userID)
+			r.Header.Set("X-Gatecrash-Role", role)
+			return true
+		}
+		// Not logged in — start the cross-host login handoff.
+		s.initiateTunnelLogin(w, r, host)
+		return false
+	}
+
+	// 3. Password-only policy with no/invalid credentials → Basic challenge.
+	if pol.usesPassword() {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, host))
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return false
+	}
+	s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied", "No authentication method available.")
+	return false
 }
 
 func (s *Server) serveErrorPage(w http.ResponseWriter, _ *http.Request, status int, title, message string) {
@@ -255,112 +281,37 @@ func stripPort(host string) string {
 	return h
 }
 
-// initiateTunnelAuth redirects the user to the OIDC provider for tunnel authentication.
-// The OIDC callback always goes through the admin host, avoiding the need to register
-// per-tunnel redirect URIs with the OIDC provider.
-func (s *Server) initiateTunnelAuth(w http.ResponseWriter, r *http.Request, hostname string) {
-	returnURL := r.URL.RequestURI()
-	authURL, _, err := s.oidcProvider.AuthURL("tunnel", returnURL, hostname)
-	if err != nil {
-		slog.Error("failed to generate tunnel OIDC auth URL", "error", err, "hostname", hostname)
-		s.serveErrorPage(w, r, http.StatusInternalServerError,
-			"Authentication Error",
-			"Failed to initiate authentication.")
-		return
-	}
-
-	http.Redirect(w, r, authURL, http.StatusFound)
-}
-
-// handleTunnelOIDCComplete handles the final step of tunnel OIDC auth.
-// The browser is redirected here from the admin host after a successful OIDC exchange,
-// carrying a one-time token that maps to the stored auth result.
-func (s *Server) handleTunnelOIDCComplete(w http.ResponseWriter, r *http.Request, hostname string) {
-	if s.tunnelAuth == nil {
-		http.Error(w, "tunnel auth is not configured", http.StatusBadRequest)
-		return
-	}
-
-	oneTimeToken := r.URL.Query().Get("token")
-	if oneTimeToken == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
-		return
-	}
-
-	// Look up and consume the pending auth result
-	s.pendingTunnelAuthMu.Lock()
-	result, ok := s.pendingTunnelAuth[oneTimeToken]
-	if ok {
-		delete(s.pendingTunnelAuth, oneTimeToken)
-	}
-	s.pendingTunnelAuthMu.Unlock()
-
-	if !ok || time.Now().After(result.expires) {
-		s.serveErrorPage(w, r, http.StatusForbidden,
-			"Authentication Failed",
-			"Authentication token is invalid or expired. Please try again.")
-		return
-	}
-
-	// Verify the hostname matches what was in the OIDC flow
-	if result.hostname != hostname {
-		http.Error(w, "hostname mismatch", http.StatusBadRequest)
-		return
-	}
-
-	// Evaluate optional claim filter
-	tunnel := s.registry.FindByHostname(hostname)
-	if tunnel != nil && !admin.MatchesClaim(result.claims.Raw, tunnel.AuthClaimName, tunnel.AuthClaimValue) {
-		s.serveErrorPage(w, r, http.StatusForbidden,
-			"Access Denied",
-			fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(hostname)))
-		return
-	}
-
-	// Create tunnel auth session cookie on this hostname
-	if err := s.tunnelAuth.CreateSession(w, result.claims, hostname); err != nil {
-		slog.Error("failed to create tunnel auth session", "error", err)
-		http.Error(w, "session creation failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Redirect to the original URL (validated to prevent open redirect)
-	returnURL := "/"
-	if result.returnURL != "" && isSafeReturnURL(result.returnURL) {
-		returnURL = result.returnURL
-	}
-	http.Redirect(w, r, returnURL, http.StatusFound)
-}
-
-// initiateTunnelPasskeyAuth redirects the user to the admin host to verify their passkey session.
-func (s *Server) initiateTunnelPasskeyAuth(w http.ResponseWriter, r *http.Request, hostname string) {
+// initiateTunnelLogin redirects an unauthenticated visitor of a protected tunnel
+// to the admin host, which (once they're signed in) hands a one-time token back
+// to this hostname to establish a tunnel session.
+func (s *Server) initiateTunnelLogin(w http.ResponseWriter, r *http.Request, hostname string) {
 	s.cfgMu.RLock()
 	adminHost := s.cfg.Server.AdminHost
 	httpsPort := s.cfg.Server.HTTPSPort
 	s.cfgMu.RUnlock()
 
-	returnURL := r.URL.RequestURI()
-	verifyURL := fmt.Sprintf("https://%s/tunnel-auth/verify?hostname=%s&return=%s",
-		adminHost, url.QueryEscape(hostname), url.QueryEscape(returnURL))
-	if httpsPort != 443 {
-		verifyURL = fmt.Sprintf("https://%s:%d/tunnel-auth/verify?hostname=%s&return=%s",
-			adminHost, httpsPort, url.QueryEscape(hostname), url.QueryEscape(returnURL))
+	if adminHost == "" {
+		s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
+			"This service requires authentication, but no admin host is configured.")
+		return
 	}
-
-	http.Redirect(w, r, verifyURL, http.StatusFound)
+	returnURL := fmt.Sprintf("https://%s%s", hostname, r.URL.RequestURI())
+	base := "https://" + adminHost
+	if httpsPort != 443 {
+		base = fmt.Sprintf("https://%s:%d", adminHost, httpsPort)
+	}
+	http.Redirect(w, r, fmt.Sprintf("%s/tunnel-login?hostname=%s&return=%s",
+		base, url.QueryEscape(hostname), url.QueryEscape(returnURL)), http.StatusFound)
 }
 
-// handleTunnelPasskeyComplete handles the final step of passkey-based tunnel auth.
-// The browser is redirected here from the admin host after verifying the admin session,
-// carrying a one-time token that maps to the stored auth result.
-func (s *Server) handleTunnelPasskeyComplete(w http.ResponseWriter, r *http.Request, hostname string) {
+// handleTunnelLoginComplete consumes the one-time handoff token and sets the
+// tunnel session cookie for the authenticated user on this hostname.
+func (s *Server) handleTunnelLoginComplete(w http.ResponseWriter, r *http.Request, hostname string) {
 	oneTimeToken := r.URL.Query().Get("token")
 	if oneTimeToken == "" {
 		http.Error(w, "missing token", http.StatusBadRequest)
 		return
 	}
-
-	// Look up and consume the pending auth result
 	s.pendingTunnelAuthMu.Lock()
 	result, ok := s.pendingTunnelAuth[oneTimeToken]
 	if ok {
@@ -369,36 +320,26 @@ func (s *Server) handleTunnelPasskeyComplete(w http.ResponseWriter, r *http.Requ
 	s.pendingTunnelAuthMu.Unlock()
 
 	if !ok || time.Now().After(result.expires) {
-		s.serveErrorPage(w, r, http.StatusForbidden,
-			"Authentication Failed",
-			"Authentication token is invalid or expired. Please try again.")
+		s.serveErrorPage(w, r, http.StatusForbidden, "Authentication Failed",
+			"Login token is invalid or expired. Please try again.")
 		return
 	}
-
-	if !result.passkey {
-		http.Error(w, "invalid token type", http.StatusBadRequest)
-		return
-	}
-
-	// Verify the hostname matches
 	if result.hostname != hostname {
 		http.Error(w, "hostname mismatch", http.StatusBadRequest)
 		return
 	}
-
-	// Create passkey tunnel session cookie on this hostname
-	if err := s.passkeyTunnelAuth.CreateSession(w, hostname); err != nil {
-		slog.Error("failed to create passkey tunnel session", "error", err)
+	if err := s.tunnelSession.CreateSession(w, hostname, result.userID, result.role); err != nil {
+		slog.Error("failed to create tunnel session", "error", err)
 		http.Error(w, "session creation failed", http.StatusInternalServerError)
 		return
 	}
-
-	// Redirect to the original URL
-	returnURL := "/"
-	if result.returnURL != "" && isSafeReturnURL(result.returnURL) {
-		returnURL = result.returnURL
+	dest := "/"
+	if result.returnURL != "" {
+		if u, err := url.Parse(result.returnURL); err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), hostname) {
+			dest = result.returnURL
+		}
 	}
-	http.Redirect(w, r, returnURL, http.StatusFound)
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 // serveAdmin applies security headers and delegates to the admin mux.
