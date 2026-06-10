@@ -5,11 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,7 +24,8 @@ const (
 // inviteTTL is how long an invite link is valid for registering a passkey.
 const inviteTTL = 7 * 24 * time.Hour
 
-var userIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+// maxNameLen bounds a user's display label.
+const maxNameLen = 64
 
 // StoredCredential is a single WebAuthn passkey credential on disk.
 type StoredCredential struct {
@@ -40,11 +42,13 @@ type StoredCredential struct {
 	BackupState    bool      `json:"backup_state"`
 }
 
-// User is a member of the gatecrash directory. The ID is admin-set, unique, and
-// immutable; it is also the value injected into HTTP tunnels as the identity
-// header. Users authenticate with one or more passkeys.
+// User is a member of the gatecrash directory. The ID is an opaque, immutable
+// GUID — it is what passkeys, sessions, and access policies bind to, so it can
+// never change. Name is a free, renameable display label. Users authenticate
+// with one or more passkeys.
 type User struct {
 	ID            string             `json:"id"`
+	Name          string             `json:"name"`
 	Role          string             `json:"role"`
 	Credentials   []StoredCredential `json:"credentials"`
 	InviteToken   string             `json:"invite_token,omitempty"`
@@ -154,35 +158,148 @@ func (s *UserStore) adminCountLocked() int {
 	return n
 }
 
-// Create adds a new user with the given ID and role and issues an invite token.
-// Returns the plaintext invite token to show once.
-func (s *UserStore) Create(id, role string) (inviteToken string, err error) {
-	if !userIDPattern.MatchString(id) {
-		return "", fmt.Errorf("invalid id: lowercase alphanumeric/hyphen, up to 63 chars")
+// Create adds a new user with the given display name and role, assigning an
+// opaque GUID id, and issues an invite token. Returns the new id and the
+// plaintext invite token (shown once).
+func (s *UserStore) Create(name, role string) (id, inviteToken string, err error) {
+	name, err = cleanName(name)
+	if err != nil {
+		return "", "", err
 	}
 	if role != RoleAdmin && role != RoleUser {
-		return "", fmt.Errorf("invalid role %q", role)
+		return "", "", fmt.Errorf("invalid role %q", role)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.getLocked(id) != nil {
-		return "", fmt.Errorf("user %q already exists", id)
+	if s.nameTakenLocked(name, "") {
+		return "", "", fmt.Errorf("a user named %q already exists", name)
+	}
+	id, err = s.newUserIDLocked()
+	if err != nil {
+		return "", "", err
 	}
 	tok, err := randomToken()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	s.users = append(s.users, &User{
 		ID:            id,
+		Name:          name,
 		Role:          role,
 		InviteToken:   tok,
 		InviteExpires: time.Now().Add(inviteTTL),
 		CreatedAt:     time.Now(),
 	})
 	if err := s.save(); err != nil {
+		return "", "", err
+	}
+	return id, tok, nil
+}
+
+// Rename changes a user's display label. The id is immutable.
+func (s *UserStore) Rename(id, name string) error {
+	name, err := cleanName(name)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.getLocked(id)
+	if u == nil {
+		return fmt.Errorf("user not found")
+	}
+	if s.nameTakenLocked(name, id) {
+		return fmt.Errorf("a user named %q already exists", name)
+	}
+	u.Name = name
+	return s.save()
+}
+
+// BootstrapInvite ensures there is a first admin awaiting passkey registration
+// and returns its active invite token. It returns "" when an admin already has a
+// passkey (already initialized — no bootstrap needed). Idempotent: it reuses an
+// existing pending bootstrap admin and a still-valid invite, only minting a new
+// token when none is active. This replaces an open first-login page: the only
+// way to claim the first admin is the link printed to the logs / config file.
+func (s *UserStore) BootstrapInvite() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.users {
+		if u.IsAdmin() && u.HasPasskeys() {
+			return "", nil // already initialized
+		}
+	}
+	now := time.Now()
+	var admin *User
+	for _, u := range s.users {
+		if u.IsAdmin() && !u.HasPasskeys() {
+			admin = u
+			break
+		}
+	}
+	if admin == nil {
+		id, err := s.newUserIDLocked()
+		if err != nil {
+			return "", err
+		}
+		admin = &User{ID: id, Name: "admin", Role: RoleAdmin, CreatedAt: now}
+		s.users = append(s.users, admin)
+	}
+	if !admin.InviteActive(now) {
+		tok, err := randomToken()
+		if err != nil {
+			return "", err
+		}
+		admin.InviteToken = tok
+		admin.InviteExpires = now.Add(inviteTTL)
+	}
+	if err := s.save(); err != nil {
 		return "", err
 	}
-	return tok, nil
+	return admin.InviteToken, nil
+}
+
+// cleanName trims and validates a display label.
+func cleanName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if len([]rune(name)) > maxNameLen {
+		return "", fmt.Errorf("name too long (max %d characters)", maxNameLen)
+	}
+	for _, c := range name {
+		if c < 0x20 || c == 0x7f {
+			return "", fmt.Errorf("name contains invalid characters")
+		}
+	}
+	return name, nil
+}
+
+// nameTakenLocked reports whether another user (id != exceptID) has this name
+// (case-insensitive). Caller holds s.mu.
+func (s *UserStore) nameTakenLocked(name, exceptID string) bool {
+	for _, u := range s.users {
+		if u.ID != exceptID && strings.EqualFold(u.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// newUserIDLocked mints a short, opaque, unique user id. Caller holds s.mu.
+func (s *UserStore) newUserIDLocked() (string, error) {
+	for i := 0; i < 5; i++ {
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		id := "u_" + hex.EncodeToString(b)
+		if s.getLocked(id) == nil {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("could not allocate a unique user id")
 }
 
 // Delete removes a user. The last admin cannot be removed.

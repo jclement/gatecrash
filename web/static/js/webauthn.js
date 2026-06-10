@@ -29,8 +29,9 @@ function _safeReturn() {
 }
 
 // doRegister runs a passkey registration ceremony against begin/finish URLs.
-// On success it navigates to data.redirect (if any) or reloads.
-async function doRegister(beginURL, finishURL, btnID) {
+// An optional name labels the new passkey. On success it navigates to
+// data.redirect (if any) or reloads.
+async function doRegister(beginURL, finishURL, btnID, name) {
     const btn = btnID ? document.getElementById(btnID) : null;
     if (btn) btn.disabled = true;
     _status('Starting…');
@@ -52,7 +53,9 @@ async function doRegister(beginURL, finishURL, btnID) {
                 clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
             },
         });
-        const finResp = await fetch(finishURL + '?challenge_id=' + encodeURIComponent(challengeID), {
+        let finURL = finishURL + '?challenge_id=' + encodeURIComponent(challengeID);
+        if (name) finURL += '&name=' + encodeURIComponent(name);
+        const finResp = await fetch(finURL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
         });
         if (!finResp.ok) throw new Error(await finResp.text() || 'registration failed');

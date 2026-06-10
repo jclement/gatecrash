@@ -3,18 +3,22 @@
     <div class="text-center">
         <img src="/static/logo.png" alt="Gatecrash" class="w-96 h-96 mx-auto mb-6">
         <h1 class="text-2xl font-bold mb-1">Gatecrash</h1>
+        {{if and .Data .Data.NeedsSetup}}
+        <p class="text-sm text-gray-500 mb-4">This server isn't initialized yet.</p>
+        <div class="max-w-sm mx-auto text-left text-sm text-gray-600 bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <p class="mb-2">To create the first admin, open the one-time setup link printed in the server logs at startup.</p>
+            <p class="text-xs text-gray-500">It's also written to <code class="text-xs">bootstrap-invite.txt</code> in the configuration directory, and removed automatically once used.</p>
+        </div>
+        {{else}}
         <p class="text-sm text-gray-500 mb-6">Sign in with your passkey.</p>
-
         <button id="login-btn" onclick="doLogin('login-btn')"
                 class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded transition-colors">
             Sign in with a passkey
         </button>
         <p id="status" class="text-xs mt-3 text-gray-500"></p>
+        {{end}}
     </div>
 </div>
 
 <script src="/static/js/webauthn.js"></script>
-<script>
-    window.addEventListener('load', () => setTimeout(() => doLogin('login-btn'), 400));
-</script>
 {{end}}

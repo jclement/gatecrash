@@ -2,17 +2,22 @@
 <div x-data="accessPolicies()" x-cloak class="max-w-4xl mx-auto px-4 py-6 space-y-8">
 
     <!-- IP Policies -->
-    <div>
-        <div class="flex items-center justify-between mb-3">
-            <div>
-                <h1 class="text-lg font-semibold">IP Policies</h1>
-                <p class="text-xs text-gray-500">Reusable source-IP allowlists. Reference from a tunnel's IP Policy. Works on HTTP and TCP.</p>
+    <section class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden border-l-4 border-l-indigo-500">
+        <div class="flex items-center justify-between gap-3 px-4 py-3 bg-indigo-50/70 border-b border-gray-200">
+            <div class="flex items-start gap-2.5">
+                <div class="mt-0.5 w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zm0 0c2.5 0 4.5-4.03 4.5-9s-2-9-4.5-9-4.5 4.03-4.5 9 2 9 4.5 9zM3.5 9h17M3.5 15h17"/></svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-semibold text-gray-900">IP Policies</h2>
+                    <p class="text-xs text-gray-500">Reusable source-IP allowlists. Reference from a tunnel's IP Policy. Works on HTTP and TCP.</p>
+                </div>
             </div>
-            <button @click="openNewIP()" class="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded font-medium transition-colors">Add IP Policy</button>
+            <button @click="openNewIP()" class="shrink-0 text-sm bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded font-medium transition-colors">Add IP Policy</button>
         </div>
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div>
             <template x-if="ipPolicies.length === 0">
-                <p class="text-sm text-gray-500 py-6 text-center">No IP policies yet.</p>
+                <p class="text-sm text-gray-400 py-6 text-center">No IP policies yet.</p>
             </template>
             <table x-show="ipPolicies.length > 0" class="w-full text-sm">
                 <tbody>
@@ -33,20 +38,25 @@
                 </tbody>
             </table>
         </div>
-    </div>
+    </section>
 
     <!-- Auth Policies -->
-    <div>
-        <div class="flex items-center justify-between mb-3">
-            <div>
-                <h1 class="text-lg font-semibold">Auth Policies</h1>
-                <p class="text-xs text-gray-500">Reusable authentication requirements. Methods are OR'd — meet any one. HTTP tunnels only.</p>
+    <section class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden border-l-4 border-l-emerald-500">
+        <div class="flex items-center justify-between gap-3 px-4 py-3 bg-emerald-50/70 border-b border-gray-200">
+            <div class="flex items-start gap-2.5">
+                <div class="mt-0.5 w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91c-.56-.1-1.16.02-1.56.43l-2.1 2.16H9v1.5H7.5v1.5H6v1.5H3.75a.75.75 0 01-.75-.75v-2.69c0-.2.08-.39.22-.53l5.66-5.66c.41-.4.53-1 .43-1.56A6 6 0 1121.75 8.25z"/></svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-semibold text-gray-900">Auth Policies</h2>
+                    <p class="text-xs text-gray-500">Reusable authentication requirements. Methods are OR'd — meet any one. HTTP tunnels only.</p>
+                </div>
             </div>
-            <button @click="openNewAuth()" class="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded font-medium transition-colors">Add Auth Policy</button>
+            <button @click="openNewAuth()" class="shrink-0 text-sm bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded font-medium transition-colors">Add Auth Policy</button>
         </div>
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div>
             <template x-if="authPolicies.length === 0">
-                <p class="text-sm text-gray-500 py-6 text-center">No auth policies yet.</p>
+                <p class="text-sm text-gray-400 py-6 text-center">No auth policies yet.</p>
             </template>
             <table x-show="authPolicies.length > 0" class="w-full text-sm">
                 <tbody>
@@ -66,7 +76,7 @@
                 </tbody>
             </table>
         </div>
-    </div>
+    </section>
 
     <!-- IP Policy edit modal -->
     <div x-show="ipModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
@@ -179,7 +189,7 @@
                         <template x-for="u in allUsers" :key="u.id">
                             <label class="flex items-center gap-2 text-sm">
                                 <input type="checkbox" :checked="authEdit.users.includes(u.id)" @change="toggleUser(u.id)" class="rounded">
-                                <span x-text="u.id"></span>
+                                <span x-text="u.name"></span>
                                 <span x-show="u.role==='admin'" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">admin</span>
                             </label>
                         </template>

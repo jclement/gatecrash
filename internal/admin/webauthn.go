@@ -53,7 +53,11 @@ func userToWebAuthn(u *User) *webauthnUser {
 			Flags:           webauthn.CredentialFlags{BackupEligible: sc.BackupEligible, BackupState: sc.BackupState},
 		}
 	}
-	return &webauthnUser{id: []byte(u.ID), name: u.ID, credentials: creds}
+	name := u.Name
+	if name == "" {
+		name = u.ID
+	}
+	return &webauthnUser{id: []byte(u.ID), name: name, credentials: creds}
 }
 
 // NewWebAuthnHandler creates a WebAuthn handler bound to the user directory.

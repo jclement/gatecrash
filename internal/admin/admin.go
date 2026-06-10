@@ -138,7 +138,8 @@ type PageData struct {
 	CSRFToken       string
 	Flash           *Flash
 	Data            any
-	UserID          string // logged-in user's ID
+	UserID          string // logged-in user's opaque id
+	Name            string // logged-in user's display label
 	IsAdmin         bool   // logged-in user is an admin (drives nav gating)
 }
 
@@ -191,7 +192,6 @@ func NewHandlers(version string, checkInterval time.Duration, templateFS fs.FS) 
 	if !h.isDev {
 		for _, page := range []string{
 			"pages/login.html",
-			"pages/setup.html",
 			"pages/passkeys.html",
 			"pages/invite.html",
 			"pages/users.html",

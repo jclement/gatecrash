@@ -3,11 +3,13 @@
     <div class="text-center max-w-sm">
         <img src="/static/logo.png" alt="Gatecrash" class="w-24 h-24 mx-auto mb-6">
         <h1 class="text-2xl font-bold mb-1">Set up your passkey</h1>
-        <p class="text-sm text-gray-500 mb-4">You've been invited as <strong>{{.Data.UserID}}</strong>.</p>
+        <p class="text-sm text-gray-500 mb-4">You've been invited as <strong>{{.Data.Name}}</strong>.</p>
         <p class="text-sm text-left text-gray-600 mb-6">Register a passkey to finish setting up your account. You'll use it to sign in from now on.</p>
 
+        <input id="passkey-name" type="text" maxlength="48" placeholder="Passkey name (e.g. MacBook)"
+               class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-1 focus:ring-blue-500">
         <button id="register-btn"
-                onclick="doRegister('/invite/{{.Data.Token}}/begin', '/invite/{{.Data.Token}}/finish', 'register-btn')"
+                onclick="doRegister('/invite/{{.Data.Token}}/begin', '/invite/{{.Data.Token}}/finish', 'register-btn', document.getElementById('passkey-name').value)"
                 class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded transition-colors">
             Register passkey
         </button>

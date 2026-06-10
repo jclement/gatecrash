@@ -2,18 +2,38 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"html"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jclement/gatecrash/internal/admin"
 )
 
-const setupUserID = "admin" // first-boot admin's default ID
-
 func writeChallenge(w http.ResponseWriter, options interface{}, challengeID string) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"publicKey": options, "challenge_id": challengeID})
+}
+
+// passkeyName returns the cleaned, length-bounded display name supplied with a
+// registration (via the ?name= query), defaulting to "Passkey" when blank. It is
+// shown in the UI, so control characters are stripped and the length is capped.
+func passkeyName(r *http.Request) string {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	name = strings.Map(func(c rune) rune {
+		if c < 0x20 || c == 0x7f { // drop control characters
+			return -1
+		}
+		return c
+	}, name)
+	if runes := []rune(name); len(runes) > 48 {
+		name = strings.TrimSpace(string(runes[:48]))
+	}
+	if name == "" {
+		return "Passkey"
+	}
+	return name
 }
 
 func landingForRole(role string) string {
@@ -51,56 +71,11 @@ func (s *Server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if err := s.sessionMgr.CreateSession(w, u.ID, u.Role); err != nil {
 		slog.Error("session create failed", "error", err)
 	}
-	s.auditLog.Log(u.ID, "auth.login", "Signed in with a passkey")
+	s.auditLog.Log(u.Name, "auth.login", "Signed in with a passkey")
 	writeJSON(w, map[string]string{"status": "ok", "redirect": landingForRole(u.Role)})
 }
 
-// ── First-boot admin setup ───────────────────────────────────────────────────
-
-func (s *Server) handleSetupBegin(w http.ResponseWriter, r *http.Request) {
-	if !s.webauthn.NeedsSetup() {
-		http.Error(w, "setup already complete", http.StatusForbidden)
-		return
-	}
-	u := s.users.Get(setupUserID)
-	if u == nil {
-		if _, err := s.users.Create(setupUserID, admin.RoleAdmin); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		u = s.users.Get(setupUserID)
-	}
-	options, cid, err := s.webauthn.BeginRegistration(u)
-	if err != nil {
-		http.Error(w, "registration failed", http.StatusInternalServerError)
-		return
-	}
-	writeChallenge(w, options, cid)
-}
-
-func (s *Server) handleSetupFinish(w http.ResponseWriter, r *http.Request) {
-	if !s.webauthn.NeedsSetup() {
-		http.Error(w, "setup already complete", http.StatusForbidden)
-		return
-	}
-	userID, sc, err := s.webauthn.FinishRegistration(r, r.URL.Query().Get("challenge_id"))
-	if err != nil {
-		slog.Error("setup finish failed", "error", err)
-		http.Error(w, "registration verification failed", http.StatusBadRequest)
-		return
-	}
-	if err := s.users.AddCredential(userID, sc); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := s.sessionMgr.CreateSession(w, userID, admin.RoleAdmin); err != nil {
-		slog.Error("session create failed", "error", err)
-	}
-	s.auditLog.Log(userID, "auth.setup", "Provisioned the first admin")
-	writeJSON(w, map[string]string{"status": "ok", "redirect": "/"})
-}
-
-// ── Invite-based registration (new users) ────────────────────────────────────
+// ── Invite-based registration (new users + first-admin bootstrap) ────────────
 
 func (s *Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
 	u := s.users.FindByInvite(r.PathValue("token"))
@@ -111,7 +86,7 @@ func (s *Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.adminH.Render(w, "pages/invite.html", &admin.PageData{
 		Title: "Set up your passkey",
-		Data:  struct{ UserID, Token string }{UserID: html.EscapeString(u.ID), Token: r.PathValue("token")},
+		Data:  struct{ Name, Token string }{Name: html.EscapeString(u.Name), Token: r.PathValue("token")},
 	})
 }
 
@@ -140,14 +115,17 @@ func (s *Server) handleInviteFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registration verification failed", http.StatusBadRequest)
 		return
 	}
+	sc.Name = passkeyName(r)
 	if err := s.users.AddCredential(userID, sc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// If this completed first-boot bootstrap, retire the on-disk invite file.
+	s.clearBootstrapInviteFile()
 	if err := s.sessionMgr.CreateSession(w, u.ID, u.Role); err != nil {
 		slog.Error("session create failed", "error", err)
 	}
-	s.auditLog.Log(u.ID, "auth.register", "Registered a passkey via invite")
+	s.auditLog.Log(u.Name, "auth.register", "Registered a passkey via invite")
 	writeJSON(w, map[string]string{"status": "ok", "redirect": landingForRole(u.Role)})
 }
 
@@ -173,10 +151,11 @@ func (s *Server) handleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registration verification failed", http.StatusBadRequest)
 		return
 	}
+	sc.Name = passkeyName(r)
 	if err := s.users.AddCredential(userID, sc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(userID, "auth.passkey.add", "Added a passkey")
+	s.auditLog.Log(s.actorName(r), "auth.passkey.add", fmt.Sprintf("Added passkey %q", sc.Name))
 	writeJSON(w, map[string]string{"status": "ok"})
 }

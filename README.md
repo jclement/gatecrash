@@ -232,24 +232,26 @@ When an `auth_policy` authenticates a request, the user's ID is injected as `x-G
 
 ### Users
 
-Gatecrash authenticates with **passkeys** — phishing-resistant credentials bound to a device. On first boot, open the admin host and provision the first **admin**. Users have an immutable **ID** (also the value injected as the identity header), a **role** (`admin` or `user`), and one or more passkeys:
+Gatecrash authenticates with **passkeys** — phishing-resistant credentials bound to a device. Each user has a stable, opaque **ID** (a GUID that passkeys, sessions, and policies bind to — it never changes), a renameable **name** label, a **role** (`admin` or `user`), and one or more passkeys:
 
 - **admin** — manages tunnels, access policies, users, and the audit log.
 - **user** — signs in and can be granted access to protected tunnels; lands on their own Passkeys page.
 
-On the **Users** page an admin adds a user (ID + role), which produces a one-time **invite link** (`https://<admin_host>/invite/<token>`); opening it registers the user's passkey. **Reset** clears a user's passkeys and issues a fresh invite. Everyone manages their own passkeys from the **Passkeys** page. Users live in `<config_dir>/users.json`.
+**First boot.** There is no open setup page to race. On startup, while no admin exists, Gatecrash prints a one-time **setup link** to the logs and writes it to `<config_dir>/bootstrap-invite.txt` (0600); opening it registers the first admin's passkey, after which the link and file are retired. (The link needs `admin_host` configured.)
+
+On the **Users** page an admin adds a user (name + role), which produces a one-time **invite link** (`https://<admin_host>/invite/<token>`); opening it registers the user's passkey. **Rename** changes the label freely; **Reset** clears a user's passkeys and issues a fresh invite. Everyone manages their own passkeys (and names them) from the **Passkeys** page. Users live in `<config_dir>/users.json`.
 
 ### Access policies
 
 Policies are reusable and assigned to tunnels by ID. The two are **independent gates** — a tunnel may use either, both (AND), or neither.
 
-**Auth policy** — a set of allowed users (signed in with a passkey), plus an optional static HTTP Basic password for non-interactive clients. HTTP-only; not available with `tls_passthrough`. Visitors are sent to the admin host to sign in and bounced back to the tunnel.
+**Auth policy** — a set of allowed users (signed in with a passkey), plus an optional static HTTP Basic password for non-interactive clients. HTTP-only; not available with `tls_passthrough`. Visitors are sent to the admin host to sign in and bounced back to the tunnel. On success the backend receives the user's name on `x-Gatecrash-User` (header name configurable), the stable id on `X-Gatecrash-Id`, and the role on `X-Gatecrash-Role`. The whole `X-Gatecrash-*` namespace is stripped from inbound requests, so these headers can't be spoofed.
 
 ```toml
 [[auth_policy]]
 id = "staff"
-users = ["alice", "bob"]   # allowed user IDs
-# header = "x-Gatecrash-User"   # optional: override the identity header name
+users = ["u_1a2b3c4d5e6f7080", "u_90ab..."]  # allowed user IDs (opaque; pick by name in the UI)
+# header = "x-Gatecrash-User"   # optional: override the identity (name) header
 # username = "ci"               # optional static HTTP Basic credential
 # password_hash = "$2a$12$..."  #   (set/rotated from the admin UI)
 ```

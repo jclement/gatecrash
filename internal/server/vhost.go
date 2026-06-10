@@ -133,15 +133,20 @@ func (s *Server) enforceAuthPolicy(w http.ResponseWriter, r *http.Request, host 
 	// 2. Logged-in user (tunnel session established via the admin handoff). The
 	// user must still exist and still be in the policy's allowed set.
 	if pol.requiresLogin() {
-		if userID, role, ok := s.tunnelSession.ValidateSession(r, host); ok && s.users.Get(userID) != nil {
-			if !pol.allowsUser(userID) {
-				s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
-					fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)))
-				return false
+		if userID, _, ok := s.tunnelSession.ValidateSession(r, host); ok {
+			if u := s.users.Get(userID); u != nil {
+				if !pol.allowsUser(userID) {
+					s.serveErrorPage(w, r, http.StatusForbidden, "Access Denied",
+						fmt.Sprintf("You do not have access to <strong>%s</strong>.", html.EscapeString(host)))
+					return false
+				}
+				// Inject identity: the readable name on the (configurable) user
+				// header, the stable opaque id, and the live role.
+				r.Header.Set(pol.headerName(), u.Name)
+				r.Header.Set("X-Gatecrash-Id", u.ID)
+				r.Header.Set("X-Gatecrash-Role", u.Role)
+				return true
 			}
-			r.Header.Set(pol.headerName(), userID)
-			r.Header.Set("X-Gatecrash-Role", role)
-			return true
 		}
 		// Not logged in — start the cross-host login handoff.
 		s.initiateTunnelLogin(w, r, host)

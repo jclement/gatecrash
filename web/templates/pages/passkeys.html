@@ -1,13 +1,18 @@
 {{define "content"}}
 <div x-data="passkeysPage()" class="max-w-3xl mx-auto">
-    <div class="flex justify-between items-center mb-1">
+    <div class="flex justify-between items-start mb-1 gap-3">
         <h1 class="text-lg font-bold">Your passkeys</h1>
-        <button id="register-btn" onclick="doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn')"
-                class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
-            Add passkey
-        </button>
+        <div class="flex items-center gap-2">
+            <input x-model="newName" type="text" maxlength="48" placeholder="Name (e.g. MacBook)"
+                   @keydown.enter="doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn', newName)"
+                   class="border border-gray-300 rounded px-2 py-1.5 text-xs w-44 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <button id="register-btn" @click="doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn', newName)"
+                    class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors whitespace-nowrap">
+                Add passkey
+            </button>
+        </div>
     </div>
-    <p class="text-xs text-gray-500 mb-3">Signed in as <strong>{{.UserID}}</strong>{{if .IsAdmin}} (admin){{end}}.</p>
+    <p class="text-xs text-gray-500 mb-3">Signed in as <strong>{{.Name}}</strong>{{if .IsAdmin}} (admin){{end}}.</p>
     <p id="status" class="text-xs mb-3 text-gray-500"></p>
 
     <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -44,6 +49,25 @@
             </tbody>
         </table>
     </div>
+
+    <!-- What are passkeys? -->
+    <div class="mt-6 rounded-xl border border-gray-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-5">
+        <div class="flex items-start gap-3">
+            <div class="mt-0.5 w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91c-.56-.1-1.16.02-1.56.43l-2.1 2.16H9v1.5H7.5v1.5H6v1.5H3.75a.75.75 0 01-.75-.75v-2.69c0-.2.08-.39.22-.53l5.66-5.66c.41-.4.53-1 .43-1.56A6 6 0 1121.75 8.25z"/></svg>
+            </div>
+            <div class="text-sm text-gray-700 leading-relaxed">
+                <h2 class="text-base font-semibold text-gray-900 mb-1">A little love letter to passkeys</h2>
+                <p class="mb-3">No passwords here — and that's the point. A passkey is a cryptographic key that lives on your device (your laptop, phone, or a hardware key) and is unlocked with the thing you already use to unlock it: a fingerprint, your face, or a PIN. Gatecrash only ever sees the public half, so there's nothing to leak, phish, or reuse.</p>
+                <ul class="space-y-1.5">
+                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Phishing-resistant.</strong> A passkey is bound to this site's domain — it simply won't work on a look-alike.</span></li>
+                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Nothing to remember or type.</strong> No password to forget, rotate, or have stolen in a breach.</span></li>
+                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>One per device, as many as you like.</strong> Add a passkey on each device you sign in from — give them names so you can tell them apart and remove one if a device is lost.</span></li>
+                </ul>
+                <p class="mt-3 text-xs text-gray-500">Tip: many platforms sync passkeys through your password manager or iCloud/Google account, so a passkey you create on your phone can follow you to your laptop.</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script src="/static/js/webauthn.js"></script>
@@ -51,6 +75,7 @@
 function passkeysPage() {
     const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
     return {
+        newName: '',
         async remove(id) {
             if (!confirm('Remove this passkey? You won\'t be able to sign in with it.')) return;
             const resp = await fetch('/api/passkeys/delete', {

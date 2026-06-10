@@ -13,11 +13,15 @@
             <tbody>
                 <template x-for="u in users" :key="u.id">
                     <tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                        <td class="px-4 py-2 font-semibold" x-text="u.id"></td>
+                        <td class="px-4 py-2">
+                            <div class="font-semibold" x-text="u.name"></div>
+                            <div class="text-[10px] text-gray-400 font-mono" x-text="u.id"></div>
+                        </td>
                         <td class="px-4 py-2">
                             <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
                                   :class="u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'"
                                   x-text="u.role"></span>
+                            <span x-show="u.id === me" class="ml-1 text-[10px] text-gray-400">(you)</span>
                         </td>
                         <td class="px-4 py-2 text-xs text-gray-500">
                             <span x-show="u.has_passkeys" x-text="u.passkeys + ' passkey' + (u.passkeys===1?'':'s')"></span>
@@ -25,9 +29,10 @@
                         </td>
                         <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
                             <button x-show="!u.has_passkeys && u.invite_url" @click="copy(u.invite_url)" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium">Copy invite</button>
+                            <button @click="rename(u)" class="text-xs bg-gray-50 text-gray-700 hover:bg-gray-100 px-2 py-1 rounded font-medium">Rename</button>
                             <button x-show="u.has_passkeys" @click="reset(u.id)" class="text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 px-2 py-1 rounded font-medium">Reset</button>
-                            <button @click="toggleRole(u)" class="text-xs bg-gray-50 text-gray-700 hover:bg-gray-100 px-2 py-1 rounded font-medium" x-text="u.role === 'admin' ? 'Make user' : 'Make admin'"></button>
-                            <button @click="del(u.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
+                            <button x-show="u.id !== me" @click="toggleRole(u)" class="text-xs bg-gray-50 text-gray-700 hover:bg-gray-100 px-2 py-1 rounded font-medium" x-text="u.role === 'admin' ? 'Make user' : 'Make admin'"></button>
+                            <button x-show="u.id !== me" @click="del(u.id)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Delete</button>
                         </td>
                     </tr>
                 </template>
@@ -47,9 +52,9 @@
                 <template x-if="!inviteUrl">
                     <div class="space-y-3">
                         <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">User ID</label>
-                            <input type="text" x-model="newID" placeholder="alice" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-                            <p class="text-xs text-gray-400 mt-1">Lowercase letters, numbers, hyphens. Immutable; also the value injected as the identity header.</p>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Name</label>
+                            <input type="text" x-model="newName" placeholder="Alice" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">A display label, injected as the identity header. You can rename it later; the user keeps a stable internal id.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 mb-1">Role</label>
@@ -83,19 +88,27 @@ function usersPage() {
     const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
     const headers = () => ({ 'X-CSRF-Token': csrf(), 'Content-Type': 'application/json' });
     return {
-        users: [], modal: false, newID: '', newRole: 'user', inviteUrl: '',
+        me: '{{.UserID}}',
+        users: [], modal: false, newName: '', newRole: 'user', inviteUrl: '',
         init() { this.load(); },
         async load() {
             const r = await fetch('/api/users');
             if (r.status === 401) { window.location.href = '/login'; return; }
             if (r.ok) this.users = (await r.json()) || [];
         },
-        openNew() { this.newID = ''; this.newRole = 'user'; this.inviteUrl = ''; this.modal = true; },
+        openNew() { this.newName = ''; this.newRole = 'user'; this.inviteUrl = ''; this.modal = true; },
         async create() {
-            const r = await fetch('/api/users', { method: 'POST', headers: headers(), body: JSON.stringify({ id: this.newID.trim(), role: this.newRole }) });
+            const r = await fetch('/api/users', { method: 'POST', headers: headers(), body: JSON.stringify({ name: this.newName.trim(), role: this.newRole }) });
             if (r.status === 401) { window.location.href = '/login'; return; }
             if (!r.ok) { alert('Error: ' + await r.text()); return; }
             this.inviteUrl = (await r.json()).invite_url || '';
+            this.load();
+        },
+        async rename(u) {
+            const name = prompt('New name for this user:', u.name);
+            if (name === null || name.trim() === '' || name.trim() === u.name) return;
+            const r = await fetch('/api/users/' + encodeURIComponent(u.id) + '/rename', { method: 'POST', headers: headers(), body: JSON.stringify({ name: name.trim() }) });
+            if (!r.ok) { alert('Failed: ' + await r.text()); return; }
             this.load();
         },
         async reset(id) {

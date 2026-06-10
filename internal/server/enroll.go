@@ -273,7 +273,7 @@ func (s *Server) handleRotateEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to save config", http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.enroll_token.rotate",
+	s.auditLog.Log(s.actorName(r), "ip_policy.enroll_token.rotate",
 		fmt.Sprintf("Rotated enrollment link for ip_policy %q", id))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"url": s.enrollURL(token)})
@@ -292,7 +292,7 @@ func (s *Server) handleDeleteEnrollToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to save config", http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.enroll_token.remove",
+	s.auditLog.Log(s.actorName(r), "ip_policy.enroll_token.remove",
 		fmt.Sprintf("Removed enrollment link for ip_policy %q", id))
 	w.WriteHeader(http.StatusNoContent)
 }

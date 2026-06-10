@@ -114,7 +114,7 @@ func (s *Server) handleAuthorizeIPSubmit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	actor := s.sessionMgr.GetActor(r)
+	actor := s.actorName(r)
 	if err := s.ipAllow.Grant(pol.ID, ip.String(), actor, ipGrantTTL); err != nil {
 		slog.Error("failed to grant ip", "policy", pol.ID, "ip", ip, "error", err)
 		s.serveErrorPage(w, r, http.StatusInternalServerError, "Authorization Failed",
@@ -215,7 +215,7 @@ func (s *Server) handleRevokePolicyIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to revoke", http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.revoke",
+	s.auditLog.Log(s.actorName(r), "ip_policy.revoke",
 		fmt.Sprintf("Revoked IP %s from ip_policy %q", ip, id))
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -78,7 +78,7 @@ func (s *Server) handleSaveIPPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.save", fmt.Sprintf("Saved ip_policy %q", req.ID))
+	s.auditLog.Log(s.actorName(r), "ip_policy.save", fmt.Sprintf("Saved ip_policy %q", req.ID))
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -111,7 +111,7 @@ func (s *Server) handleDeleteIPPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "ip_policy.delete", fmt.Sprintf("Deleted ip_policy %q", id))
+	s.auditLog.Log(s.actorName(r), "ip_policy.delete", fmt.Sprintf("Deleted ip_policy %q", id))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -190,7 +190,7 @@ func (s *Server) handleSaveAuthPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "auth_policy.save", fmt.Sprintf("Saved auth_policy %q", req.ID))
+	s.auditLog.Log(s.actorName(r), "auth_policy.save", fmt.Sprintf("Saved auth_policy %q", req.ID))
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -223,7 +223,7 @@ func (s *Server) handleDeleteAuthPolicy(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "auth_policy.delete", fmt.Sprintf("Deleted auth_policy %q", id))
+	s.auditLog.Log(s.actorName(r), "auth_policy.delete", fmt.Sprintf("Deleted auth_policy %q", id))
 	w.WriteHeader(http.StatusNoContent)
 }
 

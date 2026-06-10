@@ -137,8 +137,8 @@ func TestNewHandlers_Production(t *testing.T) {
 		t.Fatal("should not be dev mode for version 1.0.0")
 	}
 	// Production mode pre-compiles all pages
-	if len(h.pages) != 9 {
-		t.Fatalf("expected 9 pre-compiled pages, got %d", len(h.pages))
+	if len(h.pages) != 8 {
+		t.Fatalf("expected 8 pre-compiled pages, got %d", len(h.pages))
 	}
 }
 

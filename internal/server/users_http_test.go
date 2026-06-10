@@ -28,7 +28,7 @@ func TestUserCRUD_InviteAndList(t *testing.T) {
 
 	// Create returns a shareable invite link on the admin host.
 	rec := httptest.NewRecorder()
-	s.handleCreateUser(rec, httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"id":"alice","role":"user"}`)))
+	s.handleCreateUser(rec, httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"name":"alice","role":"user"}`)))
 	if rec.Code != 200 {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
@@ -38,16 +38,19 @@ func TestUserCRUD_InviteAndList(t *testing.T) {
 
 	// Invalid role rejected.
 	rec = httptest.NewRecorder()
-	s.handleCreateUser(rec, httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"id":"bob","role":"superuser"}`)))
+	s.handleCreateUser(rec, httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"name":"bob","role":"superuser"}`)))
 	if rec.Code == 200 {
 		t.Fatal("expected invalid role to be rejected")
 	}
 
-	// List shows the pending invite (no passkeys yet).
+	// List shows the pending invite (no passkeys yet) with an opaque id + name.
 	rec = httptest.NewRecorder()
 	s.handleListUsers(rec, httptest.NewRequest("GET", "/api/users", nil))
 	body := rec.Body.String()
-	if !strings.Contains(body, `"id":"alice"`) || !strings.Contains(body, `"has_passkeys":false`) || !strings.Contains(body, `/invite/`) {
+	if !strings.Contains(body, `"name":"alice"`) || !strings.Contains(body, `"has_passkeys":false`) || !strings.Contains(body, `/invite/`) {
 		t.Fatalf("list missing pending user/invite: %s", body)
+	}
+	if strings.Contains(body, `"id":"alice"`) {
+		t.Fatalf("id should be an opaque GUID, not the name: %s", body)
 	}
 }

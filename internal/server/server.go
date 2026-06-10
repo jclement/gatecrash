@@ -80,6 +80,9 @@ type Server struct {
 	auditLog      *admin.AuditLog
 	tunnelSession *admin.TunnelSession
 
+	// Path to the one-time first-admin invite file, removed once setup completes.
+	bootstrapInvitePath string
+
 	// Self-service IP allowlist grants (TTL'd), persisted to ip_allowlist.json.
 	ipAllow *IPAllowStore
 
@@ -389,8 +392,57 @@ func (s *Server) initAdmin() error {
 	}
 	s.adminH = ah
 
+	// Bootstrap the first admin via a one-time invite link written to the config
+	// dir and logged — no open first-login page to race on a public box.
+	s.writeBootstrapInvite(dataDir)
+
 	slog.Info("admin panel initialized", "rpID", rpID)
 	return nil
+}
+
+// writeBootstrapInvite ensures a first-admin invite exists (until one admin has a
+// passkey), writing it to bootstrap-invite.txt (0600) and logging it. It needs
+// admin_host configured to build a usable URL. Idempotent across restarts.
+func (s *Server) writeBootstrapInvite(dataDir string) {
+	s.bootstrapInvitePath = filepath.Join(dataDir, "bootstrap-invite.txt")
+	if s.cfg.Server.AdminHost == "" {
+		return // no admin panel host yet; nothing to link to
+	}
+	token, err := s.users.BootstrapInvite()
+	if err != nil {
+		slog.Error("failed to prepare bootstrap invite", "error", err)
+		return
+	}
+	if token == "" {
+		s.clearBootstrapInviteFile() // already initialized; clear any stale file
+		return
+	}
+	link := s.inviteURL(token)
+	content := fmt.Sprintf("Gatecrash — first-admin setup link (one-time use):\n\n%s\n\nOpen it to register your admin passkey. This file is removed automatically once the link is used.\n", link)
+	if err := os.WriteFile(s.bootstrapInvitePath, []byte(content), 0o600); err != nil {
+		slog.Error("failed to write bootstrap invite file", "error", err)
+	}
+	slog.Warn("ADMIN SETUP REQUIRED — open this one-time link to create the first admin",
+		"url", link, "file", s.bootstrapInvitePath)
+}
+
+// clearBootstrapInviteFile removes the on-disk bootstrap invite (best effort).
+func (s *Server) clearBootstrapInviteFile() {
+	if s.bootstrapInvitePath == "" {
+		return
+	}
+	if err := os.Remove(s.bootstrapInvitePath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("could not remove bootstrap invite file", "error", err)
+	}
+}
+
+// actorName resolves the current session's display label for audit entries,
+// falling back to the raw session id if the user can't be resolved.
+func (s *Server) actorName(r *http.Request) string {
+	if u := s.sessionUser(r); u != nil {
+		return u.Name
+	}
+	return s.sessionMgr.GetActor(r)
 }
 
 // setupAdminRoutes registers the admin panel HTTP handlers.
@@ -403,14 +455,12 @@ func (s *Server) setupAdminRoutes() {
 
 	// Auth pages — public
 	s.adminMux.HandleFunc("GET /login", s.handleLogin)
-	s.adminMux.HandleFunc("GET /setup", s.handleSetup)
 	// Login ceremony (usernameless/discoverable) — public
 	s.adminMux.HandleFunc("POST /auth/login/begin", rateLimit(s.authLimiter, s.handleLoginBegin))
 	s.adminMux.HandleFunc("POST /auth/login/finish", rateLimit(s.authLimiter, s.handleLoginFinish))
-	// First-boot admin provisioning — only valid while setup is needed
-	s.adminMux.HandleFunc("POST /auth/setup/begin", rateLimit(s.authLimiter, s.handleSetupBegin))
-	s.adminMux.HandleFunc("POST /auth/setup/finish", rateLimit(s.authLimiter, s.handleSetupFinish))
-	// Invite-based passkey registration — public, token-gated
+	// The first admin is bootstrapped via an invite link printed to the logs /
+	// config file at startup (see writeBootstrapInvite) — there is no open
+	// first-login page to race. Invite-based passkey registration — token-gated.
 	s.adminMux.HandleFunc("GET /invite/{token}", s.handleInvitePage)
 	s.adminMux.HandleFunc("POST /invite/{token}/begin", rateLimit(s.authLimiter, s.handleInviteBegin))
 	s.adminMux.HandleFunc("POST /invite/{token}/finish", rateLimit(s.authLimiter, s.handleInviteFinish))
@@ -427,7 +477,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("GET /api/session/keepalive", s.handleSessionKeepalive)
 
 	// Admin only
-	s.adminMux.HandleFunc("GET /", s.requireAdmin(s.handleAdminDashboard))
+	s.adminMux.HandleFunc("GET /", s.requireAuth(s.handleRoot))
 	s.adminMux.HandleFunc("GET /help", s.requireAdmin(s.handleHelp))
 	s.adminMux.HandleFunc("GET /authorize-ip", s.requireAdmin(s.handleAuthorizeIPPage))
 	s.adminMux.HandleFunc("POST /authorize-ip", s.requireAdmin(s.handleAuthorizeIPSubmit))
@@ -447,6 +497,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("DELETE /api/users/{id}", s.requireAdminCSRF(s.handleDeleteUser))
 	s.adminMux.HandleFunc("POST /api/users/{id}/reset", s.requireAdminCSRF(s.handleResetUser))
 	s.adminMux.HandleFunc("POST /api/users/{id}/role", s.requireAdminCSRF(s.handleSetUserRole))
+	s.adminMux.HandleFunc("POST /api/users/{id}/rename", s.requireAdminCSRF(s.handleRenameUser))
 	// Access policies (admin)
 	s.adminMux.HandleFunc("GET /access-policies", s.requireAdmin(s.handleAccessPoliciesPage))
 	s.adminMux.HandleFunc("GET /api/ip-policies", s.requireAdminAPI(s.handleListIPPolicies))
@@ -485,12 +536,13 @@ func (s *Server) sessionUser(r *http.Request) *admin.User {
 	return s.users.Get(s.sessionMgr.UserID(r))
 }
 
-// requireAuth wraps a page handler: any logged-in user. Redirects to setup on
-// first boot, else to login (preserving the destination).
+// requireAuth wraps a page handler: any logged-in user. On first boot (no admin
+// yet) it shows the not-initialized notice; otherwise it redirects to login,
+// preserving the destination.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.webauthn.NeedsSetup() {
-			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
 		if s.sessionUser(r) == nil {
@@ -563,10 +615,15 @@ func (s *Server) requireAdminCSRF(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-// handleLogin renders the usernameless passkey login page.
+// handleLogin renders the usernameless passkey login page. Before the first
+// admin exists it shows a not-initialized notice instead (the operator claims
+// the first admin via the bootstrap invite link from the logs / config file).
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.webauthn.NeedsSetup() {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		s.adminH.Render(w, "pages/login.html", &admin.PageData{
+			Title: "Not initialized",
+			Data:  struct{ NeedsSetup bool }{NeedsSetup: true},
+		})
 		return
 	}
 	if s.sessionMgr.ValidateSession(r) {
@@ -578,15 +635,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.adminH.Render(w, "pages/login.html", &admin.PageData{Title: "Sign in"})
-}
-
-// handleSetup renders the first-boot admin provisioning page.
-func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	if !s.webauthn.NeedsSetup() {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	s.adminH.Render(w, "pages/setup.html", &admin.PageData{Title: "Set up admin"})
 }
 
 // landingFor returns where to send a user after login: dashboard for admins,
@@ -619,6 +667,7 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 		Title:     "Passkeys",
 		Active:    "passkeys",
 		UserID:    u.ID,
+		Name:      u.Name,
 		IsAdmin:   u.IsAdmin(),
 		CSRFToken: s.sessionMgr.CSRFToken(r),
 		Data: struct {
@@ -689,6 +738,17 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 			AdminHost:   adminHost,
 		},
 	})
+}
+
+// handleRoot serves the admin dashboard to admins. Non-admins have no dashboard,
+// so for now they're sent to their passkey page (a friendlier "no access"
+// landing will replace the redirect later).
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if u := s.sessionUser(r); u == nil || !u.IsAdmin() {
+		http.Redirect(w, r, "/passkeys", http.StatusSeeOther)
+		return
+	}
+	s.handleAdminDashboard(w, r)
 }
 
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
@@ -938,7 +998,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel created", "id", req.ID, "type", req.Type)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.create", fmt.Sprintf("Created %s tunnel %q", req.Type, req.ID))
+	s.auditLog.Log(s.actorName(r), "tunnel.create", fmt.Sprintf("Created %s tunnel %q", req.Type, req.ID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.secretResponse(req.ID, plaintext))
 }
@@ -991,7 +1051,7 @@ func (s *Server) handleEditTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel updated", "id", tunnelID)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.edit", fmt.Sprintf("Updated tunnel %q", tunnelID))
+	s.auditLog.Log(s.actorName(r), "tunnel.edit", fmt.Sprintf("Updated tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1026,7 +1086,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("tunnel deleted", "id", tunnelID)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.delete", fmt.Sprintf("Deleted tunnel %q", tunnelID))
+	s.auditLog.Log(s.actorName(r), "tunnel.delete", fmt.Sprintf("Deleted tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1101,7 +1161,7 @@ func (s *Server) handleCreateRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect created", "from", req.From, "to", req.To)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.create", fmt.Sprintf("Created redirect %q -> %q", req.From, req.To))
+	s.auditLog.Log(s.actorName(r), "redirect.create", fmt.Sprintf("Created redirect %q -> %q", req.From, req.To))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1149,7 +1209,7 @@ func (s *Server) handleEditRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect updated", "from", fromHost)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.edit", fmt.Sprintf("Updated redirect %q", fromHost))
+	s.auditLog.Log(s.actorName(r), "redirect.edit", fmt.Sprintf("Updated redirect %q", fromHost))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1184,7 +1244,7 @@ func (s *Server) handleDeleteRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("redirect deleted", "from", fromHost)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "redirect.delete", fmt.Sprintf("Deleted redirect %q", fromHost))
+	s.auditLog.Log(s.actorName(r), "redirect.delete", fmt.Sprintf("Deleted redirect %q", fromHost))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1221,7 +1281,7 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 	}
 
 	slog.Info("regenerated tunnel secret", "tunnel", tunnelID)
-	s.auditLog.Log(s.sessionMgr.GetActor(r), "tunnel.regenerate", fmt.Sprintf("Regenerated secret for tunnel %q", tunnelID))
+	s.auditLog.Log(s.actorName(r), "tunnel.regenerate", fmt.Sprintf("Regenerated secret for tunnel %q", tunnelID))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.secretResponse(tunnelID, plaintext))
 }

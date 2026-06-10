@@ -64,8 +64,8 @@ type Tunnel struct {
 // IPRange is one entry in an IP policy: a CIDR or single IP with an optional
 // human comment for documentation.
 type IPRange struct {
-	CIDR    string `toml:"cidr"`
-	Comment string `toml:"comment,omitempty"`
+	CIDR    string `toml:"cidr" json:"cidr"`
+	Comment string `toml:"comment,omitempty" json:"comment,omitempty"`
 }
 
 // IPPolicy is a reusable source-IP allowlist that tunnels can share. Access is

@@ -58,8 +58,8 @@ func TestDashboardRendersWithIPAllowlist(t *testing.T) {
 	}
 }
 
-// TestAuthPagesRender renders the real login/setup/passkeys/users/invite
-// templates to confirm they compile and execute.
+// TestAuthPagesRender renders the real login/passkeys/users/invite templates to
+// confirm they compile and execute.
 func TestAuthPagesRender(t *testing.T) {
 	tmplFS, err := fs.Sub(web.EmbeddedFS, "templates")
 	if err != nil {
@@ -74,14 +74,14 @@ func TestAuthPagesRender(t *testing.T) {
 		data *admin.PageData
 	}{
 		{"pages/login.html", &admin.PageData{Title: "Sign in"}},
-		{"pages/setup.html", &admin.PageData{Title: "Set up admin"}},
-		{"pages/passkeys.html", &admin.PageData{Title: "Passkeys", Active: "passkeys", UserID: "admin", IsAdmin: true, CSRFToken: "x",
+		{"pages/login.html", &admin.PageData{Title: "Not initialized", Data: struct{ NeedsSetup bool }{true}}},
+		{"pages/passkeys.html", &admin.PageData{Title: "Passkeys", Active: "passkeys", UserID: "u_1", Name: "admin", IsAdmin: true, CSRFToken: "x",
 			Data: struct {
 				Passkeys  []admin.PasskeyView
 				CanDelete bool
 			}{}}},
-		{"pages/users.html", &admin.PageData{Title: "Users", Active: "users", IsAdmin: true, CSRFToken: "x"}},
-		{"pages/invite.html", &admin.PageData{Title: "Set up your passkey", Data: struct{ UserID, Token string }{"alice", "tok"}}},
+		{"pages/users.html", &admin.PageData{Title: "Users", Active: "users", UserID: "u_1", IsAdmin: true, CSRFToken: "x"}},
+		{"pages/invite.html", &admin.PageData{Title: "Set up your passkey", Data: struct{ Name, Token string }{"alice", "tok"}}},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()

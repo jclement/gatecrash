@@ -66,6 +66,15 @@ func TestIPPolicyCRUD(t *testing.T) {
 	if pol == nil || !pol.Allows(parseIPHelper("10.1.2.3")) {
 		t.Fatal("policy not applied to registry")
 	}
+
+	// The list endpoint must emit lowercase cidr/comment keys so the editor can
+	// reload ranges (Go would otherwise marshal CIDR/Comment from the field names).
+	lrec := httptest.NewRecorder()
+	s.handleListIPPolicies(lrec, httptest.NewRequest("GET", "/api/ip-policies", nil))
+	listBody := lrec.Body.String()
+	if !strings.Contains(listBody, `"cidr":"10.0.0.0/8"`) || !strings.Contains(listBody, `"comment":"lan"`) {
+		t.Fatalf("list must expose lowercase cidr/comment, got: %s", listBody)
+	}
 }
 
 func TestAuthPolicyCRUD_PasswordHashing(t *testing.T) {
