@@ -79,6 +79,13 @@ type ipRestrictedPageData struct {
 	AuthorizeURL string
 }
 
+// serviceLoginPageData renders the bespoke "this service is protected — sign in"
+// page shown during the cross-host auth handoff (not the admin login).
+type serviceLoginPageData struct {
+	Title       string
+	ServiceHost string
+}
+
 const standalonePagesTmpl = `
 {{define "head"}}<!DOCTYPE html>
 <html>
@@ -149,4 +156,93 @@ const standalonePagesTmpl = `
   <a class="btn" href="{{.AuthorizeURL}}">Authorize this IP</a>
   <p style="margin-top:16px;font-size:12px;color:#999;">You'll be asked to sign in to authorize. The grant lasts 7 days.</p>
 {{template "foot" .}}{{end}}
+
+{{define "service-login"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — {{.ServiceHost}}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         padding: 24px; color: #0f172a;
+         background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 55%, #eff6ff 100%); }
+  .card { background: #fff; border-radius: 16px; padding: 40px 36px; max-width: 420px; width: 100%;
+          text-align: center; box-shadow: 0 12px 40px rgba(2,6,23,.12); border: 1px solid #eef2f7; }
+  .shield { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 15px; display: flex;
+            align-items: center; justify-content: center; background: #eff6ff; color: #2563eb; }
+  .shield svg { width: 30px; height: 30px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+             color: #64748b; margin-bottom: 6px; }
+  h1 { font-size: 21px; font-weight: 700; margin-bottom: 12px; letter-spacing: -.01em; }
+  .host { display: inline-block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: 13px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+          padding: 6px 12px; margin-bottom: 18px; word-break: break-all; max-width: 100%; }
+  p.sub { font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 24px; }
+  button { width: 100%; padding: 13px 20px; background: #2563eb; color: #fff; border: none;
+           border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer;
+           display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+           transition: background .15s; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { opacity: .6; cursor: default; }
+  button svg { width: 18px; height: 18px; }
+  .status { font-size: 12px; margin-top: 14px; min-height: 16px; color: #64748b; }
+  .status.err { color: #dc2626; }
+  .status.ok { color: #16a34a; }
+  .foot { margin-top: 26px; font-size: 12px; color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="shield">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+  </div>
+  <div class="eyebrow">Protected service</div>
+  <h1>Sign in to continue</h1>
+  <div class="host">{{.ServiceHost}}</div>
+  <p class="sub">This service is protected by Gatecrash. Sign in with your passkey to continue &mdash; access is limited to authorized users.</p>
+  <button id="signin" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+    Sign in with a passkey
+  </button>
+  <div id="status" class="status"></div>
+  <div class="foot">&#128274; Secured by Gatecrash</div>
+</div>
+<script src="/static/js/webauthn.js"></script>
+<script>
+document.getElementById('signin').addEventListener('click', async function () {
+  var btn = this, st = document.getElementById('status');
+  btn.disabled = true; st.className = 'status'; st.textContent = 'Waiting for your passkey…';
+  try {
+    var r = await fetch('/auth/login/begin', { method: 'POST' });
+    if (!r.ok) throw new Error('Could not start sign-in. Please try again.');
+    var data = await r.json(), pk = data.publicKey;
+    pk.challenge = base64urlToBuffer(pk.challenge);
+    if (pk.allowCredentials) pk.allowCredentials = pk.allowCredentials.map(function (c) { return Object.assign({}, c, { id: base64urlToBuffer(c.id) }); });
+    var a = await navigator.credentials.get({ publicKey: pk });
+    var body = JSON.stringify({
+      id: a.id, rawId: bufferToBase64url(a.rawId), type: a.type,
+      response: {
+        authenticatorData: bufferToBase64url(a.response.authenticatorData),
+        clientDataJSON: bufferToBase64url(a.response.clientDataJSON),
+        signature: bufferToBase64url(a.response.signature),
+        userHandle: a.response.userHandle ? bufferToBase64url(a.response.userHandle) : null
+      }
+    });
+    var f = await fetch('/auth/login/finish?challenge_id=' + encodeURIComponent(data.challenge_id),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body });
+    if (!f.ok) throw new Error('Authentication failed.');
+    st.className = 'status ok'; st.textContent = 'Signed in! Redirecting…';
+    // Reload: now signed in, /tunnel-login mints the handoff token and redirects to the service.
+    setTimeout(function () { window.location.reload(); }, 500);
+  } catch (e) {
+    st.className = 'status err'; st.textContent = (e && e.message) ? e.message : 'Sign-in failed.';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>{{end}}
 `

@@ -85,6 +85,24 @@ func (s *Server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Not signed in → show the bespoke "this service is protected" page. Its
+	// passkey ceremony establishes a session and reloads this URL; the reload then
+	// falls through to mint the handoff token. (This handler is intentionally not
+	// behind requireAuth so unauthenticated visitors land here, not on the generic
+	// admin login.)
+	if s.sessionUser(r) == nil {
+		if s.webauthn.NeedsSetup() {
+			s.serveErrorPage(w, r, http.StatusServiceUnavailable, "Not Set Up",
+				"This Gatecrash server has no users yet. Ask the administrator to finish setup.")
+			return
+		}
+		s.renderStandalonePage(w, http.StatusOK, "service-login", serviceLoginPageData{
+			Title:       "Sign in",
+			ServiceHost: hostname,
+		})
+		return
+	}
+
 	returnURL := r.URL.Query().Get("return")
 	if returnURL != "" {
 		if u, err := url.Parse(returnURL); err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), hostname) {

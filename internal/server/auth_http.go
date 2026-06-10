@@ -71,7 +71,11 @@ func (s *Server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if err := s.sessionMgr.CreateSession(w, u.ID, u.Role); err != nil {
 		slog.Error("session create failed", "error", err)
 	}
-	s.auditLog.Log(u.Name, "auth.login", "Signed in with a passkey")
+	detail := "Signed in with a passkey"
+	if name := u.CredentialName(credID); name != "" {
+		detail = fmt.Sprintf("Signed in with passkey %q", name)
+	}
+	s.auditLog.Log(u.Name, "auth.login", detail)
 	writeJSON(w, map[string]string{"status": "ok", "redirect": landingForRole(u.Role)})
 }
 

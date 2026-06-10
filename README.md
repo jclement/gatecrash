@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="#features">Features</a> &bull;
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#how-it-works">How It Works</a> &bull;
@@ -21,6 +22,19 @@
 
 > [!NOTE]
 > This project is **vibe coded** with [Claude Code](https://claude.ai/claude-code). The entire codebase — server, client, admin panel, CI/CD, and this README — was built collaboratively with AI. Use at your own risk, but it actually works pretty well.
+
+---
+
+## Features
+
+- **Automatic HTTPS** — per-hostname Let's Encrypt certificates issued on demand, with a self-signed fallback while DNS settles.
+- **HTTP, TCP & TLS passthrough** — route web traffic by hostname, forward raw TCP, or pass TLS straight through for the backend to terminate (mTLS, your own certs).
+- **One tunnel, many backends** — route multiple hostnames to different services through a single client, with WebSocket/streaming support.
+- **Passkey admin panel** — phishing-resistant WebAuthn sign-in (user verification required), multi-user with admin/user roles, invite-link onboarding, and server-side session revocation (logout kills every device).
+- **Reusable access policies** — gate any tunnel by signed-in user, by source-IP allowlist (with self-service enrollment links), or both — independently, and shared across tunnels.
+- **Service secrets** — machine-generated credentials for CI, scripts, and webhooks via HTTP Basic.
+- **Live dashboard** — real-time traffic, bandwidth, per-tunnel speed test, cert status, and an append-only audit log.
+- **Easy ops** — single static binary, systemd installer, Docker images, config hot-reload, `client.toml`, and self-update.
 
 ---
 
@@ -103,7 +117,7 @@ Download pre-built binaries for Linux, macOS, and Windows from [GitHub Releases]
      --target 127.0.0.1:8000
    ```
 
-   > The SSH port is randomly assigned on first run (check `ssh_port` in `gatecrash.toml`). The exact connection command is shown in the admin panel when you create a tunnel or regenerate a secret.
+   > The SSH port is randomly assigned on first run (check `ssh_port` in `gatecrash.toml`). The exact connection command — and a ready-made **`client.toml`** you can download — are shown in the admin panel when you create a tunnel or regenerate a secret. To run the client as a service, drop that file at `/etc/gatecrash/client.toml` and just run `gatecrash` (see [Client config file](#config-file)).
 
 That's it. Requests to your configured hostname now reach your local service on port 8000.
 
@@ -224,7 +238,7 @@ For HTTP tunnels (when `tls_passthrough = false`), the following headers are inj
 | `X-Real-IP` | Original client IP |
 | `X-Request-Id` | Unique request ID |
 
-When an `auth_policy` authenticates a request, the user's ID is injected as `x-Gatecrash-User` (header name configurable) along with `X-Gatecrash-Role`.
+When an `auth_policy` authenticates a request, the backend also receives the user's name on `x-Gatecrash-User` (header name configurable), their stable ID on `X-Gatecrash-Id`, and their role on `X-Gatecrash-Role` (or `service` for service-secret clients). The whole `X-Gatecrash-*` namespace is stripped from inbound requests so it can't be spoofed.
 
 ---
 
@@ -495,16 +509,20 @@ Settings are configured in `gatecrash.toml` inside the config volume, or via the
 # Install tools
 mise install
 
-# Download frontend assets
+# Download frontend assets + Go deps
 mise run setup
 
-# Run server with hot-reload
+# Build the CSS (Tailwind scans templates/*.html and bakes in the classes it finds)
+mise run tailwind          # one-shot
+mise run tailwind:watch    # rebuild on template changes — run alongside `dev`
+
+# Run server with hot-reload (Go only; run tailwind:watch in another terminal for CSS)
 mise run dev
 
 # Run tests
 mise run test
 
-# Build both binaries
+# Build both binaries (depends on `tailwind`, so CSS is always fresh)
 mise run build
 
 # Test release

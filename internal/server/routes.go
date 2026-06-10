@@ -24,8 +24,10 @@ func (s *Server) setupAdminRoutes() {
 	// Add a passkey to your own account (logged-in)
 	s.adminMux.HandleFunc("POST /auth/register/begin", rateLimit(s.authLimiter, s.requireAuth(s.handleRegisterBegin)))
 	s.adminMux.HandleFunc("POST /auth/register/finish", rateLimit(s.authLimiter, s.requireAuth(s.handleRegisterFinish)))
-	// Cross-host tunnel login handoff (any logged-in user)
-	s.adminMux.HandleFunc("GET /tunnel-login", s.requireAuth(s.handleTunnelLogin))
+	// Cross-host tunnel login handoff. Not behind requireAuth: when signed out it
+	// renders the bespoke "service protected" sign-in page itself (then reloads to
+	// mint the handoff token once authenticated).
+	s.adminMux.HandleFunc("GET /tunnel-login", s.handleTunnelLogin)
 	s.adminMux.HandleFunc("POST /logout", s.handleLogout)
 
 	// Any logged-in user

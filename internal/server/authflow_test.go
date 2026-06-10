@@ -29,6 +29,10 @@ func authTestServer(t *testing.T) *Server {
 	sm.SetEpochSource(users.Epoch)
 	ts := admin.NewTunnelSession("test-secret")
 	ts.SetEpochSource(users.Epoch)
+	wa, err := admin.NewWebAuthnHandler("admin.example.com", "https://admin.example.com", users)
+	if err != nil {
+		t.Fatalf("webauthn: %v", err)
+	}
 
 	s := &Server{
 		cfg:                   &config.Config{Server: config.ServerConfig{AdminHost: "admin.example.com", HTTPSPort: 443}},
@@ -38,6 +42,7 @@ func authTestServer(t *testing.T) *Server {
 		users:                 users,
 		sessionMgr:            sm,
 		tunnelSession:         ts,
+		webauthn:              wa,
 		auditLog:              auditLog,
 		pendingTunnelAuth:     make(map[string]*pendingTunnelAuthResult),
 		tunnelAuthLimiter:     newIPRateLimiter(100, time.Minute),
@@ -333,6 +338,27 @@ func TestTunnelLoginComplete_HostnameMismatch(t *testing.T) {
 	s.handleTunnelLoginComplete(w, httptest.NewRequest("GET", "https://evil.example.com/.gatecrash/auth/complete?token="+tok, nil), "evil.example.com")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("hostname mismatch should be 400, got %d", w.Code)
+	}
+}
+
+func TestTunnelLogin_UnauthenticatedShowsServiceLoginPage(t *testing.T) {
+	s := authTestServer(t)
+	host := "app.example.com"
+	s.registry.Register(newTunnelState(TunnelSpec{ID: "web", Hostnames: []string{host}}))
+	// A real (non-bootstrap) user must exist so NeedsSetup() is false.
+	addUser(t, s, "Alice", admin.RoleAdmin)
+	// Mark setup complete by giving the admin a credential.
+	_ = s.users.AddCredential(s.users.All()[0].ID, admin.StoredCredential{ID: []byte("c"), Name: "k"})
+
+	// No session cookie → the bespoke "service protected" page, not a redirect.
+	w := httptest.NewRecorder()
+	s.handleTunnelLogin(w, httptest.NewRequest("GET", "/tunnel-login?hostname="+host, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 sign-in page, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "protected by Gatecrash") || !strings.Contains(body, host) {
+		t.Fatalf("expected bespoke service-login page naming the host, got: %s", body[:min(len(body), 300)])
 	}
 }
 

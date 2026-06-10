@@ -50,6 +50,15 @@
         <p class="text-sm text-gray-600">
             Replace <code class="bg-gray-100 px-1 rounded text-xs">&lt;TOKEN&gt;</code> with your tunnel token and <code class="bg-gray-100 px-1 rounded text-xs">localhost:8080</code> with your local service address.
         </p>
+        <div class="bg-blue-50 border border-blue-200 text-blue-800 text-sm px-3 py-2 rounded">
+            <strong>Tip:</strong> in the tunnel's secret dialog, click <strong>Download client.toml</strong> for a ready-made config file (server, host key, and token pre-filled). Drop it at <code class="bg-white/60 px-1 rounded text-xs">/etc/gatecrash/client.toml</code> and just run <code class="bg-white/60 px-1 rounded text-xs">gatecrash</code> &mdash; ideal for running as a service. Use <code class="bg-white/60 px-1 rounded text-xs">gatecrash -c /path/to/client.toml</code> for a custom location.
+        </div>
+        <div class="space-y-2 mt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Verifying the server (host key)</p>
+            <p class="text-sm text-gray-600">
+                The <code class="bg-gray-100 px-1 rounded text-xs">--host-key</code> value pins the server's SSH host key so the client can't be silently redirected to an impostor. It's shown in the tunnel's secret dialog and at the bottom of this page. Treat a host-key mismatch as a red flag, not a nuisance &mdash; the client will refuse to connect.
+            </p>
+        </div>
         <div class="space-y-2 mt-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Multi-Target Routing</p>
             <p class="text-sm text-gray-600">
@@ -89,10 +98,10 @@
     <div class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
         <h2 class="text-base font-semibold">3. DNS Setup</h2>
         <p class="text-sm text-gray-600">
-            For HTTP tunnels, point your hostnames to this server's IP address using DNS A/AAAA records. TLS certificates will be automatically provisioned via ACME (Let's Encrypt) once DNS is configured.
+            For HTTP tunnels, point each hostname at this server's IP with a DNS A/AAAA record. TLS certificates are provisioned automatically via Let's Encrypt once the name resolves here and ports <strong>80</strong> and <strong>443</strong> are reachable from the internet.
         </p>
         <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
-            DNS changes can take up to 48 hours to propagate. Certificate provisioning will retry automatically.
+            Until a certificate is issued, the server falls back to a self-signed certificate and browsers show a warning. The first certificate usually takes ~30s after DNS resolves; if the warning persists, check that DNS points here and ports 80/443 are open (the server logs an actionable hint). DNS changes can take time to propagate.
         </div>
     </div>
 
@@ -135,8 +144,17 @@
         <div class="space-y-2">
             <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Protecting tunnels</p>
             <p class="text-sm text-gray-600">
-                Create an <strong>Auth Policy</strong> (under Access Policies) selecting which users may access it, then assign it to an HTTP tunnel. Visitors are sent to the admin host to sign in with a passkey and bounced back. The user's ID is injected as <code class="bg-gray-100 px-1 rounded text-xs">x-Gatecrash-User</code> (header name configurable) along with <code class="bg-gray-100 px-1 rounded text-xs">X-Gatecrash-Role</code>. An auth policy can also carry an optional <strong>static password</strong> (HTTP Basic) for non-interactive clients. Auth policies are HTTP-only (not available with TLS passthrough).
+                Create an <strong>Auth Policy</strong> (under Access Policies) selecting which users may access it, then assign it to an HTTP tunnel. Visitors are sent to the admin host to sign in with a passkey and bounced back. On success the backend receives the user's name on <code class="bg-gray-100 px-1 rounded text-xs">x-Gatecrash-User</code> (header name configurable), the stable ID on <code class="bg-gray-100 px-1 rounded text-xs">X-Gatecrash-Id</code>, and the role on <code class="bg-gray-100 px-1 rounded text-xs">X-Gatecrash-Role</code>. The whole <code class="bg-gray-100 px-1 rounded text-xs">X-Gatecrash-*</code> namespace is stripped from inbound requests, so it can't be spoofed. Auth policies are HTTP-only (not available with TLS passthrough).
             </p>
+        </div>
+        <div class="space-y-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Service secret (machines &amp; CI)</p>
+            <p class="text-sm text-gray-600">
+                For non-interactive clients (scripts, CI, webhooks), generate a <strong>service secret</strong> on the auth policy &mdash; a strong random credential shown <strong>once</strong>. Send it as HTTP Basic (<code class="bg-gray-100 px-1 rounded text-xs">curl -u service:&lt;secret&gt;</code>; the username isn't checked). It grants access <em>independent of the user list</em>, so use it only for trusted automation. Remove or regenerate it to revoke.
+            </p>
+        </div>
+        <div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-3 py-2 rounded">
+            <strong>Security:</strong> passkey sign-in requires user verification (biometric/PIN). Logging out, resetting a user's passkeys, changing their role, or deleting them immediately invalidates that user's sessions on <em>every</em> device &mdash; a captured cookie stops working at once.
         </div>
     </div>
 

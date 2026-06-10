@@ -1,16 +1,10 @@
 {{define "content"}}
 <div x-data="passkeysPage()" class="max-w-3xl mx-auto">
-    <div class="flex justify-between items-start mb-1 gap-3">
+    <div class="flex justify-between items-center mb-1 gap-3">
         <h1 class="text-lg font-bold">Your passkeys</h1>
-        <div class="flex items-center gap-2">
-            <input x-model="newName" type="text" maxlength="48" placeholder="Name (e.g. MacBook)"
-                   @keydown.enter="doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn', newName)"
-                   class="border border-gray-300 rounded px-2 py-1.5 text-xs w-44 focus:outline-none focus:ring-1 focus:ring-blue-500">
-            <button id="register-btn" @click="doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn', newName)"
-                    class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors whitespace-nowrap">
-                Add passkey
-            </button>
-        </div>
+        <button @click="openAdd()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors whitespace-nowrap">
+            Add passkey
+        </button>
     </div>
     <p class="text-xs text-gray-500 mb-3">Signed in as <strong>{{.Name}}</strong>{{if .IsAdmin}} (admin){{end}}.</p>
     <p id="status" class="text-xs mb-3 text-gray-500"></p>
@@ -60,11 +54,35 @@
                 <h2 class="text-base font-semibold text-gray-900 mb-1">A little love letter to passkeys</h2>
                 <p class="mb-3">No passwords here — and that's the point. A passkey is a cryptographic key that lives on your device (your laptop, phone, or a hardware key) and is unlocked with the thing you already use to unlock it: a fingerprint, your face, or a PIN. Gatecrash only ever sees the public half, so there's nothing to leak, phish, or reuse.</p>
                 <ul class="space-y-1.5">
-                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Phishing-resistant.</strong> A passkey is bound to this site's domain — it simply won't work on a look-alike.</span></li>
-                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Nothing to remember or type.</strong> No password to forget, rotate, or have stolen in a breach.</span></li>
-                    <li class="flex items-start gap-2"><span class="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>One per device, as many as you like.</strong> Add a passkey on each device you sign in from — give them names so you can tell them apart and remove one if a device is lost.</span></li>
+                    <li class="flex items-start gap-2"><span class="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Phishing-resistant.</strong> A passkey is bound to this site's domain — it simply won't work on a look-alike.</span></li>
+                    <li class="flex items-start gap-2"><span class="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>Nothing to remember or type.</strong> No password to forget, rotate, or have stolen in a breach.</span></li>
+                    <li class="flex items-start gap-2"><span class="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span><span><strong>One per device, as many as you like.</strong> Add a passkey on each device you sign in from — give them names so you can tell them apart and remove one if a device is lost.</span></li>
                 </ul>
                 <p class="mt-3 text-xs text-gray-500">Tip: many platforms sync passkeys through your password manager or iCloud/Google account, so a passkey you create on your phone can follow you to your laptop.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Name-this-passkey modal (name is required before the ceremony runs) -->
+    <div x-show="addModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/50" @click="addModal = false"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4" @click.stop>
+            <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+                <h3 class="text-base font-semibold">Add a passkey</h3>
+                <button @click="addModal = false" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+            </div>
+            <div class="px-5 py-4">
+                <label class="block text-xs font-medium text-gray-600 mb-1">Name <span class="text-red-500">*</span></label>
+                <input x-model="newName" x-ref="nameInput" type="text" maxlength="48" placeholder="e.g. MacBook Pro, iPhone, YubiKey"
+                       @keydown.enter="startAdd()" @input="addError = ''"
+                       class="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                       :class="addError ? 'border-red-300' : 'border-gray-300'">
+                <p class="text-xs text-gray-400 mt-1">Give this device a label so you can tell your passkeys apart later.</p>
+                <p x-show="addError" x-text="addError" class="text-xs text-red-600 mt-1"></p>
+            </div>
+            <div class="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
+                <button @click="addModal = false" class="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
+                <button id="register-btn" @click="startAdd()" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">Continue</button>
             </div>
         </div>
     </div>
@@ -75,7 +93,14 @@
 function passkeysPage() {
     const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
     return {
-        newName: '',
+        newName: '', addModal: false, addError: '',
+        openAdd() { this.newName = ''; this.addError = ''; this.addModal = true; this.$nextTick(() => this.$refs.nameInput?.focus()); },
+        startAdd() {
+            const name = (this.newName || '').trim();
+            if (!name) { this.addError = 'Please name this passkey.'; this.$refs.nameInput?.focus(); return; }
+            this.addModal = false;
+            doRegister('/auth/register/begin', '/auth/register/finish', 'register-btn', name);
+        },
         async remove(id) {
             if (!confirm('Remove this passkey? You won\'t be able to sign in with it.')) return;
             const resp = await fetch('/api/passkeys/delete', {

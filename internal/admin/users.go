@@ -65,6 +65,17 @@ type User struct {
 
 func (u *User) IsAdmin() bool     { return u.Role == RoleAdmin }
 func (u *User) HasPasskeys() bool { return len(u.Credentials) > 0 }
+
+// CredentialName returns the label of the credential with the given ID, or "" if
+// the user has no such credential. Used to record which passkey was used.
+func (u *User) CredentialName(id []byte) string {
+	for _, c := range u.Credentials {
+		if bytes.Equal(c.ID, id) {
+			return c.Name
+		}
+	}
+	return ""
+}
 func (u *User) InviteActive(now time.Time) bool {
 	return u.InviteToken != "" && now.Before(u.InviteExpires)
 }

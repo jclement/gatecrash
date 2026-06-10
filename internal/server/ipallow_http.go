@@ -129,7 +129,6 @@ func (s *Server) serveIPAuthorizedPage(w http.ResponseWriter, _ *http.Request, t
 	})
 }
 
-
 // handleListPolicyIPs returns an IP policy's permanent ranges and live grants.
 func (s *Server) handleListPolicyIPs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
