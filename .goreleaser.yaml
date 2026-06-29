@@ -48,7 +48,8 @@ archives:
       - tar.gz
 
 brews:
-  - ids: [gatecrash-server-homebrew]
+  - directory: Formula
+    ids: [gatecrash-server-homebrew]
     name: gatecrash-server
     repository:
       owner: jclement
