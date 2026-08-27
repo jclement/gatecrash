@@ -3,9 +3,12 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jclement/gatecrash/internal/config"
@@ -177,5 +180,72 @@ func (s *Server) handleRevokePolicyIP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditLog.Log(s.actorName(r), "ip_policy.revoke",
 		fmt.Sprintf("Revoked IP %s from ip_policy %q", ip, id))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePromotePolicyIP converts a self-service (TTL'd) grant into a permanent
+// range on the IP policy. The IP is appended to the policy's ranges with the
+// supplied comment (or the comment updated if the exact IP is already listed),
+// the config is saved and reloaded, and the temporary grant is then removed
+// since the permanent entry supersedes it.
+func (s *Server) handlePromotePolicyIP(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ip := r.PathValue("ip")
+	if net.ParseIP(ip) == nil {
+		http.Error(w, "invalid ip", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+	}
+	comment := strings.TrimSpace(req.Comment)
+
+	s.cfgMu.Lock()
+	found := false
+	for i := range s.cfg.IPPolicy {
+		if s.cfg.IPPolicy[i].ID != id {
+			continue
+		}
+		found = true
+		pol := &s.cfg.IPPolicy[i]
+		exists := false
+		for j := range pol.Ranges {
+			if pol.Ranges[j].CIDR == ip {
+				exists = true
+				if comment != "" {
+					pol.Ranges[j].Comment = comment
+				}
+			}
+		}
+		if !exists {
+			pol.Ranges = append(pol.Ranges, config.IPRange{CIDR: ip, Comment: comment})
+		}
+		break
+	}
+	if !found {
+		s.cfgMu.Unlock()
+		http.Error(w, "policy not found", http.StatusNotFound)
+		return
+	}
+	err := s.saveAndReloadPoliciesLocked()
+	s.cfgMu.Unlock()
+	if err != nil {
+		slog.Error("failed to save config", "policy", id, "ip", ip, "error", err)
+		http.Error(w, "failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	// The permanent range now covers this IP; the temporary grant is redundant.
+	if err := s.ipAllow.Revoke(id, ip); err != nil {
+		slog.Warn("failed to drop grant after promotion", "policy", id, "ip", ip, "error", err)
+	}
+	s.auditLog.Log(s.actorName(r), "ip_policy.promote",
+		fmt.Sprintf("Made IP %s permanent in ip_policy %q (%s)", ip, id, comment))
 	w.WriteHeader(http.StatusNoContent)
 }

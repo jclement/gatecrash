@@ -145,7 +145,7 @@
                                     <td class="py-1.5"><code class="text-xs" x-text="g.ip"></code></td>
                                     <td class="py-1.5 text-gray-600 text-xs" x-text="g.granted_by || '—'"></td>
                                     <td class="py-1.5 text-gray-600 text-xs" x-text="expiresLabel(g.expires_at)"></td>
-                                    <td class="py-1.5 text-right"><button @click="revokeGrant(g.ip)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Revoke</button></td>
+                                    <td class="py-1.5 text-right whitespace-nowrap"><button @click="promoteGrant(g)" class="text-xs bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 rounded font-medium mr-1">Make permanent</button><button @click="revokeGrant(g.ip)" class="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded font-medium">Revoke</button></td>
                                 </tr>
                             </template>
                         </tbody>
@@ -311,6 +311,15 @@ function accessPolicies() {
             if (this.auth(resp)) return;
             if (!resp.ok) { this.toast('Failed'); return; }
             this.openIPDetail(this.ipDetail.id);
+        },
+        async promoteGrant(g) {
+            const comment = prompt('Add ' + g.ip + ' as a permanent range. Comment (optional):', g.granted_by ? 'granted by ' + g.granted_by : '');
+            if (comment === null) return;
+            const resp = await fetch('/api/ip-policies/' + encodeURIComponent(this.ipDetail.id) + '/ips/' + encodeURIComponent(g.ip) + '/permanent', { method: 'POST', headers: headers(), body: JSON.stringify({ comment: comment.trim() }) });
+            if (this.auth(resp)) return;
+            if (!resp.ok) { this.toast('Failed: ' + await resp.text()); return; }
+            this.toast(g.ip + ' is now permanent');
+            this.openIPDetail(this.ipDetail.id); this.load();
         },
         async rotateEnroll() {
             const resp = await fetch('/api/ip-policies/' + encodeURIComponent(this.ipDetail.id) + '/enroll-token', { method: 'POST', headers: headers() });

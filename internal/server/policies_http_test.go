@@ -118,3 +118,80 @@ func TestAuthPolicyCRUD_ServiceSecret(t *testing.T) {
 }
 
 func parseIPHelper(s string) net.IP { return net.ParseIP(s) }
+
+func TestPromotePolicyIP(t *testing.T) {
+	s := newPolicyTestServer(t)
+	var err error
+	s.ipAllow, err = NewIPAllowStore(filepath.Join(t.TempDir(), "ip_allowlist.json"))
+	if err != nil {
+		t.Fatalf("NewIPAllowStore: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleSaveIPPolicy(rec, httptest.NewRequest("POST", "/api/ip-policies", strings.NewReader(`{"id":"internal","ranges":[{"cidr":"10.0.0.0/8","comment":"lan"}]}`)))
+	if rec.Code != 200 {
+		t.Fatalf("save failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := s.ipAllow.Grant("internal", "203.0.113.5", "alice", time.Hour); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/ip-policies/internal/ips/203.0.113.5/permanent", strings.NewReader(`{"comment":"alice home"}`))
+	req.SetPathValue("id", "internal")
+	req.SetPathValue("ip", "203.0.113.5")
+	rec = httptest.NewRecorder()
+	s.handlePromotePolicyIP(rec, req)
+	if rec.Code != 204 {
+		t.Fatalf("promote failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Permanent range added with the comment, applied live, and the grant dropped.
+	pol := s.registry.FindIPPolicy("internal")
+	if pol == nil || !pol.Allows(parseIPHelper("203.0.113.5")) {
+		t.Fatal("promoted IP not allowed by registry policy")
+	}
+	var found bool
+	for _, rg := range pol.Ranges {
+		if rg.CIDR == "203.0.113.5" && rg.Comment == "alice home" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected permanent range with comment, got %+v", pol.Ranges)
+	}
+	if len(s.ipAllow.List("internal")) != 0 {
+		t.Fatal("temporary grant should be removed after promotion")
+	}
+
+	// Idempotent: promoting again updates the comment rather than duplicating.
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"comment":"updated"}`))
+	req.SetPathValue("id", "internal")
+	req.SetPathValue("ip", "203.0.113.5")
+	rec = httptest.NewRecorder()
+	s.handlePromotePolicyIP(rec, req)
+	if rec.Code != 204 {
+		t.Fatalf("second promote failed: %d", rec.Code)
+	}
+	pol = s.registry.FindIPPolicy("internal")
+	if n := len(pol.Ranges); n != 2 {
+		t.Fatalf("expected 2 ranges, got %d: %+v", n, pol.Ranges)
+	}
+	if pol.Ranges[1].Comment != "updated" {
+		t.Fatalf("comment not updated: %+v", pol.Ranges[1])
+	}
+
+	// Unknown policy and bad IP are rejected.
+	for _, tc := range []struct {
+		id, ip string
+		want   int
+	}{{"nope", "203.0.113.5", 404}, {"internal", "not-an-ip", 400}} {
+		req = httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("id", tc.id)
+		req.SetPathValue("ip", tc.ip)
+		rec = httptest.NewRecorder()
+		s.handlePromotePolicyIP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s/%s: got %d want %d", tc.id, tc.ip, rec.Code, tc.want)
+		}
+	}
+}

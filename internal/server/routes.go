@@ -64,6 +64,7 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}", s.requireAdminCSRF(s.handleDeleteIPPolicy))
 	s.adminMux.HandleFunc("GET /api/ip-policies/{id}/ips", s.requireAdminAPI(s.handleListPolicyIPs))
 	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/ips/{ip}", s.requireAdminCSRF(s.handleRevokePolicyIP))
+	s.adminMux.HandleFunc("POST /api/ip-policies/{id}/ips/{ip}/permanent", s.requireAdminCSRF(s.handlePromotePolicyIP))
 	s.adminMux.HandleFunc("POST /api/ip-policies/{id}/enroll-token", s.requireAdminCSRF(s.handleRotateEnrollToken))
 	s.adminMux.HandleFunc("DELETE /api/ip-policies/{id}/enroll-token", s.requireAdminCSRF(s.handleDeleteEnrollToken))
 	s.adminMux.HandleFunc("GET /api/auth-policies", s.requireAdminAPI(s.handleListAuthPolicies))
