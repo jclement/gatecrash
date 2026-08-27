@@ -116,3 +116,29 @@ func TestMarshalHTTPChannelData(t *testing.T) {
 		t.Fatal("marshal returned empty data")
 	}
 }
+
+func TestRemoveHopByHopHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("Connection", "keep-alive, X-Custom-Hop")
+	h.Set("Keep-Alive", "timeout=5")
+	h.Set("X-Custom-Hop", "1")
+	h.Set("Proxy-Connection", "keep-alive")
+	h.Set("Transfer-Encoding", "chunked")
+	h.Set("Upgrade", "h2c")
+	h.Set("Content-Type", "text/html")
+	h.Set("Set-Cookie", "a=b")
+	h.Set("X-Powered-By", "Express")
+
+	removeHopByHopHeaders(h)
+
+	for _, gone := range []string{"Connection", "Keep-Alive", "X-Custom-Hop", "Proxy-Connection", "Transfer-Encoding", "Upgrade"} {
+		if _, ok := h[gone]; ok {
+			t.Errorf("%s should have been stripped", gone)
+		}
+	}
+	for _, kept := range []string{"Content-Type", "Set-Cookie", "X-Powered-By"} {
+		if _, ok := h[kept]; !ok {
+			t.Errorf("%s should have been kept", kept)
+		}
+	}
+}

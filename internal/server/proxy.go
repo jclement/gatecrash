@@ -96,7 +96,11 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 		return
 	}
 
-	// Copy response headers
+	// Copy response headers, minus hop-by-hop ones. The backend speaks HTTP/1.1
+	// to the client agent, but the visitor may be on HTTP/2, where
+	// connection-specific headers (Connection, Keep-Alive, ...) are forbidden
+	// (RFC 9113 §8.2.2) and strict clients reject the whole response.
+	removeHopByHopHeaders(resp.Header)
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -243,4 +247,33 @@ func marshalHTTPChannelData(d *protocol.HTTPChannelData) []byte {
 		TLS:          d.TLS,
 		PreserveHost: d.PreserveHost,
 	})
+}
+
+// hopByHopHeaders are connection-level headers (RFC 9110 §7.6.1) that must not
+// be forwarded by a proxy. Mirrors the list used by httputil.ReverseProxy.
+var hopByHopHeaders = []string{
+	"Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"Proxy-Connection",
+	"Te",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
+
+// removeHopByHopHeaders strips hop-by-hop headers from h in place, including
+// any header the Connection field itself names as connection-specific.
+func removeHopByHopHeaders(h http.Header) {
+	for _, f := range h["Connection"] {
+		for _, name := range strings.Split(f, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				h.Del(name)
+			}
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
 }
