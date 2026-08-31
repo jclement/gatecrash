@@ -7,7 +7,7 @@ require (
 	github.com/caddyserver/certmagic v0.25.2
 	github.com/charmbracelet/log v1.0.0
 	github.com/coreos/go-oidc/v3 v3.17.0
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-webauthn/webauthn v0.16.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
