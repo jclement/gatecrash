@@ -27,7 +27,7 @@ func (s *Server) sessionUser(r *http.Request) *admin.User {
 // preserving the destination.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.webauthn.NeedsSetup() {
+		if s.webauthn.NeedsSetup() && !s.devNoAuth() {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}

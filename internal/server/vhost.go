@@ -246,6 +246,10 @@ func stripPort(host string) string {
 
 // serveAdmin applies security headers and delegates to the admin mux.
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
+	// Dev no-auth bypass: mint a dev-admin session for requests without one. A
+	// no-op in release builds (devEnsureSession is compiled out by devauth_off.go).
+	s.devEnsureSession(w, r)
+
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")

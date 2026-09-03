@@ -451,6 +451,11 @@ func (s *Server) initAdmin() error {
 	}
 	s.adminH = ah
 
+	// Provision the passkey-less dev admin when the no-auth bypass is active, so
+	// the session minted by devEnsureSession resolves to a real user record.
+	// Compiled out in release builds (devauth_off.go).
+	s.devSeedAdmin()
+
 	// Bootstrap the first admin via a one-time invite link written to the config
 	// dir and logged — no open first-login page to race on a public box.
 	s.writeBootstrapInvite(dataDir)

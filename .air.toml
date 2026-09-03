@@ -1,13 +1,16 @@
 root = "."
 tmp_dir = "tmp"
 
+# Hot-reload config for the dev server (see `mise run server` / `server:auth`).
+# Built with the `dev` build tag so the self-signed-TLS / no-auth bypass code is
+# compiled in. GATECRASH_DEV_NOAUTH is supplied by the mise task environment:
+# `server` sets it (no admin auth), `server:auth` leaves it unset (passkey auth).
 [build]
-cmd = "go build -ldflags=\"-X main.Version=dev\" -o ./tmp/gatecrash ./cmd/gatecrash"
-bin = "./tmp/gatecrash"
-args_bin = ["server", "--config", "gatecrash.toml", "--debug"]
+cmd = "go build -tags dev -ldflags=\"-X main.Version=dev\" -o ./tmp/gatecrash-server ./cmd/gatecrash-server"
+full_bin = "GATECRASH_DEV_SELFSIGNED=1 ./tmp/gatecrash-server --config .dev/gatecrash.toml --debug"
 include_ext = ["go", "html", "css"]
 include_dir = ["cmd", "internal", "web"]
-exclude_dir = ["tmp", "vendor", ".git", "dist", "bin", "data"]
+exclude_dir = ["tmp", "vendor", ".git", "dist", "bin", "data", ".dev"]
 delay = 500
 stop_on_error = true
 send_interrupt = true

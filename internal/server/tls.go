@@ -33,6 +33,22 @@ import (
 func (s *Server) setupTLS() (*tls.Config, error) {
 	hosts := s.cfg.AllHostnames()
 
+	// Dev self-signed mode: serve a self-signed certificate for the configured
+	// hostnames (plus localhost) instead of obtaining real ACME certs, so local
+	// HTTPS testing on lvh.me works offline. Dev-only; compiled out in releases.
+	if s.devSelfSigned() {
+		certHosts := append([]string{"localhost"}, hosts...)
+		slog.Warn("DEV SELF-SIGNED TLS — serving an untrusted certificate", "hosts", certHosts)
+		cert, err := generateSelfSignedCert(certHosts)
+		if err != nil {
+			return nil, fmt.Errorf("generating self-signed cert: %w", err)
+		}
+		return &tls.Config{
+			Certificates: []tls.Certificate{*cert},
+			NextProtos:   []string{"h2", "http/1.1"},
+		}, nil
+	}
+
 	// Dev mode with nothing configured → self-signed cert for localhost
 	if s.version == "dev" && len(hosts) == 0 {
 		slog.Info("dev mode, no hostnames configured, using self-signed certificate")
