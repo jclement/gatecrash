@@ -95,3 +95,59 @@ func shortHeaderTimeoutTransport() *http.Transport {
 	tr.ResponseHeaderTimeout = 50 * time.Millisecond
 	return tr
 }
+
+// TestNew_BackendTransportTuning pins the two backend-pool settings. Both are
+// easy to lose in a future Clone() refactor and neither fails loudly if dropped
+// — they just quietly cost a dial or a compress/decompress cycle per request.
+func TestNew_BackendTransportTuning(t *testing.T) {
+	tr, ok := New(Config{}, "test").httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected an *http.Transport, got %T", tr)
+	}
+	if tr.MaxIdleConnsPerHost != maxIdleConnsPerBackend {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d (Go's default of 2 forces a "+
+			"fresh backend dial on any burst past two concurrent requests)",
+			tr.MaxIdleConnsPerHost, maxIdleConnsPerBackend)
+	}
+	if !tr.DisableCompression {
+		t.Fatal("DisableCompression must stay set: otherwise the transport requests " +
+			"gzip the visitor never asked for and decompresses it again locally")
+	}
+}
+
+// TestDisableCompression_RelaysVisitorEncodingUntouched checks the property that
+// makes the setting safe: a visitor that asks for gzip still gets gzip, relayed
+// as the backend encoded it rather than decoded in transit.
+func TestDisableCompression_RelaysVisitorEncodingUntouched(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Echo what the transport actually asked the backend for.
+		w.Header().Set("X-Saw-Accept-Encoding", r.Header.Get("Accept-Encoding"))
+		w.Write([]byte("body"))
+	}))
+	defer srv.Close()
+
+	c := New(Config{}, "test")
+
+	// No Accept-Encoding from the visitor: the transport must not invent one.
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Saw-Accept-Encoding"); got != "" {
+		t.Fatalf("backend saw Accept-Encoding %q; the transport added one the visitor never sent", got)
+	}
+
+	// Visitor asked for gzip: it must be forwarded verbatim.
+	req2, _ := http.NewRequest("GET", srv.URL, nil)
+	req2.Header.Set("Accept-Encoding", "gzip")
+	resp2, err := c.httpClient.Do(req2)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp2.Body.Close()
+	if got := resp2.Header.Get("X-Saw-Accept-Encoding"); got != "gzip" {
+		t.Fatalf("backend saw Accept-Encoding %q, want \"gzip\"", got)
+	}
+}

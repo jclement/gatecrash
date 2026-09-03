@@ -43,6 +43,12 @@ type Config struct {
 // wedged backend does not accumulate stuck goroutines and SSH channels.
 const responseHeaderTimeout = 60 * time.Second
 
+// maxIdleConnsPerBackend caps idle keep-alive connections held open to the local
+// backend. Sized for a page load's worth of concurrent asset requests rather
+// than Go's default of 2, which forces a fresh dial for every request past the
+// second whenever a browser opens several at once.
+const maxIdleConnsPerBackend = 64
+
 // Client connects to the gatecrash server and handles tunnel requests.
 type Client struct {
 	cfg        Config
@@ -68,6 +74,27 @@ func New(cfg Config, version string) *Client {
 	// the deadline. ResponseHeaderTimeout stops at the response headers, so a hung
 	// backend is caught while a slow or endless *body* is left alone.
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
+
+	// Go's default is 2 idle connections per host, so a burst of more than two
+	// concurrent requests dials a fresh TCP connection to the backend for each
+	// one and discards it afterwards. The backend here is normally on localhost
+	// or a Docker bridge, where that churn is cheap but not free, and it leaves
+	// TIME_WAIT sockets behind under sustained load.
+	transport.MaxIdleConnsPerHost = maxIdleConnsPerBackend
+
+	// Do not let the transport add its own Accept-Encoding. When a visitor sends
+	// none (curl, monitors, most API clients), Go would request gzip from the
+	// backend and transparently decompress it here — the backend compresses and
+	// this process immediately undoes it, for a body that must go up the tunnel
+	// uncompressed either way because the visitor never asked for gzip. That is
+	// pure wasted CPU on both sides of the loopback, and it also erases the
+	// backend's Content-Length (forcing a chunked response through the tunnel).
+	//
+	// This does not reduce uplink bytes: what the visitor accepts decides what we
+	// must send. Visitors that DO send Accept-Encoding are unaffected either way,
+	// since that header is forwarded verbatim and Go leaves an explicitly
+	// requested encoding alone.
+	transport.DisableCompression = true
 	c.httpClient = &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
