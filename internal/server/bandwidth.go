@@ -35,8 +35,12 @@ func newBandwidthTracker(maxSamples int) *bandwidthTracker {
 
 // record takes current cumulative byte totals, computes rates, and appends a sample.
 func (bt *bandwidthTracker) record(totalIn, totalOut int64) {
-	now := time.Now()
+	bt.recordAt(time.Now(), totalIn, totalOut)
+}
 
+// recordAt is record with an explicit timestamp so callers (and tests) control
+// the clock. Samples are only produced when time has advanced (dt > 0).
+func (bt *bandwidthTracker) recordAt(now time.Time, totalIn, totalOut int64) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 

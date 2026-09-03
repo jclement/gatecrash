@@ -2,7 +2,11 @@ package server
 
 import (
 	"testing"
+	"time"
 )
+
+// t0 is a fixed base time for deterministic, clock-independent rate tests.
+var t0 = time.Unix(1700000000, 0)
 
 func TestBandwidthTracker_EmptyHistory(t *testing.T) {
 	bt := newBandwidthTracker(10)
@@ -24,8 +28,8 @@ func TestBandwidthTracker_FirstRecordNoSample(t *testing.T) {
 
 func TestBandwidthTracker_SecondRecordProducesSample(t *testing.T) {
 	bt := newBandwidthTracker(10)
-	bt.record(0, 0)
-	bt.record(1000, 2000)
+	bt.recordAt(t0, 0, 0)
+	bt.recordAt(t0.Add(time.Second), 1000, 2000)
 	h := bt.history()
 	if len(h) != 1 {
 		t.Fatalf("expected 1 sample, got %d", len(h))
@@ -46,7 +50,7 @@ func TestBandwidthTracker_RingBuffer(t *testing.T) {
 
 	// Record 5 samples (overflow capacity of 3)
 	for i := range 5 {
-		bt.record(int64(i*100), int64(i*200))
+		bt.recordAt(t0.Add(time.Duration(i)*time.Second), int64(i*100), int64(i*200))
 	}
 
 	h := bt.history()
@@ -62,9 +66,9 @@ func TestBandwidthTracker_RingBuffer(t *testing.T) {
 
 func TestBandwidthTracker_NegativeRateClamped(t *testing.T) {
 	bt := newBandwidthTracker(10)
-	bt.record(1000, 2000)
+	bt.recordAt(t0, 1000, 2000)
 	// Simulate counter decrease (shouldn't happen, but be defensive)
-	bt.record(500, 1000)
+	bt.recordAt(t0.Add(time.Second), 500, 1000)
 	h := bt.history()
 	if len(h) != 1 {
 		t.Fatalf("expected 1 sample, got %d", len(h))
@@ -79,8 +83,8 @@ func TestBandwidthTracker_NegativeRateClamped(t *testing.T) {
 
 func TestBandwidthTracker_HistoryIsCopy(t *testing.T) {
 	bt := newBandwidthTracker(10)
-	bt.record(0, 0)
-	bt.record(100, 200)
+	bt.recordAt(t0, 0, 0)
+	bt.recordAt(t0.Add(time.Second), 100, 200)
 
 	h1 := bt.history()
 	h2 := bt.history()
@@ -96,8 +100,8 @@ func TestBandwidthTracker_HistoryIsCopy(t *testing.T) {
 
 func TestBandwidthTracker_ZeroRates(t *testing.T) {
 	bt := newBandwidthTracker(10)
-	bt.record(100, 200)
-	bt.record(100, 200) // No change
+	bt.recordAt(t0, 100, 200)
+	bt.recordAt(t0.Add(time.Second), 100, 200) // No change
 	h := bt.history()
 	if len(h) != 1 {
 		t.Fatalf("expected 1 sample, got %d", len(h))
