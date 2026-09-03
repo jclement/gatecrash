@@ -28,6 +28,10 @@ var Version = "dev"
 // run as a service from a declarative file instead of a long flag string.
 const defaultClientConfigPath = "/etc/gatecrash/client.toml"
 
+// defaultTunnelConns is how many SSH connections the client opens to the server
+// when --count is not given. See the note where it is resolved.
+const defaultTunnelConns = 2
+
 // fileConfig mirrors the settings a client.toml may provide. Flags and env vars
 // take precedence over the file; the file takes precedence over built-in
 // defaults. Targets accept the same "host:port" / "hostname=host:port" forms as
@@ -88,7 +92,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  --token TOKEN        Tunnel token (or GATECRASH_TOKEN)\n")
 	fmt.Fprintf(os.Stderr, "  --target TARGET      Target address (repeatable, or GATECRASH_TARGET)\n")
 	fmt.Fprintf(os.Stderr, "  --host-key KEY       Server SSH host key fingerprint (or GATECRASH_HOST_KEY)\n")
-	fmt.Fprintf(os.Stderr, "  --count N            Number of tunnel connections (or GATECRASH_COUNT)\n")
+	fmt.Fprintf(os.Stderr, "  --count N            Number of tunnel connections (default 2, or GATECRASH_COUNT)\n")
 	fmt.Fprintf(os.Stderr, "  --debug              Enable debug logging\n")
 	fmt.Fprintf(os.Stderr, "\nTargets:\n")
 	fmt.Fprintf(os.Stderr, "  --target localhost:8080                  Default target\n")
@@ -197,7 +201,13 @@ func runClient(args []string) {
 	resolvedServer := resolveStr(set["server"], *serverAddr, "GATECRASH_SERVER", fc.Server, "")
 	resolvedToken := resolveStr(set["token"], *token, "GATECRASH_TOKEN", fc.Token, "")
 	resolvedHostKey := resolveStr(set["host-key"], *hostKey, "GATECRASH_HOST_KEY", fc.HostKey, "")
-	resolvedCount := resolveInt(set["count"], *count, "GATECRASH_COUNT", fc.Count, 1)
+	// Default to two connections. Every channel on one SSH connection serialises
+	// its packet writes through a single transport mutex held across a blocking
+	// socket flush, so one bulk transfer can stall unrelated requests behind it
+	// for as long as the home uplink takes to drain. A second connection gives
+	// small requests an independent lane (and an independent TCP congestion
+	// window), which the server's least-loaded selection will prefer.
+	resolvedCount := resolveInt(set["count"], *count, "GATECRASH_COUNT", fc.Count, defaultTunnelConns)
 	resolvedDebug := *debug || envBool("GATECRASH_DEBUG") || fc.Debug || Version == "dev"
 
 	// Targets: explicit --target wins, else env (comma-separated), else file.
