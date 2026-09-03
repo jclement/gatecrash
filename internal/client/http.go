@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -118,9 +119,16 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 
 	backendDone := time.Now()
 
-	// Write response back through the channel
-	if err := resp.Write(ch); err != nil {
+	// Write response back through the channel, joining the header block into a
+	// single SSH packet instead of the dozen-plus that Response.Write would emit.
+	// Body writes still pass straight through, so streaming is unaffected.
+	hw := &headerCoalescingWriter{dst: ch}
+	if err := resp.Write(hw); err != nil {
 		slog.Error("failed to write response to channel", "error", err)
+		return
+	}
+	if err := hw.Close(); err != nil {
+		slog.Error("failed to flush response headers to channel", "error", err)
 		return
 	}
 
@@ -276,4 +284,84 @@ func truncateURI(uri string) string {
 		return uri[:57] + "..."
 	}
 	return uri
+}
+
+// headerTerminator ends the HTTP header block.
+var headerTerminator = []byte("\r\n\r\n")
+
+// maxBufferedHeader bounds how much we will hold while looking for the end of
+// the header block, so a backend that never sends one cannot grow this buffer
+// without limit. Past it we give up coalescing and stream straight through.
+const maxBufferedHeader = 64 * 1024
+
+// headerCoalescingWriter joins an HTTP response's header block into a single
+// Write, then gets out of the way.
+//
+// http.Response.Write emits the status line, each transfer header, and each
+// header line as separate Writes — a dozen or more for a typical response. Every
+// Write on an ssh.Channel becomes its own SSH packet: encrypted, pushed through
+// the transport's single write mutex, and flushed as its own syscall and TCP
+// segment. Coalescing the header block turns that into one packet.
+//
+// It deliberately buffers ONLY up to the end of the headers. Wrapping the whole
+// response in a bufio.Writer would be simpler and would re-break Server-Sent
+// Events by holding body chunks, which is the bug this codebase just fixed.
+type headerCoalescingWriter struct {
+	dst  io.Writer
+	buf  []byte
+	done bool // header block emitted; everything after streams through
+}
+
+func (w *headerCoalescingWriter) Write(p []byte) (int, error) {
+	if w.done {
+		return w.dst.Write(p)
+	}
+	w.buf = append(w.buf, p...)
+
+	end := bytes.Index(w.buf, headerTerminator)
+	if end < 0 {
+		if len(w.buf) > maxBufferedHeader {
+			// No header terminator in sight; stop buffering rather than grow.
+			if err := w.flushBuffered(); err != nil {
+				return 0, err
+			}
+		}
+		return len(p), nil
+	}
+
+	// Emit the header block as one write, then whatever body bytes arrived with
+	// it as a second — never merged, so a first SSE event is not held back.
+	end += len(headerTerminator)
+	if _, err := w.dst.Write(w.buf[:end]); err != nil {
+		return 0, err
+	}
+	rest := w.buf[end:]
+	w.done, w.buf = true, nil
+	if len(rest) > 0 {
+		if _, err := w.dst.Write(rest); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+// flushBuffered emits anything still held and switches to pass-through.
+func (w *headerCoalescingWriter) flushBuffered() error {
+	w.done = true
+	if len(w.buf) == 0 {
+		return nil
+	}
+	buf := w.buf
+	w.buf = nil
+	_, err := w.dst.Write(buf)
+	return err
+}
+
+// Close flushes a header block that was never terminated, so a malformed
+// response is still relayed rather than silently swallowed.
+func (w *headerCoalescingWriter) Close() error {
+	if w.done {
+		return nil
+	}
+	return w.flushBuffered()
 }
