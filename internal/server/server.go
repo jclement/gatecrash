@@ -1227,7 +1227,8 @@ func (s *Server) handleTunnelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := tunnel.PickConn()
+	conn, releaseConn := tunnel.AcquireConn()
+	defer releaseConn()
 	if conn == nil {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		json.NewEncoder(w).Encode(diagEvent{Phase: "error", Error: "tunnel is offline"})

@@ -20,11 +20,18 @@ type TunnelMetrics struct {
 	LastRequestAt atomic.Value // time.Time
 }
 
-// clientConn represents one client connection in the pool.
+// clientConn represents one client connection in the pool. It is held by
+// pointer so inFlight can be updated without taking the registry write lock.
 type clientConn struct {
 	addr        string
 	connectedAt time.Time
 	version     string
+
+	// inFlight counts requests currently occupying this SSH connection. Every
+	// channel on a connection serialises its packet writes through one transport
+	// mutex, so spreading requests across connections is what keeps a trivial
+	// request from queueing behind a bulk transfer.
+	inFlight atomic.Int64
 }
 
 // TunnelState holds the runtime state for a configured tunnel.
@@ -39,7 +46,7 @@ type TunnelState struct {
 	AuthPolicyID   string // referenced auth_policy, or ""
 
 	mu      sync.RWMutex
-	clients map[ssh.Conn]clientConn
+	clients map[ssh.Conn]*clientConn
 	Metrics TunnelMetrics
 }
 
@@ -110,22 +117,65 @@ func (t *TunnelState) IsConnected() bool {
 }
 
 // PickConn returns a randomly selected SSH connection, or nil if none.
+// PickConn returns the connection with the fewest in-flight requests, so a
+// trivial request is not queued behind a bulk transfer when another connection
+// is idle. Ties are broken randomly to avoid always loading the same connection
+// when all are equal. Callers MUST pair this with ReleaseConn.
+//
+// It returns the chosen connection and its state; the state is nil only when
+// there are no connections, in which case the connection is nil too.
 func (t *TunnelState) PickConn() ssh.Conn {
+	conn, release := t.AcquireConn()
+	release() // caller is not tracking occupancy; don't leave the count raised
+	return conn
+}
+
+// AcquireConn picks the least-loaded connection and marks it busy. The returned
+// release func MUST be called when the request finishes; it is safe to call on a
+// nil connection, so callers can defer it unconditionally.
+func (t *TunnelState) AcquireConn() (ssh.Conn, func()) {
+	conn, state := t.acquireConn()
+	return conn, func() { ReleaseConn(state) }
+}
+
+// acquireConn picks the least-loaded connection and increments its in-flight
+// count. The returned *clientConn is what ReleaseConn decrements; returning it
+// directly avoids a second map lookup on the release path, and keeps the
+// accounting correct even if the connection is evicted from the pool meanwhile.
+func (t *TunnelState) acquireConn() (ssh.Conn, *clientConn) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	n := len(t.clients)
-	if n == 0 {
-		return nil
-	}
-	idx := rand.IntN(n)
-	i := 0
-	for conn := range t.clients {
-		if i == idx {
-			return conn
+
+	var best ssh.Conn
+	var bestState *clientConn
+	bestLoad := int64(-1)
+	seen := 0
+	for conn, state := range t.clients {
+		load := state.inFlight.Load()
+		switch {
+		case bestLoad < 0 || load < bestLoad:
+			best, bestState, bestLoad, seen = conn, state, load, 1
+		case load == bestLoad:
+			// Reservoir-sample among equally loaded connections so ties are
+			// spread rather than decided by Go's map iteration order.
+			seen++
+			if rand.IntN(seen) == 0 {
+				best, bestState = conn, state
+			}
 		}
-		i++
 	}
-	return nil
+	if bestState == nil {
+		return nil, nil
+	}
+	bestState.inFlight.Add(1)
+	return best, bestState
+}
+
+// ReleaseConn records that a request occupying the connection has finished.
+func ReleaseConn(state *clientConn) {
+	if state != nil {
+		state.inFlight.Add(-1)
+	}
 }
 
 // AddClient registers a new client connection.
@@ -133,9 +183,9 @@ func (t *TunnelState) AddClient(conn ssh.Conn, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.clients == nil {
-		t.clients = make(map[ssh.Conn]clientConn)
+		t.clients = make(map[ssh.Conn]*clientConn)
 	}
-	t.clients[conn] = clientConn{
+	t.clients[conn] = &clientConn{
 		addr:        addr,
 		connectedAt: time.Now(),
 	}
@@ -179,7 +229,6 @@ func (t *TunnelState) SetClientVersion(conn ssh.Conn, version string) {
 	defer t.mu.Unlock()
 	if c, ok := t.clients[conn]; ok {
 		c.version = version
-		t.clients[conn] = c
 	}
 }
 

@@ -360,3 +360,52 @@ func TestRegistry_ReloadVsConfigReads(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestAcquireConn_PrefersLeastLoaded is the point of load-aware selection: a
+// trivial request must not be handed the connection already carrying a bulk
+// transfer while another sits idle. Random selection got this right only half
+// the time with two connections.
+func TestAcquireConn_PrefersLeastLoaded(t *testing.T) {
+	tunnel := &TunnelState{ID: "t1"}
+	busy, idle := fakeConn(1), fakeConn(2)
+	tunnel.AddClient(busy, "10.0.0.1:1")
+	tunnel.AddClient(idle, "10.0.0.2:2")
+
+	// Occupy one connection, as a long-running bulk response would.
+	held, releaseHeld := tunnel.AcquireConn()
+	defer releaseHeld()
+
+	// Every subsequent pick must land on the other one.
+	for i := range 20 {
+		got, release := tunnel.AcquireConn()
+		if got == held {
+			t.Fatalf("pick %d chose the busy connection while an idle one existed", i)
+		}
+		release()
+	}
+}
+
+// TestAcquireConn_ReleaseRestoresBalance guards the release path: if a release
+// were missed the connection would look permanently busy and never be chosen
+// again, silently collapsing the pool to one connection.
+func TestAcquireConn_ReleaseRestoresBalance(t *testing.T) {
+	tunnel := &TunnelState{ID: "t1"}
+	a, b := fakeConn(1), fakeConn(2)
+	tunnel.AddClient(a, "10.0.0.1:1")
+	tunnel.AddClient(b, "10.0.0.2:2")
+
+	// Churn through many acquire/release cycles.
+	for range 50 {
+		_, release := tunnel.AcquireConn()
+		release()
+	}
+
+	// Both connections must be back at zero, so both remain selectable.
+	tunnel.mu.RLock()
+	defer tunnel.mu.RUnlock()
+	for conn, state := range tunnel.clients {
+		if n := state.inFlight.Load(); n != 0 {
+			t.Fatalf("connection %v left with inFlight=%d, want 0", conn, n)
+		}
+	}
+}

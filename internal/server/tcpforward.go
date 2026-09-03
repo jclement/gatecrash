@@ -128,7 +128,8 @@ func (s *Server) handleTCPConn(conn net.Conn, tunnel *TunnelState) {
 		}
 	}
 
-	sshConn := tunnel.PickConn()
+	sshConn, releaseConn := tunnel.AcquireConn()
+	defer releaseConn()
 	if sshConn == nil {
 		slog.Debug("TCP forward: tunnel offline", "tunnel", tunnel.ID, "remote", conn.RemoteAddr())
 		return
