@@ -53,6 +53,12 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	}
 	defer req.Body.Close()
 
+	// The request only arrives once the edge has pushed it down the tunnel, so
+	// this first span is essentially the edge→here network leg. Splitting it out
+	// is what makes the total interpretable: a request that is slow here is slow
+	// on the wire, not in the backend.
+	requestRead := time.Now()
+
 	// Inject standard forwarding headers
 	// X-Forwarded-For: append client IP
 	if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
@@ -110,13 +116,25 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	}
 	defer resp.Body.Close()
 
+	backendDone := time.Now()
+
 	// Write response back through the channel
 	if err := resp.Write(ch); err != nil {
 		slog.Error("failed to write response to channel", "error", err)
 		return
 	}
 
-	elapsed := time.Since(start)
+	// Note this span measures handing the response to the SSH transport, not its
+	// arrival at the edge: the per-channel window is 2MB, so anything smaller
+	// returns as soon as the bytes are queued. It goes up when the response is
+	// large enough to wait on flow control, or when another channel on this
+	// connection is saturating the uplink.
+	writeDone := time.Now()
+
+	readMS := requestRead.Sub(start).Milliseconds()
+	backendMS := backendDone.Sub(requestRead).Milliseconds()
+	writeMS := writeDone.Sub(backendDone).Milliseconds()
+	elapsed := writeDone.Sub(start)
 
 	// Compute response size from Content-Length or estimate
 	respSize := resp.ContentLength
@@ -131,6 +149,9 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 		"status", resp.StatusCode,
 		"size", respSize,
 		"duration", elapsed.Round(time.Millisecond),
+		"read_ms", readMS,
+		"backend_ms", backendMS,
+		"write_ms", writeMS,
 		"from", data.RemoteAddr,
 	)
 
@@ -143,6 +164,9 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 		slog.Info(fmt.Sprintf("%s %s → %s", data.Method, truncateURI(data.URI), statusStr),
 			"host", data.Host,
 			"ms", elapsed.Milliseconds(),
+			"read_ms", readMS,
+			"backend_ms", backendMS,
+			"write_ms", writeMS,
 		)
 	}
 }
