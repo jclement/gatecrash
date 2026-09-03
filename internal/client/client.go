@@ -37,6 +37,12 @@ type Config struct {
 	Routes     map[string]RouteTarget // hostname or "tcp" → target
 }
 
+// responseHeaderTimeout bounds how long the local backend may take to produce
+// response headers before the request is failed as a 502. Generous enough not to
+// trip a slow first byte on a cold-start or a heavy query, short enough that a
+// wedged backend does not accumulate stuck goroutines and SSH channels.
+const responseHeaderTimeout = 60 * time.Second
+
 // Client connects to the gatecrash server and handles tunnel requests.
 type Client struct {
 	cfg        Config
@@ -52,6 +58,16 @@ func New(cfg Config, version string) *Client {
 	if cfg.TargetTLS == "tls-insecure" {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	// Bound a backend that accepts the connection and then never answers.
+	// Without this the forwarding goroutine — and the SSH channel it holds —
+	// parks forever, since nothing else in the path has a deadline.
+	//
+	// This is deliberately ResponseHeaderTimeout rather than http.Client.Timeout:
+	// Client.Timeout covers reading the body too, which would sever every
+	// long-lived response (Server-Sent Events, streaming downloads, long-poll) at
+	// the deadline. ResponseHeaderTimeout stops at the response headers, so a hung
+	// backend is caught while a slow or endless *body* is left alone.
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	c.httpClient = &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
