@@ -53,6 +53,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 	// channels leave the pool empty, so ch is nil for them and the on-demand path
 	// below runs exactly as it always has.
 	ch := takeWarmChannel(connState)
+	warm := ch != nil
 	if ch != nil {
 		// The metadata that the on-demand path passes in the channel-open
 		// ExtraData has to travel on the channel here, because the channel was
@@ -66,7 +67,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 			slog.Debug("warm channel unusable, falling back to on-demand open",
 				"tunnel", tunnel.ID, "error", err)
 			ch.Close()
-			ch = nil
+			ch, warm = nil, false
 		}
 	}
 
@@ -170,6 +171,10 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 		"status", resp.StatusCode,
 		"bytes_out", n,
 		"from", clientIP,
+		// Whether this request skipped the channel-open round trip. A tunnel
+		// showing warm=false for everything is talking to a client too old to
+		// pre-open channels, or draining its pool faster than it refills.
+		"warm", warm,
 	)
 }
 
