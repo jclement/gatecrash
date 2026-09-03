@@ -24,10 +24,37 @@ type diagEvent struct {
 }
 
 const (
-	diagPingCount     = 20
-	diagRoundSize     = 1 * 1024 * 1024 // 1 MiB per transfer round
+	diagPingCount = 20
+	// diagRoundSizeInitial is the first round's size. Each round costs one
+	// message/ack round trip, so a fixed small round caps the measurable rate at
+	// roundSize/RTT regardless of the real link — at 1 MiB and 100ms RTT that is
+	// ~84 Mbps, which the tunnel can exceed. Start small to probe, then adapt.
+	diagRoundSizeInitial = 1 * 1024 * 1024
+	diagRoundSizeMax     = 32 * 1024 * 1024
+	// diagRoundTarget is how long one round should ideally take. Sizing rounds to
+	// this keeps the per-round ack a small fraction of the round on any link.
+	diagRoundTarget   = time.Second
 	diagThroughputDur = 10 * time.Second
 )
+
+// nextRoundSize scales the next transfer round so it takes roughly
+// diagRoundTarget at the rate just measured, keeping the per-round
+// acknowledgement from dominating the result on a fast link while not
+// overshooting the overall budget on a slow one.
+func nextRoundSize(current int, elapsed time.Duration) int {
+	if elapsed <= 0 {
+		return current
+	}
+	scaled := float64(current) * (float64(diagRoundTarget) / float64(elapsed))
+	next := int(scaled)
+	if next < diagRoundSizeInitial {
+		next = diagRoundSizeInitial
+	}
+	if next > diagRoundSizeMax {
+		next = diagRoundSizeMax
+	}
+	return next
+}
 
 type eventWriter func(e diagEvent)
 
@@ -102,17 +129,18 @@ func runStreamDownload(ch gossh.Channel, emit eventWriter) error {
 	start := time.Now()
 	deadline := start.Add(diagThroughputDur)
 	var totalBytes int64
+	roundSize := diagRoundSizeInitial
 
 	for time.Now().Before(deadline) {
 		// Tell client about this round
-		msg := protocol.DiagMessage{Type: protocol.DiagDownload, Size: diagRoundSize}
+		msg := protocol.DiagMessage{Type: protocol.DiagDownload, Size: roundSize}
 		if err := writeDiagMsg(ch, &msg); err != nil {
 			return err
 		}
 
 		// Send the round's payload
 		roundStart := time.Now()
-		remaining := diagRoundSize
+		remaining := roundSize
 		for remaining > 0 {
 			n := len(buf)
 			if n > remaining {
@@ -134,9 +162,11 @@ func runStreamDownload(ch gossh.Channel, emit eventWriter) error {
 			return fmt.Errorf("unexpected ack: %s", ack.Type)
 		}
 
-		totalBytes += int64(diagRoundSize)
-		roundMs := float64(time.Since(roundStart).Microseconds()) / 1000.0
-		mbps := float64(diagRoundSize) * 8.0 / (roundMs / 1000.0) / 1e6
+		roundElapsed := time.Since(roundStart)
+		totalBytes += int64(roundSize)
+		roundMs := float64(roundElapsed.Microseconds()) / 1000.0
+		mbps := float64(roundSize) * 8.0 / (roundMs / 1000.0) / 1e6
+		roundSize = nextRoundSize(roundSize, roundElapsed)
 
 		emit(diagEvent{
 			Phase: "download",
@@ -160,10 +190,11 @@ func runStreamUpload(ch gossh.Channel, emit eventWriter) error {
 	start := time.Now()
 	deadline := start.Add(diagThroughputDur)
 	var totalBytes int64
+	roundSize := diagRoundSizeInitial
 
 	for time.Now().Before(deadline) {
 		// Tell client to send a round
-		msg := protocol.DiagMessage{Type: protocol.DiagUpload, Size: diagRoundSize}
+		msg := protocol.DiagMessage{Type: protocol.DiagUpload, Size: roundSize}
 		if err := writeDiagMsg(ch, &msg); err != nil {
 			return err
 		}
@@ -179,7 +210,7 @@ func runStreamUpload(ch gossh.Channel, emit eventWriter) error {
 
 		// Read the round's payload
 		roundStart := time.Now()
-		remaining := diagRoundSize
+		remaining := roundSize
 		for remaining > 0 {
 			n := len(buf)
 			if n > remaining {
@@ -192,9 +223,11 @@ func runStreamUpload(ch gossh.Channel, emit eventWriter) error {
 			remaining -= nr
 		}
 
-		totalBytes += int64(diagRoundSize)
-		roundMs := float64(time.Since(roundStart).Microseconds()) / 1000.0
-		mbps := float64(diagRoundSize) * 8.0 / (roundMs / 1000.0) / 1e6
+		roundElapsed := time.Since(roundStart)
+		totalBytes += int64(roundSize)
+		roundMs := float64(roundElapsed.Microseconds()) / 1000.0
+		mbps := float64(roundSize) * 8.0 / (roundMs / 1000.0) / 1e6
+		roundSize = nextRoundSize(roundSize, roundElapsed)
 
 		emit(diagEvent{
 			Phase: "upload",
