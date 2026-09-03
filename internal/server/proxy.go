@@ -109,7 +109,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 	w.WriteHeader(resp.StatusCode)
 
 	// Stream response body with byte counting
-	n, _ := io.Copy(w, resp.Body)
+	n, _ := flushingCopy(w, resp.Body)
 	tunnel.Metrics.BytesOut.Add(n)
 
 	slog.Debug("http request proxied",
@@ -160,6 +160,43 @@ func (s *Server) handleWebSocketUpgrade(w http.ResponseWriter, ch gossh.Channel,
 	}()
 	<-done
 	<-done
+}
+
+// flushingCopy is io.Copy that flushes dst after every chunk, so a response the
+// backend produces incrementally (Server-Sent Events, chunked JSON, long-poll,
+// streamed progress output) reaches the visitor as it is produced.
+//
+// Without the flush, net/http's ResponseWriter holds written bytes in its ~2KB
+// buffer until enough accumulate or the handler returns — so an SSE stream, whose
+// whole point is that it never ends, stays invisible in the browser indefinitely.
+// Flushing per chunk rather than per write keeps the syscall cost negligible:
+// io.Copy-sized reads mean one flush per 32KB on a bulk download.
+func flushingCopy(dst io.Writer, src io.Reader) (int64, error) {
+	flusher, _ := dst.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			total += int64(nw)
+			if ew != nil {
+				return total, ew
+			}
+			if nw < nr {
+				return total, io.ErrShortWrite
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				return total, nil
+			}
+			return total, er
+		}
+	}
 }
 
 // streamWriteIdleTimeout bounds how long a single write to a hijacked/streamed

@@ -1,7 +1,11 @@
 package server
 
 import (
+	"bytes"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jclement/gatecrash/internal/protocol"
@@ -140,5 +144,89 @@ func TestRemoveHopByHopHeaders(t *testing.T) {
 		if _, ok := h[kept]; !ok {
 			t.Errorf("%s should have been kept", kept)
 		}
+	}
+}
+
+// TestFlushingCopy_DeliversBeforeSourceEnds is the Server-Sent Events case: the
+// visitor must receive an event while the backend's stream is still open. With a
+// plain io.Copy the first read below blocks until the test times out, because the
+// bytes sit in the ResponseWriter buffer waiting for it to fill.
+func TestFlushingCopy_DeliversBeforeSourceEnds(t *testing.T) {
+	release := make(chan struct{})
+	pr, pw := io.Pipe()
+	go func() {
+		pw.Write([]byte("data: first\n\n"))
+		<-release // hold the stream open, exactly as a live SSE endpoint would
+		pw.Write([]byte("data: second\n\n"))
+		pw.Close()
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flushingCopy(w, pr)
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 64)
+	n, err := resp.Body.Read(buf)
+	if err != nil {
+		t.Fatalf("read first event: %v", err)
+	}
+	if got := string(buf[:n]); !strings.Contains(got, "first") {
+		t.Fatalf("expected the first event before the stream closed, got %q", got)
+	}
+	if strings.Contains(string(buf[:n]), "second") {
+		t.Fatal("second event arrived early; the stream was not held open")
+	}
+
+	close(release)
+	rest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read rest: %v", err)
+	}
+	if !strings.Contains(string(rest), "second") {
+		t.Fatalf("expected the second event after release, got %q", rest)
+	}
+}
+
+// TestFlushingCopy_CopiesEverything guards the ordinary bulk path: flushing must
+// not drop or reorder bytes on a body larger than the copy buffer.
+func TestFlushingCopy_CopiesEverything(t *testing.T) {
+	src := bytes.Repeat([]byte("abcdefgh"), 20000) // 160KB — several 32KB chunks
+	var dst bytes.Buffer
+	n, err := flushingCopy(&dst, bytes.NewReader(src))
+	if err != nil {
+		t.Fatalf("flushingCopy: %v", err)
+	}
+	if n != int64(len(src)) {
+		t.Fatalf("reported %d bytes, want %d", n, len(src))
+	}
+	if !bytes.Equal(dst.Bytes(), src) {
+		t.Fatal("copied bytes differ from source")
+	}
+}
+
+// TestFlushingCopy_ReportsSourceError proves a truncated backend body surfaces as
+// an error rather than passing for a clean end-of-stream.
+func TestFlushingCopy_ReportsSourceError(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		pw.Write([]byte("partial"))
+		pw.CloseWithError(io.ErrUnexpectedEOF)
+	}()
+
+	var dst bytes.Buffer
+	n, err := flushingCopy(&dst, pr)
+	if err == nil {
+		t.Fatal("expected an error from the truncated source, got nil")
+	}
+	if n != int64(len("partial")) {
+		t.Fatalf("expected the partial bytes to be reported, got %d", n)
 	}
 }
