@@ -105,7 +105,7 @@ func (c *Client) serveTunneledRequest(ch gossh.Channel, br *bufio.Reader, data p
 	// transport strips hop-by-hop headers (Connection, Upgrade). Dial the
 	// backend directly and do raw bidirectional piping.
 	if isUpgradeRequest(req) {
-		c.handleUpgrade(ch, req, data)
+		c.handleUpgrade(ch, br, req, data)
 		return
 	}
 
@@ -188,7 +188,12 @@ func (c *Client) serveTunneledRequest(ch gossh.Channel, br *bufio.Reader, data p
 // handleUpgrade dials the backend directly and pipes the raw connection
 // through the SSH channel. This preserves hop-by-hop headers (Connection,
 // Upgrade) that http.Client would strip.
-func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data protocol.HTTPChannelData) {
+// br must be the reader the request was parsed from. It can already hold bytes
+// that arrived behind the request headers, and those bytes belong to the
+// upgraded stream — piping from the raw channel instead would silently drop
+// them. The edge side has always done this correctly (it hands its own buffered
+// reader to the copy); this is the client side catching up.
+func (c *Client) handleUpgrade(ch gossh.Channel, br *bufio.Reader, req *http.Request, data protocol.HTTPChannelData) {
 	target, _, tlsMode := c.resolveTarget(data.Host)
 
 	var conn net.Conn
@@ -241,7 +246,7 @@ func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data protoco
 	// Bidirectional pipe: backend response + frames flow through the SSH channel
 	done := make(chan struct{}, 2)
 	go func() {
-		io.Copy(conn, ch) // SSH channel → backend
+		io.Copy(conn, br) // SSH channel (incl. anything already buffered) → backend
 		conn.Close()      // unblock the other goroutine
 		done <- struct{}{}
 	}()

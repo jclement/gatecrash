@@ -262,3 +262,95 @@ func splitHostPort(t *testing.T, addr string) (string, int) {
 	}
 	return host, port
 }
+
+// TestWarmPool_UpgradeOverWarmChannel is the case I am least sure of. The
+// upgrade path parses the request from a bufio.Reader and then pipes raw bytes
+// from the CHANNEL, not from that reader — so anything the reader buffered past
+// the request headers would be dropped. On a warm channel the prelude read makes
+// buffering strictly more likely, since bufio fills opportunistically.
+func TestWarmPool_UpgradeOverWarmChannel(t *testing.T) {
+	// A backend that completes an upgrade and then echoes.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		if _, err := http.ReadRequest(br); err != nil {
+			return
+		}
+		conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+		buf := make([]byte, 256)
+		for {
+			n, err := br.Read(buf)
+			if n > 0 {
+				conn.Write(append([]byte("echo:"), buf[:n]...))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	host, port := splitHostPort(t, ln.Addr().String())
+	c := New(Config{TargetHost: host, TargetPort: port}, "test")
+
+	_, serverChans, client := sshPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.maintainWarmPool(ctx, client, make(chan struct{}))
+
+	var ch gossh.Channel
+	select {
+	case newCh := <-serverChans:
+		var reqs <-chan *gossh.Request
+		ch, reqs, err = newCh.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		go gossh.DiscardRequests(reqs)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no warm channel offered")
+	}
+	defer ch.Close()
+
+	// Lease it with an upgrade request. Deliberately write the prelude, the
+	// request AND a first payload frame in quick succession, so the client's
+	// reader is likely to buffer past the request headers.
+	data := &protocol.HTTPChannelData{Method: "GET", URI: "/ws", Host: "h.test", RemoteAddr: "203.0.113.1"}
+	if err := protocol.WriteHTTPPrelude(ch, data); err != nil {
+		t.Fatalf("prelude: %v", err)
+	}
+	req, _ := http.NewRequest("GET", "http://h.test/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	if err := req.Write(ch); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	ch.Write([]byte("frame-one"))
+
+	br := bufio.NewReader(ch)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		t.Fatalf("read upgrade response: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+
+	// The frame sent before the upgrade completed must not have been swallowed.
+	got := make([]byte, 64)
+	n, err := br.Read(got)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if !strings.Contains(string(got[:n]), "frame-one") {
+		t.Fatalf("payload sent alongside the upgrade was lost; got %q", got[:n])
+	}
+}
