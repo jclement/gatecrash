@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -213,7 +214,8 @@ func TestFlushingCopy_CopiesEverything(t *testing.T) {
 }
 
 // TestFlushingCopy_ReportsSourceError proves a truncated backend body surfaces as
-// an error rather than passing for a clean end-of-stream.
+// a *sourceError, which is what tells proxyHTTP to abort the visitor's connection
+// rather than let net/http close the stream cleanly on a short body.
 func TestFlushingCopy_ReportsSourceError(t *testing.T) {
 	pr, pw := io.Pipe()
 	go func() {
@@ -226,7 +228,34 @@ func TestFlushingCopy_ReportsSourceError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error from the truncated source, got nil")
 	}
+	var srcErr *sourceError
+	if !errors.As(err, &srcErr) {
+		t.Fatalf("expected a *sourceError, got %T: %v", err, err)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected the underlying cause to unwrap, got %v", err)
+	}
 	if n != int64(len("partial")) {
 		t.Fatalf("expected the partial bytes to be reported, got %d", n)
 	}
 }
+
+// TestFlushingCopy_WriteErrorIsNotSourceError guards the other half of the
+// distinction: a visitor hanging up mid-response is routine and must NOT be
+// reported as a truncated backend body, or every cancelled request and closed SSE
+// stream would log an error and abort.
+func TestFlushingCopy_WriteErrorIsNotSourceError(t *testing.T) {
+	_, err := flushingCopy(failingWriter{}, strings.NewReader("hello"))
+	if err == nil {
+		t.Fatal("expected the write error to be reported, got nil")
+	}
+	var srcErr *sourceError
+	if errors.As(err, &srcErr) {
+		t.Fatal("a write failure must not be classified as a source error")
+	}
+}
+
+// failingWriter stands in for a visitor that has gone away mid-response.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("connection reset by peer") }

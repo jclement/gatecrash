@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -108,9 +109,29 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	// Stream response body with byte counting
-	n, _ := flushingCopy(w, resp.Body)
+	// Stream response body with byte counting.
+	n, copyErr := flushingCopy(w, resp.Body)
 	tunnel.Metrics.BytesOut.Add(n)
+
+	// A read failure here means the backend promised more body than it delivered
+	// (its keep-alive connection closed mid-response, say). The status line and
+	// headers are already on the wire, so this cannot be turned into a 502 — and
+	// staying silent is worse than it looks: on a chunked response net/http would
+	// terminate the stream cleanly, handing the visitor a short body that parses
+	// as a complete, successful reply. Abort the connection so it surfaces as the
+	// transport error it is. A write failure needs none of this: it just means the
+	// visitor hung up, which is routine on any streamed or cancelled request.
+	var srcErr *sourceError
+	if errors.As(copyErr, &srcErr) {
+		slog.Error("truncated response body from tunnel",
+			"tunnel", tunnel.ID,
+			"uri", data.URI,
+			"host", data.Host,
+			"bytes_out", n,
+			"error", srcErr,
+		)
+		panic(http.ErrAbortHandler)
+	}
 
 	slog.Debug("http request proxied",
 		"tunnel", tunnel.ID,
@@ -194,10 +215,20 @@ func flushingCopy(dst io.Writer, src io.Reader) (int64, error) {
 			if er == io.EOF {
 				return total, nil
 			}
-			return total, er
+			return total, &sourceError{err: er}
 		}
 	}
 }
+
+// sourceError marks a copy failure that came from READING the source — for
+// proxyHTTP, the tunnelled response body — as opposed to writing to the visitor.
+// The two need opposite handling: a write failure just means the visitor hung up,
+// which is routine, while a read failure means the backend's response was cut
+// short and the visitor is about to be handed a truncated one.
+type sourceError struct{ err error }
+
+func (e *sourceError) Error() string { return e.err.Error() }
+func (e *sourceError) Unwrap() error { return e.err }
 
 // streamWriteIdleTimeout bounds how long a single write to a hijacked/streamed
 // public connection may block before we give up on a stalled reader. It is a
