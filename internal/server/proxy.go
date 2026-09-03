@@ -18,7 +18,7 @@ import (
 
 // proxyHTTP forwards an HTTP request through the SSH tunnel to the client.
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *TunnelState) {
-	conn, releaseConn := tunnel.AcquireConn()
+	conn, connState, releaseConn := tunnel.AcquireConnState()
 	defer releaseConn()
 	if conn == nil {
 		http.Error(w, "tunnel offline", http.StatusBadGateway)
@@ -46,22 +46,50 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, tunnel *Tunne
 		PreserveHost: tunnel.PreservesHost(),
 	}
 
-	payload := marshalHTTPChannelData(&data)
+	// Prefer a channel the client pre-opened and parked. Opening one on demand
+	// costs a CHANNEL_OPEN/CONFIRMATION exchange before a single request byte can
+	// be written — a full edge↔client round trip on every request, which is about
+	// half the latency floor of a small request. Clients too old to offer warm
+	// channels leave the pool empty, so ch is nil for them and the on-demand path
+	// below runs exactly as it always has.
+	ch := takeWarmChannel(connState)
+	if ch != nil {
+		// The metadata that the on-demand path passes in the channel-open
+		// ExtraData has to travel on the channel here, because the channel was
+		// opened before this request existed. (It could not be added to the
+		// ExtraData of the existing channel type in any case: gossh.Unmarshal
+		// rejects trailing bytes, so an older client would fail every request.)
+		if err := protocol.WriteHTTPPrelude(ch, &data); err != nil {
+			// A parked channel that will not take a write is no longer usable —
+			// the client went away, or this pool entry is stale. Drop it and open
+			// one on demand rather than fail a request that can still succeed.
+			slog.Debug("warm channel unusable, falling back to on-demand open",
+				"tunnel", tunnel.ID, "error", err)
+			ch.Close()
+			ch = nil
+		}
+	}
 
-	ch, reqs, err := openChannelTimeout(conn, protocol.ChannelHTTP, payload, channelOpenTimeout)
-	if err != nil {
-		// A 15s channel-open timeout means the SSH transport is dead (half-open).
-		// Evict it from the pool FIRST so no concurrent request picks it, then
-		// close it: that unblocks the parked OpenChannel goroutine and forces the
-		// client to reconnect cleanly instead of lingering as an unusable zombie.
-		tunnel.RemoveClient(conn)
-		conn.Close()
-		slog.Error("failed to open HTTP channel", "tunnel", tunnel.ID, "error", err)
-		http.Error(w, "tunnel unavailable", http.StatusBadGateway)
-		return
+	if ch == nil {
+		payload := marshalHTTPChannelData(&data)
+
+		var reqs <-chan *gossh.Request
+		var err error
+		ch, reqs, err = openChannelTimeout(conn, protocol.ChannelHTTP, payload, channelOpenTimeout)
+		if err != nil {
+			// A 15s channel-open timeout means the SSH transport is dead (half-open).
+			// Evict it from the pool FIRST so no concurrent request picks it, then
+			// close it: that unblocks the parked OpenChannel goroutine and forces the
+			// client to reconnect cleanly instead of lingering as an unusable zombie.
+			tunnel.RemoveClient(conn)
+			conn.Close()
+			slog.Error("failed to open HTTP channel", "tunnel", tunnel.ID, "error", err)
+			http.Error(w, "tunnel unavailable", http.StatusBadGateway)
+			return
+		}
+		go gossh.DiscardRequests(reqs)
 	}
 	defer ch.Close()
-	go gossh.DiscardRequests(reqs)
 
 	// Write the HTTP request in wire format to the channel
 	cw := &countingWriter{w: ch}

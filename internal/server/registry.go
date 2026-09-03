@@ -32,6 +32,11 @@ type clientConn struct {
 	// mutex, so spreading requests across connections is what keeps a trivial
 	// request from queueing behind a bulk transfer.
 	inFlight atomic.Int64
+
+	// warm holds channels the client pre-opened and parked. Leasing one lets a
+	// request skip the CHANNEL_OPEN round trip. It stays empty for clients too
+	// old to offer them, which is exactly the legacy path.
+	warm chan ssh.Channel
 }
 
 // TunnelState holds the runtime state for a configured tunnel.
@@ -134,8 +139,15 @@ func (t *TunnelState) PickConn() ssh.Conn {
 // release func MUST be called when the request finishes; it is safe to call on a
 // nil connection, so callers can defer it unconditionally.
 func (t *TunnelState) AcquireConn() (ssh.Conn, func()) {
+	conn, _, release := t.AcquireConnState()
+	return conn, release
+}
+
+// AcquireConnState is AcquireConn plus the per-connection state, for callers
+// that need the warm-channel pool. The state is nil when no connection exists.
+func (t *TunnelState) AcquireConnState() (ssh.Conn, *clientConn, func()) {
 	conn, state := t.acquireConn()
-	return conn, func() { ReleaseConn(state) }
+	return conn, state, func() { ReleaseConn(state) }
 }
 
 // acquireConn picks the least-loaded connection and increments its in-flight
@@ -171,6 +183,60 @@ func (t *TunnelState) acquireConn() (ssh.Conn, *clientConn) {
 	return best, bestState
 }
 
+// warmPoolCapacity bounds how many pre-opened channels the server will park per
+// connection. The client decides how many to offer; this only caps what the
+// server will hold, so a client offering more simply has the excess rejected.
+const warmPoolCapacity = 32
+
+// OfferWarmChannel parks a client-supplied pre-opened channel for later use.
+// It reports false if the pool is full or the connection is unknown, in which
+// case the caller must close the channel.
+func (t *TunnelState) OfferWarmChannel(conn ssh.Conn, ch ssh.Channel) bool {
+	t.mu.RLock()
+	state := t.clients[conn]
+	t.mu.RUnlock()
+	if state == nil {
+		return false
+	}
+	select {
+	case state.warm <- ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// takeWarmChannel leases a parked channel, or returns nil if none is available.
+// A nil return is the normal case for an older client and means the caller
+// should fall back to opening a channel on demand.
+func takeWarmChannel(state *clientConn) ssh.Channel {
+	if state == nil {
+		return nil
+	}
+	select {
+	case ch := <-state.warm:
+		return ch
+	default:
+		return nil
+	}
+}
+
+// closeWarmChannels drains and closes any parked channels for a departing
+// connection, so the client's paired goroutines unblock instead of leaking.
+func closeWarmChannels(state *clientConn) {
+	if state == nil {
+		return
+	}
+	for {
+		select {
+		case ch := <-state.warm:
+			ch.Close()
+		default:
+			return
+		}
+	}
+}
+
 // ReleaseConn records that a request occupying the connection has finished.
 func ReleaseConn(state *clientConn) {
 	if state != nil {
@@ -188,14 +254,18 @@ func (t *TunnelState) AddClient(conn ssh.Conn, addr string) {
 	t.clients[conn] = &clientConn{
 		addr:        addr,
 		connectedAt: time.Now(),
+		warm:        make(chan ssh.Channel, warmPoolCapacity),
 	}
 }
 
-// RemoveClient removes a specific client connection.
+// RemoveClient removes a specific client connection and closes any warm
+// channels it had parked.
 func (t *TunnelState) RemoveClient(conn ssh.Conn) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	state := t.clients[conn]
 	delete(t.clients, conn)
+	t.mu.Unlock()
+	closeWarmChannels(state)
 }
 
 // ClientCount returns the number of connected clients.

@@ -224,6 +224,12 @@ func (c *Client) connect(ctx context.Context) error {
 		close(connDone)
 	}()
 
+	// Pre-open a pool of channels the server can lease per request, so requests
+	// skip the channel-open round trip. Started after the handlers above are
+	// registered. Harmless against a server that does not support it: the first
+	// open is rejected and the pool quietly gives up.
+	go c.maintainWarmPool(ctx, conn, connDone)
+
 	for {
 		select {
 		case <-ctx.Done():

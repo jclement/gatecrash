@@ -66,7 +66,8 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 			sess.Exit(1)
 		},
 		ChannelHandlers: map[string]ssh.ChannelHandler{
-			protocol.ChannelControl: s.handleControlChannel,
+			protocol.ChannelControl:  s.handleControlChannel,
+			protocol.ChannelHTTPWarm: s.handleWarmChannel,
 			"default": func(srv *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
 				newChan.Reject(gossh.UnknownChannelType, "unsupported channel type")
 			},
@@ -85,6 +86,40 @@ func (s *Server) newSSHServer() (*ssh.Server, error) {
 	s.hostFingerprint = gossh.FingerprintSHA256(hostKey.PublicKey())
 
 	return sshSrv, nil
+}
+
+// handleWarmChannel accepts a channel the client pre-opened and parks it for a
+// future request, so that request does not pay the CHANNEL_OPEN round trip.
+//
+// Clients too old to know this type never open one, so their tunnels simply have
+// an empty pool and keep using the on-demand path. There is no probe and no
+// version check: receiving these channels IS the capability signal.
+func (s *Server) handleWarmChannel(srv *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
+	tunnelID, ok := ctx.Value(ctxKeyTunnelID).(string)
+	if !ok || tunnelID == "" {
+		newChan.Reject(gossh.Prohibited, "no tunnel ID")
+		return
+	}
+	tunnel := s.registry.FindByID(tunnelID)
+	if tunnel == nil {
+		newChan.Reject(gossh.Prohibited, "unknown tunnel")
+		return
+	}
+
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		slog.Error("failed to accept warm channel", "tunnel", tunnelID, "error", err)
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+
+	if !tunnel.OfferWarmChannel(conn, ch) {
+		// Pool full, or the connection is not registered yet. Closing lets the
+		// client retire this one and offer another later.
+		ch.Close()
+		return
+	}
+	slog.Debug("warm channel parked", "tunnel", tunnelID, "remote", conn.RemoteAddr())
 }
 
 // handleControlChannel handles the gatecrash-control channel opened by clients.

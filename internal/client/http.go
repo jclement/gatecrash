@@ -15,20 +15,14 @@ import (
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/jclement/gatecrash/internal/protocol"
 )
 
 // handleHTTPChannel processes an incoming HTTP request from the server.
 func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	// Parse channel extra data
-	var data struct {
-		RequestID    string
-		Method       string
-		URI          string
-		Host         string
-		RemoteAddr   string
-		TLS          bool
-		PreserveHost bool
-	}
+	var data protocol.HTTPChannelData
 	if err := gossh.Unmarshal(newCh.ExtraData(), &data); err != nil {
 		slog.Error("failed to parse HTTP channel data", "error", err)
 		newCh.Reject(gossh.ConnectionFailed, "invalid channel data")
@@ -43,10 +37,22 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 	defer ch.Close()
 	go gossh.DiscardRequests(reqs)
 
+	c.serveTunneledRequest(ch, bufio.NewReader(ch), data)
+}
+
+// serveTunneledRequest forwards one HTTP request that arrived on an SSH channel
+// to the local backend and writes the response back onto it.
+//
+// Both channel types converge here. They differ only in how the request metadata
+// reached us: in the channel-open ExtraData for a channel the server opened on
+// demand, or as a prelude already consumed from br for a pre-opened warm one. br
+// must be the reader the prelude was read from, since it may hold buffered
+// request bytes.
+func (c *Client) serveTunneledRequest(ch gossh.Channel, br *bufio.Reader, data protocol.HTTPChannelData) {
 	start := time.Now()
 
 	// Read the HTTP request from the channel
-	req, err := http.ReadRequest(bufio.NewReader(ch))
+	req, err := http.ReadRequest(br)
 	if err != nil {
 		slog.Error("failed to read request from channel", "error", err)
 		writeErrorResponse(ch, http.StatusBadGateway, "failed to read request")
@@ -182,15 +188,7 @@ func (c *Client) handleHTTPChannel(newCh gossh.NewChannel) {
 // handleUpgrade dials the backend directly and pipes the raw connection
 // through the SSH channel. This preserves hop-by-hop headers (Connection,
 // Upgrade) that http.Client would strip.
-func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data struct {
-	RequestID    string
-	Method       string
-	URI          string
-	Host         string
-	RemoteAddr   string
-	TLS          bool
-	PreserveHost bool
-}) {
+func (c *Client) handleUpgrade(ch gossh.Channel, req *http.Request, data protocol.HTTPChannelData) {
 	target, _, tlsMode := c.resolveTarget(data.Host)
 
 	var conn net.Conn
